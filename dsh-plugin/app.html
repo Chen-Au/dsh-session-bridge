@@ -317,7 +317,7 @@
         <div class="composer">
           <textarea id="worldInput" placeholder="给世界发任务…（@ 可点名成员；Enter 发送，Shift+Enter 换行）"></textarea>
           <div class="bar">
-            <span class="hint">直接 @ 某位 agent 会优先叫醒 TA；写明「全新」会开新会话</span>
+            <span class="hint">@ 只显示已申报/群成员（系统会话已过滤）；写明「全新」开新会话</span>
             <span class="spacer"></span>
             <button class="btn primary" id="worldSend">发布任务</button>
           </div>
@@ -511,7 +511,10 @@
   }
   function worldOptions() {
     return (state.sessions || [])
-      .filter(function (session) { return session.internal !== true && session.closed !== true })
+      .filter(function (session) { return session.worldEligible === true })
+      .sort(function (a, b) {
+        return (b.live === true) - (a.live === true) || (b.points || 0) - (a.points || 0) || (b.createdAt || 0) - (a.createdAt || 0)
+      })
       .map(function (session) {
         var who = identityOf(session.id)
         return {

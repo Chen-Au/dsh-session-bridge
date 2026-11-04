@@ -58,7 +58,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.2.1'
+const VERSION = '2.2.2'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -1559,6 +1559,13 @@ export function apply(ctx, config = {}) {
       }
     }
     const profilesNow = listProfilesOf(boardDir)
+    const groupMemberIds = new Set()
+    const managerIds = new Set()
+    for (const group of groupsNow) {
+      for (const sessionId of group.sessionIds || []) groupMemberIds.add(sessionId)
+      if (group.managerSessionId) managerIds.add(group.managerSessionId)
+    }
+    const maintainerId = maintainerStore.get()
     return records
       .map((record) => {
         const hit = titleCache.get(record.id)
@@ -1604,6 +1611,14 @@ export function apply(ctx, config = {}) {
           successes: repNow.successes,
           failures: repNow.failures,
           closed: repNow.closed === true,
+          hasProfile: Boolean(profilesNow[record.id] && profilesNow[record.id].summary),
+          worldEligible:
+            !internal &&
+            repNow.closed !== true &&
+            !managerIds.has(record.id) &&
+            (Boolean(profilesNow[record.id] && profilesNow[record.id].summary) ||
+              groupMemberIds.has(record.id) ||
+              record.id === maintainerId),
           isLead: true
         }
       })
@@ -4398,7 +4413,7 @@ export function apply(ctx, config = {}) {
       const forceNew = payload.forceNew === true || FORCE_NEW_RE.test(text)
       // 世界任务的 @ 解析与「扩充新成员」意图：这两类不交给路由器，避免把新成员外包给子代理。
       const sessionsNow = await buildSessionIndex()
-      const mentionCandidates = sessionsNow.filter((session) => session.internal !== true)
+      const mentionCandidates = sessionsNow.filter((session) => session.worldEligible === true)
       const parsedWorldMentions = parseMentionsInText(text, mentionCandidates)
       const wantsNewMembers = /(新成员|新会话|新建会话|开新会话|创建.{0,10}(会话|成员)|入驻|扩编|扩招|帮手|人手|增援|加.{0,4}(个|位)?.{0,4}(人|成员|会话))/i.test(text)
       const parseMemberCount = () => {
