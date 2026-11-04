@@ -2119,6 +2119,36 @@ await check('群任务步骤：group.post 记录 steps；step 请求回执后步
   assert.equal(taskNow.steps[1].status, 'pending', '未派发的下一步仍是 pending')
 })
 
+await check('任务依赖：task 未 done 时排队，组长汇总后自动发出', async () => {
+  serialCaptured.followups.length = 0
+  const posted = await callCommand4({
+    action: 'group.post',
+    payload: { id: 'g-serial', text: '汇总任务：整理两份数据', mentionAll: true, coordinatorId: S_LEAD }
+  })
+  assert.equal(posted.json.ok, true, JSON.stringify(posted.json))
+  const taskId = posted.json.task.id
+  const coordinatorRequestId = posted.json.requestIds[0]
+  assert.ok(taskId && coordinatorRequestId)
+  serialCaptured.followups.length = 0
+  const queuedOut = String(
+    await tools4.get('session_ask').execute(
+      { group: '串行组', text: '等汇总后再做最终核对', to: S_TWO, dependsOn: taskId, mode: 'probe' },
+      { agent: serialLead }
+    )
+  )
+  assert.match(queuedOut, /已排队/)
+  assert.equal(wakesTo(S_TWO).length, 0, '任务未 done 时不应唤醒')
+  // 组长提交唯一汇总 → 任务标记 done → 依赖该任务的串行指令自动发出
+  await tools4.get('session_share').execute(
+    { title: '任务完成', text: '汇总已完成并通过验收', kind: 'handoff', group: '串行组', replyTo: coordinatorRequestId },
+    { agent: serialLead }
+  )
+  assert.equal(foldBoard4().get(taskId).taskStatus, 'done', '组长汇总后任务应为 done')
+  const woke = wakesTo(S_TWO)
+  assert.equal(woke.length, 1, '任务变成 done 后应自动发出并唤醒目标')
+  assert.match(String(woke[0].message.content[0].text), /等汇总后再做最终核对/)
+})
+
 // ---------------------------------------------------------------- 收尾
 fs.rmSync(serialDir, { recursive: true, force: true })
 fs.rmSync(targetedDir, { recursive: true, force: true })

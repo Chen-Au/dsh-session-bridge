@@ -3128,6 +3128,10 @@ export function apply(ctx, config = {}) {
           break
         }
         if (resolved.kind === 'queue') {
+          if (resolved.queued.id === item.id) {
+            missing = `${ref}（依赖指向自己）`
+            break
+          }
           const state = resolved.queued.status
           if (state === 'failed' || state === 'expired') {
             missing = `${ref}（前置排队失败）`
@@ -4180,6 +4184,14 @@ export function apply(ctx, config = {}) {
                 ts: Date.now()
               }
             ])
+            // 任务刚变成 done：立刻推进以该任务为前置的串行指令。
+            if (isCoordinator) {
+              try {
+                runPendingQueue({ source: 'task-done' })
+              } catch {
+                /* ignore */
+              }
+            }
             if (isCoordinator) {
               replyNote += ' 群任务已标记为完成。'
               // 复核后「需要修改」：交给群管理自动指派给群员，用户不用手动派活。
