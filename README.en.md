@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.8.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.9.5-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 **English** | [简体中文](README.md)
@@ -94,6 +94,22 @@ The plugin does not take over the right sidebar. Click **"星桥"** at the botto
 - **Unified session reference resolution**: the `to` argument of `session_ask` / `session_nudge`, the `sessions` argument of `group_member`, panel add/remove, and world-task `@` mentions all accept full ids, ids without the `session-` prefix, contactIds, 6-character short ids, unique prefixes/suffixes, handles, and titles. Ambiguous input returns the candidates and an explicit error instead of silently picking one.
 - Group task dispatch messages now include the member directory (contactId + handle + title), and the group member list shows a click-to-copy contactId, so coordinators no longer have to guess short ids.
 - **Fix**: 6-character short ids (e.g. `4f51e9`) previously failed to resolve in `session_ask` because the old matcher only accepted full ids, `startsWith`, and titles; tasks had to be bounced back to the on-duty session. They now dispatch directly.
+
+### 9. Serial instructions: dependencies and delays (v2.9.5)
+
+When group work has a required order, you no longer have to wake every step at once — the coordinator can queue the next step:
+
+- `session_ask` gains three optional arguments (when none are passed, behaviour is exactly the same as before: send immediately):
+  - `dependsOn`: prerequisite **request id** or **group task id** (comma-separated, up to 5);
+  - `delayMs`: minimum delay in milliseconds (capped at 7 days); dispatch happens only after the delay **and** the dependencies are satisfied;
+  - `step`: the step number inside a group task (paired with `steps` on `group.post`).
+- While dependencies are unmet **nobody is woken**: the request is written to the board with `status=queued` plus a queue record in `pending-asks.json` (atomic write, recovered after a plugin restart). The tool result says “已排队，等待前置完成” (queued, waiting for prerequisites).
+- A background sweep runs every 15 seconds — and immediately when a prerequisite is answered through `session_share replyTo`: once the prerequisite is `answered` or the task is `done` and the delay has elapsed, the request flips to `open` and the targets are woken.
+- Only `answered` / task `done` count. Chat messages and ordinary group shares never complete a dependency, so a passing remark cannot trigger the next step.
+- Missing dependencies, dependency cycles, and a queue older than 48 hours raise an explicit error and notify the author instead of waiting forever; `pending.cancel` cancels a queued instruction that has not been sent yet.
+- Permission: only the **group coordinator / maintainer** may queue serial instructions (any member may queue while the group has no coordinator); ordinary members get a clear error.
+- Panel: queued requests show “排队中，依赖 N 项前置” (queued, N prerequisites) in group chat, and task cards show step progress “步骤 1/2（下一步 …）”.
+- `group.post` accepts `steps: ["research first", "then write"]`; the coordinator's wake-up message includes the step list and the serial workflow (step 2 is queued with `dependsOn=<step 1 request id>`).
 
 ## Install
 

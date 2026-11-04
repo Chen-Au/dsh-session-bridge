@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.8.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.9.5-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 
@@ -81,6 +81,22 @@
 - **统一会话引用解析**：`session_ask` / `session_nudge` 的 `to`、`group_member` 的 `sessions`、面板加/移成员、世界任务正文 `@` 都支持完整 id、无前缀 id、contactId、短 id（6 位压缩前缀）、唯一前后缀、handle、标题；命中多个时**返回候选并明确报错**，不会静默选错；
 - 群任务派活消息自动附带成员通讯录（contactId + handle + 标题），面板群成员列表显示可点击复制的 contactId，组长不必再猜短 ID；
 - **修复**：此前 6 位短 id（如 `4f51e9`）无法用于 `session_ask` 的 `to`（旧逻辑只支持完整 id / startsWith / 标题），只能退回给值班员；现在可直接派活。
+
+### 9. 串行指令：依赖与延时（v2.9.5）
+
+组内任务有先后依赖时，不必所有步骤一起并行唤醒——组长可以「先把下一步排进队列」：
+
+- `session_ask` 新增三个可选参数（不传时行为与之前完全一致，仍然立即发送）：
+  - `dependsOn`：前置 **request id** 或 **群任务 id**（多个用逗号分隔，最多 5 个）；
+  - `delayMs`：最小延迟（毫秒，上限 7 天），到点且依赖满足才发出；
+  - `step`：群任务里的第几个步骤（配合 `group.post` 的 `steps`）。
+- 依赖没满足时**不唤醒任何人**：请求以 `status=queued` 写进看板，并落一条队列项（`pending-asks.json`，原子写、插件重启后自动恢复）；返回值明确写「已排队，等待前置完成」。
+- 后台每 15 秒巡检一次队列（另外在前置被 `session_share replyTo` 回复时**立即**推进）：前置 `answered` 或任务 `done` 且延迟已到 → 自动把请求转为 `open` 并唤醒目标会话。
+- 只认「answered / task done」，**讨论消息、群聊分享不算完成**，避免「群里说一句」就误触发下一步。
+- 找不到依赖、循环依赖、排队超过 48 小时都会**报错并通知发起人**，不会死等；`pending.cancel` 可取消还没发出的排队项。
+- 权限：只有**组长 / 维护者**能排串行指令（群还没设组长时任何成员可排）；普通成员会收到明确提示。
+- 面板：排队的请求在群聊里显示「排队中，依赖 N 项前置」；任务卡显示步骤进度「步骤 1/2（下一步 …）」。
+- `group.post` 支持 `steps: ["先做调研", "再写正文"]`，组长被唤醒时会收到步骤清单与串行做法（步骤 2 用 `dependsOn=<步骤1的请求 id>` 排队）。
 
 ---
 
