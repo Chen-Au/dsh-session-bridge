@@ -58,7 +58,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.3.0'
+const VERSION = '2.4.0'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -3157,6 +3157,17 @@ export function apply(ctx, config = {}) {
               /* 计分失败不影响回复 */
             }
           }
+          if (firstAnswer && request.taskRole !== 'member' && request.taskRole !== 'coordinator') {
+            const worldTask = request.channel === 'world'
+            const delta = worldTask ? 8 : 5
+            scoreSession(info.id, delta, { success: true })
+            try {
+              if (request.author && request.author !== 'panel') relationStore.bump(info.id, request.author, 1)
+            } catch {
+              /* ignore */
+            }
+            replyNote += ` 任务回复 +${delta} 积分。`
+          }
           if (request.author && request.author !== info.id) {
             const wakeText = [
               `【群内请求已收到回复 · 来自会话 ${shortSid(info.id)}】`,
@@ -4486,6 +4497,37 @@ export function apply(ctx, config = {}) {
           .filter(Boolean)
           .map((target) => ({ id: target.id, title: target.title, score: 0 }))
       }
+      // 协同类任务：如果只命中一个会话，再挑 1-2 个申报相关的成员一起拉群。
+      if (decision.route === 'existing' && decision.engine !== 'mentions' && assigned.length === 1) {
+        const collaborative = /(大家|一起|协同|协作|分工|多人|帮忙|协助|配合|团队|各自)/.test(text)
+        if (collaborative) {
+          try {
+            const profilesNow = listProfilesOf(boardDir)
+            const extra = sessionsNow
+              .filter(
+                (session) =>
+                  session.worldEligible === true &&
+                  session.id !== assigned[0].id &&
+                  profilesNow[session.id]
+              )
+              .map((session) => ({
+                session,
+                score: scoreProfileForText(text, profilesNow[session.id])
+              }))
+              .filter((item) => item.score > 0)
+              .sort((a, b) => b.score - a.score)
+              .slice(0, 2)
+            if (extra.length) {
+              assigned.push(
+                ...extra.map((item) => ({ id: item.session.id, title: item.session.title, score: item.score }))
+              )
+              decision.reason += '；根据协同需求扩展给 ' + extra.length + ' 位相关成员'
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+      }
       const createdSessions = []
       if (decision.engine === 'new-members') {
         const baseSession = parsedWorldMentions.ids
@@ -4603,6 +4645,60 @@ export function apply(ctx, config = {}) {
           logger.warn('世界任务自动建群失败：' + (error && error.message ? error.message : error))
         }
       }
+      let autoGroupTask = null
+      let autoCoordinatorId = ''
+      if (createdGroup) {
+        try {
+          const memberIds = [...new Set(assigned.map((item) => item.id))]
+          autoCoordinatorId = memberIds[0]
+          const assignees = memberIds.slice(1)
+          autoGroupTask = addEntry(
+            {
+              title: '世界任务：' + truncate(text, 20),
+              text,
+              kind: 'task',
+              scope: 'group',
+              groupId: createdGroup.id,
+              author: 'panel',
+              origin: 'panel',
+              mentions: memberIds,
+              taskStatus: 'assigned',
+              coordinator: autoCoordinatorId,
+              assignees,
+              skipDedupe: true
+            },
+            'panel'
+          )
+          if (autoGroupTask.ok) {
+            autoGroupTask = autoGroupTask.entry
+            addEntry(
+              {
+                title: '任务已下发：' + truncate(text, 20),
+                text: '组长：' + (assigned[0].title || shortSid(autoCoordinatorId)) + '。成员：' + assignees.map((id) => shortSid(id)).join('、') + '。\n' + text,
+                kind: 'chat',
+                groupId: createdGroup.id,
+                author: 'panel',
+                origin: 'panel',
+                mentions: memberIds,
+                tags: '@任务',
+                skipDedupe: true
+              },
+              'panel'
+            )
+            try {
+              const permissions = readPermissionsOf(boardDir)
+              const grants = new Set(permissions.grants[autoCoordinatorId] || [])
+              for (const memberId of assignees) grants.add(memberId)
+              permissions.grants[autoCoordinatorId] = [...grants]
+              writePermissionsOf(boardDir, permissions)
+            } catch {
+              /* ignore */
+            }
+          }
+        } catch (error) {
+          logger.warn('创建自动协作群任务失败：' + (error && error.message ? error.message : error))
+        }
+      }
       const note = addEntry(
         {
           title: text.slice(0, 20),
@@ -4622,6 +4718,20 @@ export function apply(ctx, config = {}) {
       const requestIds = []
       const woken = []
       for (const item of assigned) {
+        // 自动协作群里，只有组长拿正式任务请求；其他成员先待命，由组长 session_ask 分工。
+        if (createdGroup && autoGroupTask && item.id !== autoCoordinatorId) {
+          const memberMessage = [
+            '【协作群任务 · 你是成员，先待命】',
+            `你已被拉入自动协作群「${createdGroup.name}」，组长是 ${assigned[0].title || shortSid(autoCoordinatorId)}。`,
+            '',
+            '请先用 session_profile（action=update）提交一句话申报（方向/擅长/需要什么），然后等待组长用 session_ask 给你分工；',
+            '不要独自重复执行主任务，有想法可以在群里主动请缨。'
+          ].join('\n')
+          await ensureSessionLive(item.id)
+          const outcome = wakeSession(item.id, memberMessage, {})
+          if (outcome.ok) woken.push(item.id)
+          continue
+        }
         const mentionName = createdSession === item.id ? '新会话' : shortSid(item.id)
         const request = addEntry(
           {
@@ -4635,13 +4745,14 @@ export function apply(ctx, config = {}) {
             requestTo: [item.id],
             mentions: [item.id],
             hiddenFromChat: true,
-            skipDedupe: true
+            skipDedupe: true,
+            ...(createdGroup && autoGroupTask ? { taskId: autoGroupTask.id, taskRole: 'coordinator' } : {})
           },
           'panel'
         )
         if (!request.ok) continue
         requestIds.push(request.entry.id)
-        const isExtraMember = decision.engine === 'new-members' && item.id !== createdSession
+        const isExtraMember = decision.engine === 'new-members' && item.id !== createdSession && !createdGroup
         const message = isExtraMember
           ? [
               '【新成员报到 · 用户在世界里要求扩充成员】',
@@ -4651,18 +4762,32 @@ export function apply(ctx, config = {}) {
               '请先用 session_profile（action=update）提交一句话申报（方向/擅长/需要什么），再用一句话介绍自己；',
               '不要执行【任务】主体，等待主责成员或群主分配；有想法可以主动请缨。'
             ].join('\n')
-          : [
-              '【世界任务 · 用户 @ 你】',
-              createdWorkspace ? `（本任务新开了工作区：${createdWorkspace}）` : '',
-              createdGroup ? `（已自动拉协作群「${createdGroup.name}」）` : '',
-              `路由理由：${decision.reason}`,
-              '',
-              text,
-              '',
-              `请开始处理；完成后用 session_share（kind=handoff、replyTo=${request.entry.id}、files=文件路径）汇报，结果会出现在世界聊天。`
-            ]
-              .filter(Boolean)
-              .join('\n')
+          : createdGroup && autoGroupTask
+            ? [
+                '【世界任务 · 你是组长】',
+                `已自动拉协作群「${createdGroup.name}」，成员：${assigned.slice(1).map((member) => member.title || shortSid(member.id)).join('、') || '（暂无）'}。`,
+                createdWorkspace ? `（本任务新开了工作区：${createdWorkspace}）` : '',
+                `路由理由：${decision.reason}`,
+                '',
+                text,
+                '',
+                `请用 session_ask（mode=task）把任务拆给群成员并跟进；成员完成后交给你，最后由你用 session_share（kind=handoff、replyTo=${request.entry.id}、files=文件路径）汇总。`
+              ]
+                .filter(Boolean)
+                .join('\n')
+            : [
+                '【世界任务 · 用户 @ 你】',
+                createdWorkspace ? `（本任务新开了工作区：${createdWorkspace}）` : '',
+                createdGroup ? `（已自动拉协作群「${createdGroup.name}」）` : '',
+                `路由理由：${decision.reason}`,
+                '',
+                text,
+                '',
+                `请开始处理；完成后用 session_share（kind=handoff、replyTo=${request.entry.id}、files=文件路径）汇报，结果会出现在世界聊天。`
+              ]
+                .filter(Boolean)
+                .join('\n')
+        await ensureSessionLive(item.id)
         const outcome = wakeSession(item.id, message, { requestId: request.entry.id })
         if (outcome.ok) woken.push(item.id)
       }
@@ -4910,6 +5035,7 @@ export function apply(ctx, config = {}) {
             `3. 最后用 session_share（kind=handoff、group=${group.name}、replyTo=${coordinatorRequest.entry.id}、files=…）向用户提交唯一汇总。`,
             '注意：成员不会直接向用户汇报；只有你是组长，不要让成员替你汇总，也不要重复成员已完成的工作。'
           ].join('\n')
+          await ensureSessionLive(coordinatorId)
           if (wakeSession(coordinatorId, message, { requestId: coordinatorRequest.entry.id }).ok) woken += 1
         }
         // 关键：任务创建阶段只唤醒组长；成员等组长用 session_ask 派工时被唤醒一次。
@@ -4971,6 +5097,7 @@ export function apply(ctx, config = {}) {
           '',
           `请开始处理。完成后用 session_share 汇报（kind=handoff、group=${group.name}、replyTo=${request.entry.id}、files=文件路径）；无法处理请说明原因。`
         ].join('\n')
+        await ensureSessionLive(sessionId)
         const outcome = wakeSession(sessionId, message, { requestId: request.entry.id })
         if (outcome.ok) woken.push({ sessionId, title: titleById.get(sessionId) || shortSid(sessionId) })
       }
@@ -5075,6 +5202,15 @@ export function apply(ctx, config = {}) {
         'panel'
       )
       return { ok: true, targetId, handle: identity.handle }
+    }
+    if (action === 'session.wake') {
+      const sessionId = String(payload.sessionId || '').trim()
+      const text = String(payload.text || '').trim().slice(0, 3000)
+      if (!sessionId || !text) return { ok: false, error: 'session.wake 需要 sessionId 和 text' }
+      const agent = await ensureSessionLive(sessionId)
+      if (!agent) return { ok: false, error: '会话恢复失败' }
+      const outcome = wakeSession(sessionId, text, {})
+      return outcome.ok ? { ok: true, sessionId } : { ok: false, error: outcome.reason || '唤醒失败' }
     }
     if (action === 'share.post') {
       // 维护者/面板回帖：等价于 session_share（kind=handoff），可回复某条请求。
