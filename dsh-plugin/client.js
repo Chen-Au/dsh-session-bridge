@@ -277,6 +277,15 @@ window.__ModuleLoader__.load({
       var src = isPlainObject(raw) ? raw : {}
       var status = asString(src.status, 'idle')
       if (status !== 'running' && status !== 'idle') status = 'idle'
+      var currentTask = isPlainObject(src.currentTask)
+        ? {
+            id: asString(src.currentTask.id),
+            title: asString(src.currentTask.title),
+            kind: asString(src.currentTask.kind),
+            role: asString(src.currentTask.role),
+            since: asTimestamp(src.currentTask.since)
+          }
+        : null
       return {
         id: asString(src.id),
         contactId: asString(src.contactId) || contactIdOf(src.id),
@@ -284,6 +293,10 @@ window.__ModuleLoader__.load({
         cwd: asString(src.cwd),
         live: src.live === true,
         status: status,
+        availability: src.availability === 'busy' ? 'busy' : 'idle',
+        currentTask: currentTask,
+        openRequestCount: asNumber(src.openRequestCount, 0),
+        lastSubmittedAt: asTimestamp(src.lastSubmittedAt),
         createdAt: asTimestamp(src.createdAt),
         hasProfile: src.hasProfile === true,
         profileDeclined: src.profileDeclined === true,
@@ -1704,7 +1717,19 @@ window.__ModuleLoader__.load({
               'div',
               { style: styles.rowTitle },
               (session.avatar || '👤') + ' ' + session.title,
-              props.group && props.group.managerSessionId === session.id ? '（群管理）' : ''
+              props.group && props.group.managerSessionId === session.id ? '（群管理）' : '',
+              ' ',
+              h(
+                Badge,
+                {
+                  tone: session.availability === 'busy' ? 'warn' : 'success',
+                  title:
+                    session.availability === 'busy'
+                      ? '忙碌：' + ((session.currentTask && session.currentTask.title) || '有未回答请求/未完成任务')
+                      : '空闲：可以接新任务'
+                },
+                session.availability === 'busy' ? '忙' : '空闲'
+              )
             ),
             session.handle
               ? h(
@@ -3088,6 +3113,17 @@ window.__ModuleLoader__.load({
           h('span', { style: mergeStyle(styles.rowTitle, { flex: 1 }) }, session.title),
           h(
             Badge,
+            {
+              tone: session.availability === 'busy' ? 'warn' : 'success',
+              title:
+                session.availability === 'busy'
+                  ? '忙碌：' + ((session.currentTask && session.currentTask.title) || '有未回答请求/未完成任务')
+                  : '空闲：可以接新任务'
+            },
+            session.availability === 'busy' ? '忙' : '空闲'
+          ),
+          h(
+            Badge,
             { tone: running ? 'business' : live ? 'success' : 'neutral' },
             running ? '运行中' : live ? '在线' : '离线'
           ),
@@ -3119,6 +3155,17 @@ window.__ModuleLoader__.load({
               'div',
               { style: mergeStyle(styles.rowMuted, { marginTop: 2 }), title: props.profile.summary },
               '申报：' + asString(props.profile.summary).slice(0, 90)
+            )
+          : null,
+        session.availability === 'busy' && session.currentTask
+          ? h(
+              'div',
+              {
+                style: mergeStyle(styles.rowMuted, { marginTop: 2 }),
+                title: asString(session.currentTask.title)
+              },
+              '忙碌中：' + asString(session.currentTask.title).slice(0, 60) +
+                (session.currentTask.since ? ' · ' + formatLocalTime(session.currentTask.since) : '')
             )
           : null,
         groups.length > 0

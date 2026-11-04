@@ -247,6 +247,27 @@
   .member .avatar { flex: none; }
   .member .who small { color: var(--muted); font-size: 10.5px; }
   .member .actions { display: flex; gap: 6px; }
+  .idle-list { display: flex; flex-direction: column; gap: 6px; }
+  .idle-meta { font-size: 10.5px; color: var(--muted); }
+  .idle-row {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+    border: 1px solid rgba(120,150,255,.11); border-radius: 10px;
+    background: rgba(255,255,255,.018); cursor: pointer;
+  }
+  .idle-row:hover { border-color: var(--line-strong); }
+  .idle-row .meta { flex: 1; min-width: 0; }
+  .idle-row .meta b { display: block; font-size: 12px; color: #fff; }
+  .idle-row .meta small {
+    display: block; font-size: 10px; color: var(--muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .dot.idle { background: var(--mint); box-shadow: 0 0 6px rgba(95,242,200,.5); }
+  .dot.busy { background: var(--gold); box-shadow: 0 0 6px rgba(255,209,102,.5); }
+  .avail-badge { flex: none; font-size: 9.5px; border-radius: 999px; padding: 1px 7px; }
+  .avail-badge.idle { color: var(--mint); border: 1px solid rgba(95,242,200,.35); }
+  .avail-badge.busy { color: var(--gold); border: 1px solid rgba(255,209,102,.4); }
+  .member .avail-badge { font-size: 9px; padding: 0 5px; margin-left: 5px; }
   .contactid {
     display: inline-block; font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
     font-size: 10px; color: var(--mint); background: rgba(95,242,200,.08);
@@ -363,7 +384,9 @@
         </div>
       </div>
       <aside class="aside scroll">
-        <div class="section-title">积分榜 · TOP</div>
+        <div class="section-title">空闲看板 · IDLE</div>
+        <div class="idle-list" id="idleBoard"></div>
+        <div class="section-title" style="margin-top:14px">积分榜 · TOP</div>
         <div class="lb" id="worldLb"></div>
       </aside>
     </section>
@@ -779,8 +802,43 @@
   function render() {
     $('statLine').innerHTML = 'v' + esc(state.version || '1.0.0') + ' · <b>' + (state.sessions || []).length + '</b> 位 agent · <b>' + (state.world || []).length + '</b> 条世界任务'
     renderWorld()
+    renderIdleBoard()
     renderGroups()
     renderBoard()
+  }
+  /** 空闲看板（v2.9.0）：idle 在前；busy 显示当前任务与开始时间；点行跳会话。 */
+  function renderIdleBoard() {
+    var board = $('idleBoard')
+    if (!board) return
+    var sessions = (state.sessions || []).filter(function (s) { return s && s.internal !== true })
+    sessions.sort(function (a, b) {
+      var ai = a.availability === 'busy' ? 1 : 0
+      var bi = b.availability === 'busy' ? 1 : 0
+      if (ai !== bi) return ai - bi
+      var alive = a.live === true ? 1 : 0
+      var blive = b.live === true ? 1 : 0
+      if (alive !== blive) return blive - alive
+      return (b.points || 0) - (a.points || 0)
+    })
+    if (!sessions.length) {
+      board.innerHTML = '<div class="empty">还没有会话</div>'
+      return
+    }
+    var idleCount = sessions.filter(function (s) { return s.availability !== 'busy' }).length
+    board.innerHTML =
+      '<div class="idle-meta">空闲 <b style="color:var(--mint)">' + idleCount + '</b> · 忙碌 <b style="color:var(--gold)">' + (sessions.length - idleCount) + '</b> 位</div>' +
+      sessions.slice(0, 14).map(function (s) {
+        var who = identityOf(s.id)
+        var busy = s.availability === 'busy'
+        var task = busy && s.currentTask ? String(s.currentTask.title || '') : ''
+        var since = busy && s.currentTask && s.currentTask.since ? when(s.currentTask.since) : ''
+        var sub = busy ? (task ? task + (since ? ' · ' + since : '') : '忙碌中') : (s.title || '')
+        return '<div class="idle-row" data-jump="' + esc(s.id) + '" data-title="' + esc(s.title || who.handle) + '" title="' + esc((s.title || '') + (busy && task ? ' · 当前：' + task : '')) + '">' +
+          '<span class="dot ' + (busy ? 'busy' : 'idle') + '"></span>' +
+          '<div class="meta"><b>' + esc(who.handle) + '</b><small>' + esc(short(sub, 34)) + '</small></div>' +
+          '<span class="avail-badge ' + (busy ? 'busy' : 'idle') + '">' + (busy ? '忙' : '空闲') + '</span>' +
+          '</div>'
+      }).join('')
   }
   function renderWorld() {
     var html = ''
@@ -920,9 +978,11 @@
       var manager = group.managerSessionId === id
       var cid = contactIdFor(id)
       var meta = (who.role ? '<span class="role">' + esc(who.role) + '</span> · ' : '') + (who.style ? esc(who.style) + ' · ' : '') + ((session.points || 0) >= 0 ? '+' : '') + (session.points || 0) + ' 分'
+      var busy = session.availability === 'busy'
+      var busyTitle = busy && session.currentTask && session.currentTask.title ? '当前任务：' + session.currentTask.title : ''
       return '<div class="member compact">' +
         '<div class="avatar clickable" data-jump="' + esc(id) + '" data-title="' + esc(session.title || who.handle) + '">' + avatarHtml(who.avatar) + '</div>' +
-        '<div class="who"><b>' + esc(who.handle) + (manager ? ' <span class="badge-manager">群管理</span>' : '') + '</b>' +
+        '<div class="who"><b>' + esc(who.handle) + (manager ? ' <span class="badge-manager">群管理</span>' : '') + ' <span class="avail-badge ' + (busy ? 'busy' : 'idle') + '" title="' + esc(busyTitle) + '">' + (busy ? '忙' : '空闲') + '</span></b>' +
         '<small><code class="contactid" data-copy="' + esc(cid) + '" title="点击复制 contactId（可直接用作 session_ask 的 to）">' + esc(cid) + '</code> · ' + meta + '</small></div>' +
         '<div class="actions"><button class="btn small mint" data-like="' + esc(id) + '">👍</button>' +
         '<button class="btn small" data-card="' + esc(id) + '">⋯</button></div></div>'
@@ -1353,6 +1413,10 @@
       if (jump) jumpToSession(jump.getAttribute('data-jump'), jump.getAttribute('data-title'))
     })
     $('worldLb').addEventListener('click', function (event) {
+      var jump = event.target.closest('[data-jump]')
+      if (jump) jumpToSession(jump.getAttribute('data-jump'), jump.getAttribute('data-title'))
+    })
+    $('idleBoard').addEventListener('click', function (event) {
       var jump = event.target.closest('[data-jump]')
       if (jump) jumpToSession(jump.getAttribute('data-jump'), jump.getAttribute('data-title'))
     })
