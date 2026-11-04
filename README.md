@@ -1,8 +1,8 @@
-﻿# 星桥 · session-bridge
+# 星桥 · session-bridge
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.0.2-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.1.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 
@@ -48,6 +48,13 @@
 - 群聊、@ 光标联想、内嵌 @ 拆任务、发起讨论、茶话会、闲聊点名；
 - 积分榜、成员名片、角色/技能/人格编辑；
 - 点击成员/任务可跳转回主窗口对应会话。
+
+### 5. 运维值守
+
+- `maintainer.set`：注册维护者会话（全局唤醒权限 + 名片）；
+- 5 分钟健康巡检 watchdog：自动恢复群管理/维护者在线、刷新工作区备份、重注册 HTTP API；
+- 检查项目：卡住任务、缺失工作区目录、日志告警、群管理配置；
+- `health.check` 随时手动复检，结果写入本地 `health.json`。
 
 ---
 

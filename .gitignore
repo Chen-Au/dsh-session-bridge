@@ -29,3 +29,6 @@ build/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+maintainer.json
+health.json
