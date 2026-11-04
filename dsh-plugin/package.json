@@ -1,0 +1,26 @@
+{
+  "name": "dsh-plugin-session-bridge",
+  "version": "2.0.2",
+  "description": "DSH multi-session social bridge: shared context, task routing, groups, reputation and an independent social window for DSH Desktop sessions.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "app.html"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  }
+}

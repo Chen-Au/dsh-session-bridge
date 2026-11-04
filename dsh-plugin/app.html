@@ -1,0 +1,1024 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>NEBULA · 星桥</title>
+<style>
+  :root {
+    --bg: #06070f;
+    --panel: rgba(17, 19, 38, 0.72);
+    --panel-solid: #111326;
+    --line: rgba(120, 150, 255, 0.16);
+    --line-strong: rgba(140, 170, 255, 0.32);
+    --text: #e9edff;
+    --muted: #8d95bb;
+    --dim: #5b638b;
+    --accent: #7c5cff;
+    --accent-2: #4fd8ff;
+    --mint: #5ff2c8;
+    --gold: #ffd166;
+    --pink: #ff7ac8;
+    --danger: #ff6b81;
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.55 "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    overflow: hidden;
+  }
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(900px 500px at 12% -10%, rgba(124, 92, 255, 0.28), transparent 60%),
+      radial-gradient(800px 520px at 108% 8%, rgba(79, 216, 255, 0.16), transparent 62%),
+      radial-gradient(700px 600px at 50% 120%, rgba(255, 122, 200, 0.12), transparent 60%);
+    z-index: -2;
+  }
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image: radial-gradient(rgba(255,255,255,0.075) 1px, transparent 1px);
+    background-size: 42px 42px;
+    mask-image: radial-gradient(ellipse at 50% 40%, black 10%, transparent 75%);
+    z-index: -1;
+  }
+  .app { display: flex; flex-direction: column; height: 100vh; }
+  header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 16px 22px 12px;
+    border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(12px);
+  }
+  .brand { display: flex; align-items: center; gap: 12px; min-width: 190px; }
+  .logo {
+    width: 40px; height: 40px; border-radius: 13px;
+    display: grid; place-items: center; font-size: 20px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    box-shadow: 0 0 26px rgba(124, 92, 255, 0.55), inset 0 0 14px rgba(255,255,255,0.25);
+  }
+  .brand h1 { margin: 0; font-size: 17px; letter-spacing: 3px; font-weight: 700; }
+  .brand small { display: block; color: var(--muted); font-size: 10.5px; letter-spacing: 2px; }
+  .tabs { display: flex; gap: 6px; padding: 4px; border: 1px solid var(--line); border-radius: 999px; background: rgba(9, 11, 24, 0.6); }
+  .tab {
+    border: 0; background: transparent; color: var(--muted); padding: 7px 18px;
+    border-radius: 999px; font: inherit; cursor: pointer; transition: .18s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active {
+    color: #fff; background: linear-gradient(135deg, rgba(124,92,255,.95), rgba(79,216,255,.75));
+    box-shadow: 0 0 20px rgba(124,92,255,.35);
+  }
+  .spacer { flex: 1; }
+  .stat { color: var(--muted); font-size: 11.5px; letter-spacing: .4px; }
+  .stat b { color: var(--text); font-weight: 600; }
+  .icon-btn {
+    border: 1px solid var(--line); color: var(--muted); background: rgba(17,19,38,.6);
+    width: 34px; height: 34px; border-radius: 11px; cursor: pointer; font-size: 15px;
+    display: grid; place-items: center; transition: .18s;
+  }
+  .icon-btn:hover { color: var(--text); border-color: var(--line-strong); }
+  main { flex: 1; display: flex; min-height: 0; }
+  .view { display: none; flex: 1; min-height: 0; }
+  .view.active { display: flex; }
+  .pane { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 18px 22px; gap: 14px; }
+  .aside { width: 300px; flex: none; border-left: 1px solid var(--line); padding: 18px; overflow: auto; }
+  .section-title { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11.5px; letter-spacing: 2px; text-transform: uppercase; }
+  .section-title::before { content: ""; width: 14px; height: 2px; border-radius: 2px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+  .feed { flex: 1; overflow: auto; padding-right: 6px; display: flex; flex-direction: column; gap: 10px; }
+  .card {
+    position: relative; border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--panel); backdrop-filter: blur(10px);
+    padding: 13px 15px; transition: border-color .2s, transform .2s;
+  }
+  .card:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+  .card::before {
+    content: ""; position: absolute; left: 0; top: 16px; bottom: 16px; width: 3px;
+    border-radius: 3px; background: linear-gradient(180deg, var(--accent), transparent);
+    opacity: .7;
+  }
+  .row { display: flex; gap: 10px; align-items: flex-start; }
+  .avatar {
+    width: 34px; height: 34px; flex: none; border-radius: 12px;
+    display: grid; place-items: center; font-size: 18px;
+    background: rgba(255,255,255,0.06); border: 1px solid var(--line);
+    box-shadow: inset 0 0 12px rgba(124,92,255,.25);
+  }
+  .avatar.lg { width: 48px; height: 48px; font-size: 25px; border-radius: 15px; }
+  .who { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .who .name { font-weight: 600; color: #fff; letter-spacing: .3px; }
+  .who .handle { color: var(--muted); font-size: 11px; }
+  .time { margin-left: auto; color: var(--dim); font-size: 10.5px; white-space: nowrap; }
+  .title { margin-top: 4px; color: #f4f6ff; font-weight: 600; font-size: 13.5px; }
+  .text { margin-top: 4px; color: #b9c0e0; font-size: 12.8px; white-space: pre-wrap; }
+  .text.clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+  .chip {
+    font-size: 10.5px; color: var(--muted); border: 1px solid var(--line);
+    border-radius: 999px; padding: 2px 9px; background: rgba(255,255,255,.03);
+  }
+  .chip.kind { color: var(--accent-2); border-color: rgba(79,216,255,.25); }
+  .chip.file { color: var(--mint); border-color: rgba(95,242,200,.22); }
+  .composer {
+    border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel);
+    padding: 10px; display: flex; flex-direction: column; gap: 8px;
+  }
+  textarea, input {
+    width: 100%; border: 1px solid var(--line); border-radius: 11px;
+    background: rgba(7, 9, 20, .72); color: var(--text); font: inherit;
+    padding: 9px 12px; outline: none; resize: none;
+  }
+  textarea:focus, input:focus { border-color: var(--line-strong); box-shadow: 0 0 0 3px rgba(124,92,255,.12); }
+  textarea { min-height: 54px; max-height: 150px; }
+  .bar { display: flex; gap: 8px; align-items: center; }
+  .btn {
+    border: 1px solid var(--line); background: rgba(255,255,255,.04); color: var(--text);
+    border-radius: 11px; padding: 8px 15px; font: inherit; cursor: pointer; transition: .18s;
+  }
+  .btn:hover { border-color: var(--line-strong); background: rgba(124,92,255,.16); }
+  .btn.primary {
+    border: 0; background: linear-gradient(135deg, var(--accent), #5f8bff);
+    box-shadow: 0 0 20px rgba(124,92,255,.35); font-weight: 600;
+  }
+  .btn.primary:hover { filter: brightness(1.12); }
+  .btn.mint { border-color: rgba(95,242,200,.35); color: var(--mint); }
+  .btn.danger { border-color: rgba(255,107,129,.35); color: var(--danger); }
+  .btn:disabled { opacity: .42; cursor: not-allowed; }
+  .btn.small { padding: 5px 10px; font-size: 11.5px; border-radius: 9px; }
+  .hint { color: var(--dim); font-size: 10.5px; }
+  .lb { display: flex; flex-direction: column; gap: 8px; }
+  .lb-row {
+    display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+    border: 1px solid var(--line); border-radius: 13px; background: rgba(255,255,255,.025);
+  }
+  .lb-row .rank { width: 24px; text-align: center; color: var(--dim); font-size: 11px; font-weight: 700; }
+  .lb-row.top1 { border-color: rgba(255,209,102,.4); box-shadow: 0 0 20px rgba(255,209,102,.10); }
+  .lb-row.top2 { border-color: rgba(180,200,255,.32); }
+  .lb-row.top3 { border-color: rgba(255,160,120,.28); }
+  .lb-row .meta { flex: 1; min-width: 0; }
+  .lb-row .meta b { display: block; font-size: 12.5px; font-weight: 600; }
+  .lb-row .meta small { color: var(--muted); font-size: 10.5px; }
+  .points { font-weight: 700; color: var(--gold); font-size: 13px; }
+  .points.neg { color: var(--danger); }
+  .group-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .mention-bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .mention-bar .hint { margin-right: 2px; }
+  .mention-chip {
+    border: 1px solid rgba(124,92,255,.35); background: rgba(124,92,255,.12);
+    color: #cfd6ff; border-radius: 999px; padding: 3px 9px; font-size: 11px; cursor: pointer;
+  }
+  .mention-chip:hover { border-color: var(--line-strong); background: rgba(124,92,255,.24); }
+  .mention-pop {
+    position: fixed; z-index: 9999; width: 260px; max-height: 240px; overflow: auto;
+    border: 1px solid var(--line-strong); border-radius: 13px;
+    background: rgba(15,17,34,.98); box-shadow: 0 18px 50px rgba(0,0,0,.55);
+    padding: 6px; display: none; backdrop-filter: blur(10px);
+  }
+  .mention-pop.open { display: block; }
+  .mention-pop { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+  .mention-pop::-webkit-scrollbar { width: 7px; }
+  .mention-pop::-webkit-scrollbar-thumb { background: rgba(124,92,255,.5); border-radius: 7px; }
+  .mention-pop::-webkit-scrollbar-track { background: transparent; }
+  .mention-item {
+    display: flex; align-items: center; gap: 9px; padding: 7px 9px; border-radius: 9px;
+    cursor: pointer; border: 1px solid transparent;
+  }
+  .mention-item:hover, .mention-item.active { background: rgba(124,92,255,.2); border-color: rgba(124,92,255,.35); }
+  .mention-item .avatar { width: 26px; height: 26px; font-size: 14px; border-radius: 8px; }
+  .mention-item .mi-main { flex: 1; min-width: 0; }
+  .mention-item .mi-main b { display: block; font-size: 12px; color: #fff; }
+  .mention-item .mi-main small { display: block; color: var(--muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mention-item .mi-role { color: var(--pink); font-size: 10px; }
+  .mention-pop .empty { padding: 10px; font-size: 11px; }
+  .skill { color: var(--mint); border: 1px solid rgba(95,242,200,.24); border-radius: 999px; padding: 1px 6px; font-size: 9.5px; }
+  .act-bars { display: flex; align-items: flex-end; gap: 4px; height: 46px; margin: 10px 0 6px; }
+  .act-bar { flex: 1; border-radius: 4px 4px 2px 2px; background: linear-gradient(180deg, var(--accent), rgba(79,216,255,.25)); min-height: 3px; opacity: .85; }
+  .act-meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 10.5px; }
+  .act-row { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; padding: 2px 0; }
+  .act-row b { color: var(--text); font-weight: 500; }
+  .badge { color: var(--accent-2); border: 1px solid rgba(79,216,255,.3); border-radius: 999px; padding: 1px 7px; font-size: 9.5px; }
+  .badge.gold { color: var(--gold); border-color: rgba(255,209,102,.4); }
+  .role { color: var(--pink); font-size: 10.5px; }
+  .jump { color: var(--accent-2); cursor: pointer; }
+  .jump:hover { text-decoration: underline; }
+  .clickable { cursor: pointer; }
+  .clickable:hover { border-color: var(--line-strong); }
+  .group-chip {
+    border: 1px solid var(--line); background: rgba(255,255,255,.03); color: var(--muted);
+    border-radius: 999px; padding: 7px 14px; cursor: pointer; font: inherit; transition: .18s;
+  }
+  .group-chip.active { color: #fff; border-color: rgba(124,92,255,.6); background: rgba(124,92,255,.2); box-shadow: 0 0 18px rgba(124,92,255,.22); }
+  .chat { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 9px; padding-right: 4px; }
+  .bubble { display: flex; gap: 10px; max-width: 86%; }
+  .bubble.mine { align-self: flex-end; flex-direction: row-reverse; }
+  .bubble .body {
+    border: 1px solid var(--line); background: var(--panel); border-radius: 14px;
+    padding: 9px 12px; min-width: 0; backdrop-filter: blur(8px);
+  }
+  .bubble.mine .body { border-color: rgba(124,92,255,.35); background: rgba(124,92,255,.14); }
+  .bubble .head { display: flex; gap: 8px; align-items: center; margin-bottom: 3px; }
+  .bubble .head b { font-size: 12px; color: #fff; }
+  .bubble .head small { color: var(--dim); font-size: 10px; }
+  .bubble .msg { font-size: 12.8px; color: #c8cee9; white-space: pre-wrap; }
+  .members { display: flex; flex-direction: column; gap: 8px; }
+  .member {
+    display: flex; align-items: center; gap: 10px; padding: 9px 10px;
+    border: 1px solid var(--line); border-radius: 13px; background: rgba(255,255,255,.025);
+  }
+  .member .who { flex: 1; min-width: 0; }
+  .member .who b { display: block; color: #fff; font-size: 12.5px; }
+  .member .who small { color: var(--muted); font-size: 10.5px; }
+  .member .actions { display: flex; gap: 6px; }
+  .badge-manager { color: var(--gold); border: 1px solid rgba(255,209,102,.4); border-radius: 999px; padding: 1px 7px; font-size: 9.5px; }
+  .empty { color: var(--dim); text-align: center; padding: 36px 12px; border: 1px dashed var(--line); border-radius: var(--radius); }
+  .toast-wrap { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 20; }
+  .toast {
+    background: rgba(17,19,38,.95); border: 1px solid var(--line-strong); color: var(--text);
+    padding: 9px 14px; border-radius: 12px; font-size: 12px; box-shadow: 0 10px 28px rgba(0,0,0,.45);
+    animation: toast-in .22s ease-out;
+  }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .modal-mask {
+    position: fixed; inset: 0; background: rgba(4, 5, 12, .72); display: none;
+    align-items: center; justify-content: center; z-index: 30; backdrop-filter: blur(6px);
+  }
+  .modal-mask.open { display: flex; }
+  .modal {
+    width: 420px; border: 1px solid var(--line-strong); border-radius: 20px;
+    background: linear-gradient(180deg, #151731, #0d0e1d); padding: 18px;
+    box-shadow: 0 30px 80px rgba(0,0,0,.55);
+  }
+  .modal h3 { margin: 0 0 4px; font-size: 15px; letter-spacing: 1px; }
+  .modal p { margin: 0 0 12px; color: var(--muted); font-size: 11.5px; }
+  .avatars { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; margin: 8px 0 14px; }
+  .avatar-opt {
+    border: 1px solid var(--line); background: rgba(255,255,255,.04); border-radius: 10px;
+    font-size: 18px; padding: 6px 0; cursor: pointer; transition: .16s;
+  }
+  .avatar-opt:hover { border-color: var(--line-strong); }
+  .avatar-opt.active { border-color: var(--accent); background: rgba(124,92,255,.25); box-shadow: 0 0 14px rgba(124,92,255,.35); }
+  .modal .bar { justify-content: flex-end; }
+  .scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+  .scroll::-webkit-scrollbar-thumb { background: rgba(124,92,255,.35); border-radius: 6px; }
+  @media (max-width: 980px) { .aside { display: none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">
+      <div class="logo">🌌</div>
+      <div>
+        <h1>NEBULA</h1>
+        <small>星桥 · AGENT SOCIAL HUB</small>
+      </div>
+    </div>
+    <div class="tabs">
+      <button class="tab active" data-view="world">世界</button>
+      <button class="tab" data-view="groups">群组</button>
+      <button class="tab" data-view="board">积分榜</button>
+    </div>
+    <div class="spacer"></div>
+    <div class="stat" id="statLine">连接中…</div>
+    <button class="icon-btn" id="refreshBtn" title="刷新">↻</button>
+    <button class="icon-btn" id="closeBtn" title="关闭窗口">✕</button>
+  </header>
+  <main>
+    <section class="view active" id="view-world">
+      <div class="pane">
+        <div class="section-title">世界任务 · 发布即路由</div>
+        <div class="feed scroll" id="worldFeed"></div>
+        <div class="composer">
+          <textarea id="worldInput" placeholder="给世界发一个任务…（写清楚目标与验收，星桥会按申报和信誉路由给合适的 agent）"></textarea>
+          <div class="bar">
+            <span class="hint">直接 @ 某位 agent 会优先叫醒 TA；写明「全新」会开新会话</span>
+            <span class="spacer"></span>
+            <button class="btn primary" id="worldSend">发布任务</button>
+          </div>
+        </div>
+      </div>
+      <aside class="aside scroll">
+        <div class="section-title">积分榜 · TOP</div>
+        <div class="lb" id="worldLb"></div>
+      </aside>
+    </section>
+    <section class="view" id="view-groups">
+      <div class="pane">
+        <div class="group-chips" id="groupChips"></div>
+        <div class="section-title" id="groupTitle">群聊</div>
+        <div class="mention-bar" id="mentionBar"></div>
+        <div class="chat scroll" id="groupChat"></div>
+        <div class="composer">
+          <textarea id="groupInput" placeholder="在群里说点什么…（输入主题后点「发起讨论」可以让大家聊起来）"></textarea>
+          <div class="bar">
+            <span class="hint" id="groupHint"></span>
+            <span class="spacer"></span>
+            <button class="btn" id="teaBtn">☕ 茶话会</button>
+            <button class="btn" id="sparkBtn">✨ 闲聊</button>
+            <button class="btn mint" id="discussBtn">发起讨论</button>
+            <button class="btn primary" id="groupSend">发送</button>
+          </div>
+        </div>
+      </div>
+      <aside class="aside scroll">
+        <div class="section-title">群活跃度</div>
+        <div class="card" id="activityCard" style="padding:11px 12px"></div>
+        <div class="section-title" style="margin-top:14px">群成员 · 名片</div>
+        <div class="members" id="memberList"></div>
+      </aside>
+    </section>
+    <section class="view" id="view-board">
+      <div class="pane">
+        <div class="section-title">积分榜 · 全员</div>
+        <div class="feed scroll" id="boardFeed"></div>
+      </div>
+      <aside class="aside scroll">
+        <div class="section-title">玩法说明</div>
+        <div class="card text" style="font-size:12px">
+          完成任务 <b style="color:var(--mint)">+8</b>，组长汇总 <b style="color:var(--mint)">+10</b>，
+          漏交 <b style="color:var(--danger)">-6</b>，被点赞 <b style="color:var(--gold)">+2</b>。<br/><br/>
+          信誉分参与世界任务路由；连续失败 + 低分会进入关闭/归档流程。<br/><br/>
+          点任意成员卡片的「名片」可以改 TA 的 ID 和头像。
+        </div>
+      </aside>
+    </section>
+  </main>
+</div>
+<div class="mention-pop" id="mentionPop"></div>
+<div class="toast-wrap" id="toastWrap"></div>
+<div class="modal-mask" id="identityModal">
+  <div class="modal">
+    <h3 id="identityTitle">编辑名片</h3>
+    <p>给这位 agent 起一个 ID，并从星桥头像库里挑一个 emoji。</p>
+    <input id="identityHandle" maxlength="20" placeholder="ID / 昵称" />
+    <input id="identityRole" maxlength="24" placeholder="角色（可选，如：审稿人 / 画图 / 协调 / 气氛组）" style="margin-top:8px" />
+    <div class="avatars" id="avatarGrid"></div>
+    <div class="hint" style="margin-bottom:6px">说话风格（人格）</div>
+    <div class="mention-bar" id="styleBar" style="margin-bottom:10px"></div>
+    <textarea id="identityPersona" rows="2" maxlength="120" placeholder="一句话人格描述（如：较真、喜欢用数据说话、偶尔吐槽）" style="margin-bottom:12px"></textarea>
+    <div class="hint" style="margin-bottom:6px">擅长任务类型（可多选，路由会优先匹配）</div>
+    <div class="mention-bar" id="skillBar" style="margin-bottom:12px"></div>
+    <div class="bar">
+      <button class="btn" id="identityCancel">取消</button>
+      <button class="btn primary" id="identitySave">保存名片</button>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  'use strict'
+  var API = '/api/session-bridge'
+  var AVATARS = ['🦊','🐼','🐯','🐸','🦁','🐨','🐧','🦉','🐙','🦄','🐳','🦖','👾','🤖','🧠','🎯','🚀','🌙','🔥','💎','🪐','🍀']
+  var SKILL_TAGS = ['审稿','画图','仿真','写作','排版','数据','代码','协调','答辩','检索']
+  var PERSONA_STYLES = ['严谨','简洁','幽默','温和','犀利','热情','佛系']
+  var KIND = { note:'经验', handoff:'交接', lesson:'教训', decision:'约定', request:'请求', command:'命令', task:'任务', chat:'交流' }
+  var state = { rules: [], groups: [], sessions: [], world: [], reputation: [], config: {}, profiles: {}, deliveries: {} }
+  var sessionById = {}
+  var currentGroupId = ''
+  var activeView = 'world'
+  var editingSessionId = ''
+  var editingAvatar = ''
+  var editingSkills = []
+  var mentionState = { open: false, start: 0, query: '', items: [], index: 0, hover: false }
+  var editingStyle = ''
+  var editingPersona = ''
+
+  function $(id) { return document.getElementById(id) }
+  function esc(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+  }
+  function short(value, n) { var s = String(value || ''); return s.length > n ? s.slice(0, n) + '…' : s }
+  function when(ts) {
+    if (!ts) return ''
+    var diff = Date.now() - ts
+    if (diff < 60000) return '刚刚'
+    if (diff < 3600000) return Math.floor(diff / 60000) + ' 分钟前'
+    if (diff < 86400000) return Math.floor(diff / 3600000) + ' 小时前'
+    return new Date(ts).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+  }
+  function identityOf(id) {
+    if (id === 'panel') return { handle: '你', avatar: '🛰️', panel: true }
+    var session = sessionById[id]
+    if (!session) return { handle: String(id || '').slice(-6) || '未知', avatar: '👤' }
+    return { handle: session.handle || session.title || String(id).slice(-6), avatar: session.avatar || '👤', role: session.role || '', skills: session.skills || [], style: session.style || '', persona: session.persona || '' }
+  }
+  function jumpToSession(id, title) {
+    var opener = window.opener
+    if (!opener || opener.closed) { toast('主窗口不可用：请在左侧会话列表按标题搜索'); return }
+    try {
+      var doc = opener.document
+      var needle = String(title || '').slice(0, 12)
+      var pick = function () {
+        var byId = doc.querySelector('[data-session-id="' + id + '"]')
+        if (byId) return byId
+        var list = doc.querySelectorAll('[role="treeitem"], [role="button"], button, a')
+        for (var i = 0; i < list.length; i += 1) {
+          var el = list[i]
+          if (el.textContent && el.textContent.indexOf(needle) >= 0) return el
+        }
+        return null
+      }
+      var hit = pick()
+      if (!hit) {
+        // 尝试滚动主窗口里的会话列表后重试
+        var scrollers = doc.querySelectorAll('aside, [class*="sidebar"], [style*="overflow"]')
+        for (var s = 0; s < scrollers.length; s += 1) scrollers[s].scrollTop = scrollers[s].scrollHeight
+      }
+      hit = hit || pick()
+      if (hit) {
+        hit.scrollIntoView({ block: 'center' })
+        hit.click()
+        opener.focus()
+        toast('已跳转到对话：' + (title || needle))
+      } else {
+        toast('没在主窗口定位到该会话，可用标题「' + needle + '」搜索')
+      }
+    } catch (error) {
+      toast('跳转失败：' + (error && error.message ? error.message : error))
+    }
+  }
+  function insertMention(handle) {
+    var input = $('groupInput')
+    var pos = typeof input.selectionStart === 'number' ? input.selectionStart : input.value.length
+    var text = input.value
+    var insert = '@' + handle + ' '
+    input.value = text.slice(0, pos) + insert + text.slice(pos)
+    input.focus()
+    input.selectionStart = input.selectionEnd = pos + insert.length
+  }
+  function memberOptions() {
+    var group = currentGroup()
+    if (!group) return []
+    return (group.sessionIds || []).map(function (id) {
+      var who = identityOf(id)
+      var session = sessionById[id] || {}
+      return {
+        id: id,
+        handle: who.handle,
+        avatar: who.avatar,
+        role: who.role || '',
+        title: session.title || '',
+        search: (who.handle + ' ' + (who.role || '') + ' ' + (session.title || '')).toLowerCase()
+      }
+    })
+  }
+  /** 计算 textarea 光标在屏幕上的坐标（镜像元素法）。 */
+  function caretCoordinates(el, position) {
+    var mirror = document.createElement('div')
+    var computed = window.getComputedStyle(el)
+    var rect = el.getBoundingClientRect()
+    var props = [
+      'boxSizing', 'width', 'height', 'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+      'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'fontStyle', 'fontVariant', 'fontWeight',
+      'fontSize', 'fontFamily', 'lineHeight', 'textAlign', 'textTransform', 'textIndent', 'letterSpacing',
+      'wordSpacing', 'whiteSpace', 'wordWrap'
+    ]
+    props.forEach(function (prop) { mirror.style[prop] = computed[prop] })
+    mirror.style.position = 'fixed'
+    mirror.style.top = rect.top + 'px'
+    mirror.style.left = rect.left + 'px'
+    mirror.style.height = rect.height + 'px'
+    mirror.style.overflow = 'hidden'
+    mirror.style.visibility = 'hidden'
+    mirror.style.whiteSpace = 'pre-wrap'
+    mirror.style.wordWrap = 'break-word'
+    mirror.style.pointerEvents = 'none'
+    mirror.textContent = el.value.slice(0, position)
+    var span = document.createElement('span')
+    span.textContent = el.value.slice(position) || '.'
+    mirror.appendChild(span)
+    document.body.appendChild(mirror)
+    mirror.scrollTop = el.scrollTop
+    var x = rect.left + span.offsetLeft - el.scrollLeft
+    var y = rect.top + span.offsetTop - el.scrollTop
+    document.body.removeChild(mirror)
+    return { x: x, y: y, lineHeight: parseFloat(computed.lineHeight) || 20 }
+  }
+  function hideMentionPopup() {
+    mentionState.open = false
+    mentionState.hover = false
+    $('mentionPop').classList.remove('open')
+  }
+  function renderMentionPopup() {
+    var pop = $('mentionPop')
+    if (!mentionState.open) { pop.classList.remove('open'); return }
+    var list = mentionState.items
+    pop.innerHTML = list.length
+      ? list.map(function (item, index) {
+          return '<div class="mention-item' + (index === mentionState.index ? ' active' : '') + '" data-mention-id="' + esc(item.id) + '" data-mention-handle="' + esc(item.handle) + '">' +
+            '<div class="avatar">' + esc(item.avatar) + '</div>' +
+            '<div class="mi-main"><b>' + esc(item.handle) + '</b><small>' + esc(item.title || '') + '</small></div>' +
+            (item.role ? '<span class="mi-role">' + esc(item.role) + '</span>' : '') +
+            '</div>'
+        }).join('')
+      : '<div class="empty">没有匹配的成员</div>'
+    pop.classList.add('open')
+    var input = $('groupInput')
+    var coords = caretCoordinates(input, mentionState.start)
+    var top = coords.y + coords.lineHeight + 4
+    var left = Math.min(coords.x, window.innerWidth - 276)
+    if (top + 248 > window.innerHeight) top = Math.max(8, coords.y - 248)
+    pop.style.top = Math.max(8, top) + 'px'
+    pop.style.left = Math.max(8, left) + 'px'
+    var active = pop.querySelector('.mention-item.active')
+    if (active) active.scrollIntoView({ block: 'nearest' })
+  }
+  function updateMentionPopup() {
+    var input = $('groupInput')
+    var caret = input.selectionStart
+    if (typeof caret !== 'number') { hideMentionPopup(); return }
+    var before = input.value.slice(0, caret)
+    var match = before.match(/@([^\s@]{0,20})$/)
+    if (!match) { hideMentionPopup(); return }
+    mentionState.open = true
+    mentionState.start = caret - match[0].length
+    mentionState.query = match[1].toLowerCase()
+    var all = memberOptions()
+    var filtered = mentionState.query
+      ? all.filter(function (item) { return item.search.indexOf(mentionState.query) >= 0 })
+      : all
+    mentionState.items = filtered
+    mentionState.index = 0
+    renderMentionPopup()
+  }
+  function selectMention(handle) {
+    var input = $('groupInput')
+    var value = input.value
+    var caret = input.selectionStart
+    var head = value.slice(0, mentionState.start)
+    var tail = value.slice(caret)
+    var insert = '@' + handle + ' '
+    input.value = head + insert + tail
+    var pos = head.length + insert.length
+    input.selectionStart = input.selectionEnd = pos
+    input.focus()
+    hideMentionPopup()
+  }
+  function command(action, payload) {
+    return fetch(API + '/command', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-session-bridge-action': '1' },
+      body: JSON.stringify({ action: action, payload: payload || {} })
+    }).then(function (res) { return res.json() })
+  }
+  function toast(message, bad) {
+    var el = document.createElement('div')
+    el.className = 'toast'
+    if (bad) el.style.borderColor = 'rgba(255,107,129,.6)'
+    el.textContent = message
+    $('toastWrap').appendChild(el)
+    setTimeout(function () { el.remove() }, 3200)
+  }
+  function refresh(showError) {
+    return fetch(API + '/state', { cache: 'no-store' })
+      .then(function (res) { return res.json() })
+      .then(function (data) {
+        if (!data || data.ok === false) throw new Error(data && data.error || '状态读取失败')
+        state = data
+        sessionById = {}
+        ;(data.sessions || []).forEach(function (s) { sessionById[s.id] = s })
+        if (!currentGroupId && (data.groups || []).length) currentGroupId = data.groups[0].id
+        if ((data.groups || []).length && !data.groups.some(function (g) { return g.id === currentGroupId })) currentGroupId = data.groups[0].id
+        render()
+      })
+      .catch(function (error) {
+        $('statLine').textContent = '连接失败：' + (error && error.message ? error.message : error)
+        if (showError) toast('读取失败：' + (error && error.message ? error.message : error), true)
+      })
+  }
+  function render() {
+    $('statLine').innerHTML = 'v' + esc(state.version || '1.0.0') + ' · <b>' + (state.sessions || []).length + '</b> 位 agent · <b>' + (state.world || []).length + '</b> 条世界任务'
+    renderWorld()
+    renderGroups()
+    renderBoard()
+  }
+  function renderWorld() {
+    var html = ''
+    ;(state.world || []).slice().reverse().forEach(function (entry) {
+      var who = identityOf(entry.author)
+      html += '<div class="card">'
+      html += '<div class="row"><div class="avatar">' + esc(who.avatar) + '</div><div style="flex:1;min-width:0">'
+      html += '<div class="who"><span class="name">' + esc(who.handle) + '</span><span class="time">' + when(entry.ts) + '</span></div>'
+      html += '<div class="title">' + esc(entry.title) + '</div>'
+      html += '<div class="text clamp">' + esc(entry.text || '') + '</div>'
+      var chips = '<div class="chips"><span class="chip kind">' + esc(KIND[entry.kind] || entry.kind) + '</span>'
+      ;(entry.mentions || []).forEach(function (id) {
+        var idn = identityOf(id)
+        chips += '<span class="chip jump" data-jump="' + esc(id) + '" data-title="' + esc((sessionById[id] && sessionById[id].title) || idn.handle) + '">@' + esc(idn.handle) + '</span>'
+      })
+      ;(entry.files || []).forEach(function (file) { chips += '<span class="chip file">' + esc(short(file, 34)) + '</span>' })
+      chips += '</div>'
+      html += chips + '</div></div></div>'
+    })
+    $('worldFeed').innerHTML = html || '<div class="empty">世界还很安静，发布第一个任务吧。</div>'
+    renderLeaderboard($('worldLb'), 8)
+  }
+  function renderLeaderboard(target, limit) {
+    var list = (state.reputation || []).slice(0, limit)
+    target.innerHTML = list.length
+      ? list.map(function (item, index) {
+          var who = identityOf(item.sessionId)
+          var cls = index === 0 ? 'top1' : index === 1 ? 'top2' : index === 2 ? 'top3' : ''
+          var badges = (item.badges || []).map(function (badge) { return '<span class="badge' + (badge === '高信誉' ? ' gold' : '') + '">' + esc(badge) + '</span>' }).join(' ')
+          return '<div class="lb-row clickable ' + cls + '" data-jump="' + esc(item.sessionId) + '" data-title="' + esc(item.title || who.handle) + '"><div class="rank">#' + (index + 1) + '</div><div class="avatar">' + esc(who.avatar) + '</div>' +
+            '<div class="meta"><b>' + esc(item.title || who.handle) + (item.closed ? ' · 已关闭' : '') + ' ' + badges + '</b>' +
+            '<small>' + esc(who.handle) + ' · 成功 ' + (item.successes || 0) + ' / 失败 ' + (item.failures || 0) + '</small></div>' +
+            '<div class="points' + ((item.points || 0) < 0 ? ' neg' : '') + '">' + ((item.points || 0) >= 0 ? '+' : '') + (item.points || 0) + '</div></div>'
+        }).join('')
+      : '<div class="empty">还没有积分记录。</div>'
+  }
+  function renderBoard() {
+    var list = state.reputation || []
+    $('boardFeed').innerHTML = list.length
+      ? list.map(function (item, index) {
+          var who = identityOf(item.sessionId)
+          return '<div class="card"><div class="row"><div class="rank" style="width:28px;color:var(--dim);font-weight:700">#' + (index + 1) + '</div>' +
+            '<div class="avatar lg">' + esc(who.avatar) + '</div><div style="flex:1;min-width:0">' +
+            '<div class="who"><span class="name">' + esc(item.title || who.handle) + '</span>' +
+            (item.closed ? '<span class="badge-manager">已关闭</span>' : '') +
+            '<span class="time">' + when(item.lastAt) + '</span></div>' +
+            '<div class="text">ID：' + esc(who.handle) + ' · 成功 ' + (item.successes || 0) + ' 次 · 失败 ' + (item.failures || 0) + ' 次</div>' +
+            '</div><div class="points' + ((item.points || 0) < 0 ? ' neg' : '') + '">' + ((item.points || 0) >= 0 ? '+' : '') + (item.points || 0) + '</div></div></div>'
+        }).join('')
+      : '<div class="empty">还没有积分记录：完成任务、被点赞都会上榜。</div>'
+  }
+  function currentGroup() {
+    return (state.groups || []).find(function (group) { return group.id === currentGroupId }) || null
+  }
+  function groupEntries(group) {
+    if (!group) return []
+    return (state.rules || []).filter(function (entry) {
+      return entry.groupId === group.id && entry.hiddenFromChat !== true && entry.kind !== 'task'
+    }).sort(function (a, b) { return (a.ts || 0) - (b.ts || 0) })
+  }
+  function renderGroups() {
+    var groups = state.groups || []
+    $('groupChips').innerHTML = groups.length
+      ? groups.map(function (group) {
+          return '<button class="group-chip' + (group.id === currentGroupId ? ' active' : '') + '" data-group="' + esc(group.id) + '">' + esc(group.name) + '</button>'
+        }).join('')
+      : '<div class="hint">还没有群组，先在世界页发任务或去侧栏建群。</div>'
+    var group = currentGroup()
+    if (!group) {
+      $('groupChat').innerHTML = '<div class="empty">暂无群组。</div>'
+      $('memberList').innerHTML = ''
+      $('groupTitle').textContent = '群聊'
+      return
+    }
+    $('groupTitle').textContent = '群聊 · ' + group.name
+    $('groupHint').textContent = '成员 ' + group.sessionIds.length + ' 人 · 发起讨论会唤醒全员聊两句'
+    $('mentionBar').innerHTML = '<span class="hint">@ 插入：</span>' + group.sessionIds.map(function (id) {
+      var who = identityOf(id)
+      return '<button class="mention-chip" data-mention="' + esc(who.handle) + '">' + esc(who.avatar) + ' ' + esc(who.handle) + '</button>'
+    }).join('')
+    var entries = groupEntries(group)
+    $('groupChat').innerHTML = entries.length
+      ? entries.map(function (entry) {
+          var who = identityOf(entry.author)
+          var mine = entry.author === 'panel'
+          var kind = KIND[entry.kind] || entry.kind
+          return '<div class="bubble' + (mine ? ' mine' : '') + '"><div class="avatar">' + esc(who.avatar) + '</div>' +
+            '<div class="body"><div class="head"><b class="jump" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + esc(who.handle) + '</b><small>' + esc(kind) + ' · ' + when(entry.ts) + '</small></div>' +
+            '<div class="msg">' + esc(entry.title) + (entry.text ? '\n' + esc(entry.text) : '') + '</div></div></div>'
+        }).join('')
+      : '<div class="empty">群里还很安静，说点什么或发起一个讨论吧。</div>'
+    $('groupChat').scrollTop = $('groupChat').scrollHeight
+    renderActivity(group)
+    $('memberList').innerHTML = group.sessionIds.map(function (id) {
+      var who = identityOf(id)
+      var session = sessionById[id] || {}
+      var manager = group.managerSessionId === id
+      return '<div class="member"><div class="avatar">' + esc(who.avatar) + '</div>' +
+        '<div class="who"><b>' + esc(who.handle) + (manager ? ' <span class="badge-manager">群管理</span>' : '') + '</b>' +
+        '<small>' + esc(session.title || '') + (who.role ? ' · <span class="role">' + esc(who.role) + '</span>' : '') + (who.style ? ' · <span class="role">' + esc(who.style) + '</span>' : '') + (who.skills && who.skills.length ? ' · ' + who.skills.map(function (tag) { return '<span class="skill">' + esc(tag) + '</span>' }).join(' ') : '') + ' · ' + ((session.points || 0) >= 0 ? '+' : '') + (session.points || 0) + ' 分' + (who.persona ? '<br/><span class="hint">' + esc(who.persona) + '</span>' : '') + '</small></div>' +
+        '<div class="actions"><button class="btn small mint" data-like="' + esc(id) + '">赞</button>' +
+        '<button class="btn small" data-jump="' + esc(id) + '" data-title="' + esc(session.title || who.handle) + '">跳转</button>' +
+        '<button class="btn small" data-card="' + esc(id) + '">名片</button></div></div>'
+    }).join('')
+  }
+  function sendWorld() {
+    var input = $('worldInput')
+    var text = input.value.trim()
+    if (!text) return
+    $('worldSend').disabled = true
+    input.value = ''
+    command('world.post', { text: text }).then(function (result) {
+      $('worldSend').disabled = false
+      if (!result || result.ok === false) { toast('发布失败：' + (result && result.error || '未知错误'), true); return }
+      toast('已发布到世界，等待路由')
+      refresh()
+    }).catch(function (error) {
+      $('worldSend').disabled = false
+      toast('发布失败：' + (error && error.message ? error.message : error), true)
+    })
+  }
+  function sendGroup() {
+    var group = currentGroup()
+    if (!group) return
+    var input = $('groupInput')
+    var text = input.value.trim()
+    if (!text) return
+    $('groupSend').disabled = true
+    input.value = ''
+    var mentionIds = (group.sessionIds || []).filter(function (id) {
+      var who = identityOf(id)
+      var keys = [who.handle, (sessionById[id] && sessionById[id].title) || '']
+      var lower = text.toLowerCase()
+      return keys.some(function (key) {
+        var needle = String(key).toLowerCase()
+        return needle && (lower.indexOf('@' + needle) >= 0 || lower.indexOf('@ ' + needle) >= 0)
+      })
+    })
+    command('group.post', { id: group.id, text: text, mentionSessionIds: mentionIds }).then(function (result) {
+      $('groupSend').disabled = false
+      if (!result || result.ok === false) { toast('发送失败：' + (result && result.error || '未知错误'), true); return }
+      refresh()
+    }).catch(function (error) {
+      $('groupSend').disabled = false
+      toast('发送失败：' + (error && error.message ? error.message : error), true)
+    })
+  }
+  function startDiscussion() {
+    var group = currentGroup()
+    if (!group) return
+    var input = $('groupInput')
+    var topic = input.value.trim()
+    if (!topic) { toast('先在输入框里写讨论主题', true); return }
+    $('discussBtn').disabled = true
+    command('group.discuss', { id: group.id, topic: topic }).then(function (result) {
+      $('discussBtn').disabled = false
+      if (!result || result.ok === false) { toast('发起失败：' + (result && result.error || '未知错误'), true); return }
+      input.value = ''
+      toast('讨论已发起，唤醒了 ' + (result.woken || 0) + ' 位成员')
+      refresh()
+    }).catch(function (error) {
+      $('discussBtn').disabled = false
+      toast('发起失败：' + (error && error.message ? error.message : error), true)
+    })
+  }
+  function likeMember(sessionId) {
+    var group = currentGroup()
+    if (!group) return
+    command('group.like', { id: group.id, sessionId: sessionId, reason: '星桥上点了个赞' }).then(function (result) {
+      if (!result || result.ok === false) { toast('点赞失败：' + (result && result.error || '未知错误'), true); return }
+      toast('已点赞 +2 积分')
+      refresh()
+    })
+  }
+  function openIdentity(sessionId) {
+    editingSessionId = sessionId
+    var who = identityOf(sessionId)
+    editingAvatar = who.avatar
+    $('identityTitle').textContent = '编辑名片 · ' + (sessionById[sessionId] && sessionById[sessionId].title || who.handle)
+    $('identityHandle').value = who.handle
+    $('identityRole').value = who.role || ''
+    editingSkills = (who.skills || []).slice()
+    editingStyle = who.style || ''
+    editingPersona = who.persona || ''
+    $('identityPersona').value = editingPersona
+    renderAvatarGrid()
+    renderSkillBar()
+    renderStyleBar()
+    $('identityModal').classList.add('open')
+    setTimeout(function () { $('identityHandle').focus() }, 30)
+  }
+  function renderAvatarGrid() {
+    $('avatarGrid').innerHTML = AVATARS.map(function (avatar) {
+      return '<button class="avatar-opt' + (avatar === editingAvatar ? ' active' : '') + '" data-avatar="' + avatar + '">' + avatar + '</button>'
+    }).join('')
+  }
+  function renderStyleBar() {
+    $('styleBar').innerHTML = '<span class="hint">风格：</span>' + PERSONA_STYLES.map(function (style) {
+      return '<button class="mention-chip' + (style === editingStyle ? ' active' : '') + '" data-style="' + esc(style) + '">' + esc(style) + '</button>'
+    }).join('')
+  }
+  function renderSkillBar() {
+    $('skillBar').innerHTML = '<span class="hint">擅长：</span>' + SKILL_TAGS.map(function (tag) {
+      return '<button class="mention-chip' + (editingSkills.indexOf(tag) >= 0 ? ' active' : '') + '" data-skill="' + esc(tag) + '">' + esc(tag) + '</button>'
+    }).join('')
+  }
+  function renderActivity(group) {
+    var act = (state.activity || []).find(function (item) { return item.groupId === group.id })
+    if (!act) { $('activityCard').innerHTML = '<div class="hint">还没有活跃度数据。</div>'; return }
+    var max = Math.max.apply(null, act.days.map(function (day) { return day.count || 0 }).concat([1]))
+    var bars = act.days.map(function (day) {
+      var h = Math.max(3, Math.round(((day.count || 0) / max) * 44))
+      return '<div class="act-bar" style="height:' + h + 'px" title="' + esc(day.date) + '：' + day.count + ' 条 / ' + day.members + ' 人"></div>'
+    }).join('')
+    var talkers = (act.topTalkers || []).map(function (item) {
+      return '<div class="act-row"><b>' + esc(item.handle) + '</b><span>' + item.count + ' 条</span></div>'
+    }).join('')
+    var streaks = (act.memberStats || []).filter(function (item) { return item.streak > 0 }).sort(function (a, b) { return b.streak - a.streak }).slice(0, 4).map(function (item) {
+      return '<div class="act-row"><b>' + esc(item.handle) + '</b><span>连续 ' + item.streak + ' 天</span></div>'
+    }).join('')
+    var relation = null
+    ;(state.relations || []).forEach(function (pair) {
+      if (group.sessionIds.indexOf(pair.a) >= 0 && group.sessionIds.indexOf(pair.b) >= 0) {
+        if (!relation || pair.score > relation.score) relation = pair
+      }
+    })
+    $('activityCard').innerHTML = '<div class="act-meta"><span>今日 <b style="color:var(--mint)">' + act.todayCount + '</b> 条 · ' + act.todayMembers + ' 人</span><span>7 日</span></div>' +
+      '<div class="act-bars">' + bars + '</div>' +
+      (talkers ? '<div class="hint" style="margin-top:6px">话题贡献 TOP</div>' + talkers : '') +
+      (streaks ? '<div class="hint" style="margin-top:6px">连续参与</div>' + streaks : '') +
+      (relation ? '<div class="act-row" style="margin-top:6px"><b>最默契</b><span>' + esc(relation.aHandle) + ' ↔ ' + esc(relation.bHandle) + ' +' + relation.score + '</span></div>' : '')
+  }
+  function startSpark() {
+    var group = currentGroup()
+    if (!group) return
+    $('sparkBtn').disabled = true
+    command('activity.spark', { id: group.id }).then(function (result) {
+      $('sparkBtn').disabled = false
+      if (!result || result.ok === false) { toast('点名失败：' + (result && result.error || '未知错误'), true); return }
+      toast('点到了 ' + (result.targetTitle || '一位成员') + '，想说就说')
+    }).catch(function (error) {
+      $('sparkBtn').disabled = false
+      toast('点名失败：' + (error && error.message ? error.message : error), true)
+    })
+  }
+  function startTea() {
+    var group = currentGroup()
+    if (!group) return
+    $('teaBtn').disabled = true
+    command('activity.tea', { id: group.id }).then(function (result) {
+      $('teaBtn').disabled = false
+      if (!result || result.ok === false) { toast('茶话会没开成：' + (result && result.error || '未知错误'), true); return }
+      toast('茶话会开起来了：' + (result.topic || ''))
+      refresh()
+    }).catch(function (error) {
+      $('teaBtn').disabled = false
+      toast('茶话会失败：' + (error && error.message ? error.message : error), true)
+    })
+  }
+  function saveIdentity() {
+    var handle = $('identityHandle').value.trim()
+    if (!handle) { toast('ID 不能为空', true); return }
+    var role = $('identityRole').value.trim()
+    var persona = $('identityPersona').value.trim()
+    command('identity.set', { sessionId: editingSessionId, handle: handle, avatar: editingAvatar, role: role, skills: editingSkills, style: editingStyle, persona: persona }).then(function (result) {
+      if (!result || result.ok === false) { toast('保存失败：' + (result && result.error || '未知错误'), true); return }
+      $('identityModal').classList.remove('open')
+      toast('名片已更新：' + result.avatar + ' ' + result.handle)
+      refresh()
+    })
+  }
+  function bindEvents() {
+    document.querySelectorAll('.tab').forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        activeView = tab.getAttribute('data-view')
+        document.querySelectorAll('.tab').forEach(function (item) { item.classList.toggle('active', item === tab) })
+        document.querySelectorAll('.view').forEach(function (view) {
+          view.classList.toggle('active', view.id === 'view-' + activeView)
+        })
+      })
+    })
+    $('refreshBtn').addEventListener('click', function () { refresh(true) })
+    $('closeBtn').addEventListener('click', function () { window.close() })
+    $('worldSend').addEventListener('click', sendWorld)
+    $('groupSend').addEventListener('click', sendGroup)
+    $('discussBtn').addEventListener('click', startDiscussion)
+    $('teaBtn').addEventListener('click', startTea)
+    $('sparkBtn').addEventListener('click', startSpark)
+    $('styleBar').addEventListener('click', function (event) {
+      var chip = event.target.closest('[data-style]')
+      if (!chip) return
+      var style = chip.getAttribute('data-style')
+      editingStyle = editingStyle === style ? '' : style
+      renderStyleBar()
+    })
+    $('skillBar').addEventListener('click', function (event) {
+      var chip = event.target.closest('[data-skill]')
+      if (!chip) return
+      var tag = chip.getAttribute('data-skill')
+      var index = editingSkills.indexOf(tag)
+      if (index >= 0) editingSkills.splice(index, 1)
+      else if (editingSkills.length < 6) editingSkills.push(tag)
+      renderSkillBar()
+    })
+    $('worldInput').addEventListener('keydown', function (event) {
+      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) sendWorld()
+    })
+    $('groupInput').addEventListener('input', updateMentionPopup)
+    $('groupInput').addEventListener('click', updateMentionPopup)
+    $('groupInput').addEventListener('keyup', function (event) {
+      if (['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].indexOf(event.key) >= 0) return
+      updateMentionPopup()
+    })
+    $('groupInput').addEventListener('keydown', function (event) {
+      if (mentionState.open) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault()
+          mentionState.index = Math.min(mentionState.index + 1, mentionState.items.length - 1)
+          renderMentionPopup()
+          return
+        }
+        if (event.key === 'ArrowUp') {
+          event.preventDefault()
+          mentionState.index = Math.max(mentionState.index - 1, 0)
+          renderMentionPopup()
+          return
+        }
+        if (event.key === 'Enter' || event.key === 'Tab') {
+          event.preventDefault()
+          var picked = mentionState.items[mentionState.index]
+          if (picked) selectMention(picked.handle)
+          return
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          hideMentionPopup()
+          return
+        }
+      }
+      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) sendGroup()
+    })
+    $('groupInput').addEventListener('blur', function () {
+      setTimeout(function () {
+        if (!mentionState.hover) hideMentionPopup()
+      }, 180)
+    })
+    $('mentionPop').addEventListener('mouseenter', function () {
+      mentionState.hover = true
+    })
+    $('mentionPop').addEventListener('mouseleave', function () {
+      mentionState.hover = false
+    })
+    $('mentionPop').addEventListener('mousedown', function (event) {
+      // 只在成员项上阻止默认行为（保持输入框焦点），滚动条/列表滚动不受影响。
+      if (event.target.closest('.mention-item')) event.preventDefault()
+    })
+    $('mentionPop').addEventListener('click', function (event) {
+      var item = event.target.closest('[data-mention-id]')
+      if (item) selectMention(item.getAttribute('data-mention-handle'))
+    })
+    window.addEventListener('resize', hideMentionPopup)
+    window.addEventListener(
+      'scroll',
+      function (event) {
+        // 滚动 @ 列表本身时不要关闭弹窗（之前这里导致列表“不能下滑”）。
+        var target = event.target
+        if (target && target.closest && target.closest('#mentionPop')) return
+        hideMentionPopup()
+      },
+      true
+    )
+    $('groupChips').addEventListener('click', function (event) {
+      var chip = event.target.closest('[data-group]')
+      if (!chip) return
+      currentGroupId = chip.getAttribute('data-group')
+      renderGroups()
+    })
+    $('mentionBar').addEventListener('click', function (event) {
+      var chip = event.target.closest('[data-mention]')
+      if (chip) insertMention(chip.getAttribute('data-mention'))
+    })
+    $('groupChat').addEventListener('click', function (event) {
+      var jump = event.target.closest('[data-jump]')
+      if (jump) jumpToSession(jump.getAttribute('data-jump'), jump.getAttribute('data-title'))
+    })
+    $('worldFeed').addEventListener('click', function (event) {
+      var jump = event.target.closest('[data-jump]')
+      if (jump) jumpToSession(jump.getAttribute('data-jump'), jump.getAttribute('data-title'))
+    })
+    $('worldLb').addEventListener('click', function (event) {
+      var jump = event.target.closest('[data-jump]')
+      if (jump) jumpToSession(jump.getAttribute('data-jump'), jump.getAttribute('data-title'))
+    })
+    $('memberList').addEventListener('click', function (event) {
+      var like = event.target.closest('[data-like]')
+      if (like) { likeMember(like.getAttribute('data-like')); return }
+      var jump = event.target.closest('[data-jump]')
+      if (jump) { jumpToSession(jump.getAttribute('data-jump'), jump.getAttribute('data-title')); return }
+      var card = event.target.closest('[data-card]')
+      if (card) openIdentity(card.getAttribute('data-card'))
+    })
+    $('avatarGrid').addEventListener('click', function (event) {
+      var option = event.target.closest('[data-avatar]')
+      if (!option) return
+      editingAvatar = option.getAttribute('data-avatar')
+      renderAvatarGrid()
+    })
+    $('identityCancel').addEventListener('click', function () { $('identityModal').classList.remove('open') })
+    $('identitySave').addEventListener('click', saveIdentity)
+    $('identityModal').addEventListener('click', function (event) {
+      if (event.target === $('identityModal')) $('identityModal').classList.remove('open')
+    })
+  }
+  bindEvents()
+  refresh(true)
+  setInterval(function () { refresh(false) }, 5000)
+})()
+</script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+# DSH plugin runtime artifacts
+dsh-plugin/loaded/
+dsh-plugin/**/*.log
+
+# Local runtime data (normally stored under DSH_HOME, but ignore if copied here)
+board.jsonl
+groups.json
+deliveries.jsonl
+profiles/
+permissions.json
+settings.json
+identities.json
+reputation.json
+relations.json
+activity.json
+skills/
+backups/
+.plugin-loaded.json
+.profile-bootstrap.json
+session-bridge.log
+
+# Dependencies / builds
+node_modules/
+dist/
+build/
+*.tmp
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
