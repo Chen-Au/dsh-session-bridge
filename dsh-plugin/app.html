@@ -358,6 +358,7 @@
           <div class="bar">
             <span class="hint">@ 只显示已申报/群成员（系统会话已过滤）；写明「全新」开新会话</span>
             <span class="spacer"></span>
+            <button class="btn" id="bugfixBtn" title="一键创建/复用「星桥 · 修bug」群：维护者为群管理，普通成员把 BUG 报告投递到该群">🛡️ 修bug群</button>
             <button class="btn primary" id="worldSend">发布任务</button>
           </div>
         </div>
@@ -378,6 +379,7 @@
           <div class="bar">
             <span class="hint" id="groupHint"></span>
             <span class="spacer"></span>
+            <button class="btn" id="reportBugBtn" title="把输入框里的内容作为 BUG 报告投递到「星桥 · 修bug」群，并通知维护者（维护者不接普通任务）">🛡️ 报BUG</button>
             <button class="btn" id="teaBtn">☕ 茶话会</button>
             <button class="btn" id="sparkBtn">✨ 闲聊</button>
             <button class="btn mint" id="discussBtn">发起讨论</button>
@@ -875,7 +877,7 @@
       return
     }
     $('groupTitle').textContent = '群聊 · ' + group.name
-    $('groupHint').textContent = '成员 ' + group.sessionIds.length + ' 人 · 点成员行里的 contactId 可复制（session_ask 的 to 直接用它）· 发起讨论会唤醒全员聊两句'
+    $('groupHint').textContent = '成员 ' + group.sessionIds.length + ' 人 · 维护者只观察、不接普通任务（bug 点「报BUG」投递到修bug群）· 点成员行里的 contactId 可复制'
     $('mentionBar').innerHTML = '<span class="hint">@ 插入：</span>' + group.sessionIds.map(function (id) {
       var who = identityOf(id)
       return '<button class="mention-chip" data-mention="' + esc(who.handle) + '">' + avatarHtml(who.avatar) + ' ' + esc(who.handle) + '</button>'
@@ -918,11 +920,12 @@
       var who = identityOf(id)
       var session = sessionById[id] || {}
       var manager = group.managerSessionId === id
+      var isProtected = session.protected === true
       var cid = contactIdFor(id)
       var meta = (who.role ? '<span class="role">' + esc(who.role) + '</span> · ' : '') + (who.style ? esc(who.style) + ' · ' : '') + ((session.points || 0) >= 0 ? '+' : '') + (session.points || 0) + ' 分'
       return '<div class="member compact">' +
         '<div class="avatar clickable" data-jump="' + esc(id) + '" data-title="' + esc(session.title || who.handle) + '">' + avatarHtml(who.avatar) + '</div>' +
-        '<div class="who"><b>' + esc(who.handle) + (manager ? ' <span class="badge-manager">群管理</span>' : '') + '</b>' +
+        '<div class="who"><b>' + esc(who.handle) + (manager ? ' <span class="badge-manager">群管理</span>' : '') + (isProtected ? ' <span class="badge-manager">维护者·观察</span>' : '') + '</b>' +
         '<small><code class="contactid" data-copy="' + esc(cid) + '" title="点击复制 contactId（可直接用作 session_ask 的 to）">' + esc(cid) + '</code> · ' + meta + '</small></div>' +
         '<div class="actions"><button class="btn small mint" data-like="' + esc(id) + '">👍</button>' +
         '<button class="btn small" data-card="' + esc(id) + '">⋯</button></div></div>'
@@ -945,6 +948,9 @@
       }
       if (result.createdGroup && result.createdGroup.name) {
         notes.push('已自动拉群「' + result.createdGroup.name + '」')
+      }
+      if (result.protectedException && result.protectedException.length) {
+        notes.push('维护者 protected/service：本次按用户显式 @ 例外处理，普通任务请派给其他成员')
       }
       toast(notes.length ? notes.join('；') : '已发布到世界，等待处理')
       refresh()
@@ -978,6 +984,30 @@
     }).catch(function (error) {
       $('groupSend').disabled = false
       toast('发送失败：' + (error && error.message ? error.message : error), true)
+    })
+  }
+  function ensureBugfixGroup() {
+    command('bugfix.ensure', {}).then(function (result) {
+      if (!result || result.ok === false) { toast('修bug群创建失败：' + (result && result.error || '未知错误'), true); return }
+      toast((result.created ? '已创建' : '已复用') + '修bug群「' + result.name + '」：维护者为群管理，成员 ' + result.memberCount + ' 人')
+      refresh()
+    }).catch(function (error) {
+      toast('修bug群创建失败：' + (error && error.message ? error.message : error), true)
+    })
+  }
+  function reportBug() {
+    var group = currentGroup()
+    var input = $('groupInput')
+    var text = String(input.value || '').trim()
+    if (!text) { toast('先把 bug 描述写在输入框里（如「保存按钮报错 500」），再点「报BUG」', true); return }
+    command('bugfix.report', { text: text, workspace: group ? group.workspace : '' }).then(function (result) {
+      if (!result || result.ok === false) { toast('报BUG失败：' + (result && result.error || '未知错误'), true); return }
+      input.value = ''
+      groupScrollState.forceBottom = true
+      toast('已把 BUG 投递到修bug群' + (result.woken ? '，维护者已被唤醒处理' : '（维护者离线，下次运行会处理）'))
+      refresh()
+    }).catch(function (error) {
+      toast('报BUG失败：' + (error && error.message ? error.message : error), true)
     })
   }
   function startDiscussion() {
@@ -1212,6 +1242,8 @@
     $('closeBtn').addEventListener('click', function () { window.close() })
     $('worldSend').addEventListener('click', sendWorld)
     $('groupSend').addEventListener('click', sendGroup)
+    $('bugfixBtn').addEventListener('click', ensureBugfixGroup)
+    $('reportBugBtn').addEventListener('click', reportBug)
     $('discussBtn').addEventListener('click', startDiscussion)
     $('teaBtn').addEventListener('click', startTea)
     $('sparkBtn').addEventListener('click', startSpark)

@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.8.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.9.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 **English** | [简体中文](README.md)
@@ -94,6 +94,14 @@ The plugin does not take over the right sidebar. Click **"星桥"** at the botto
 - **Unified session reference resolution**: the `to` argument of `session_ask` / `session_nudge`, the `sessions` argument of `group_member`, panel add/remove, and world-task `@` mentions all accept full ids, ids without the `session-` prefix, contactIds, 6-character short ids, unique prefixes/suffixes, handles, and titles. Ambiguous input returns the candidates and an explicit error instead of silently picking one.
 - Group task dispatch messages now include the member directory (contactId + handle + title), and the group member list shows a click-to-copy contactId, so coordinators no longer have to guess short ids.
 - **Fix**: 6-character short ids (e.g. `4f51e9`) previously failed to resolve in `session_ask` because the old matcher only accepted full ids, `startsWith`, and titles; tasks had to be bounced back to the on-duty session. They now dispatch directly.
+
+### 9. Protection tiers and the bug-fix group (v2.9.1)
+
+- **Protection tiers**: `user (panel) > maintainer > group-manager > coordinator > member`. A maintainer (the session registered via `maintainer.set`, e.g. the on-duty "星桥值班员") is **protected/service** by default: it is excluded from automatic world-task routing, cannot be assigned as a `group.post` coordinator or member, and cannot be targeted as an ordinary task by `session_ask` / `session_nudge`. Dispatch attempts return an explicit error plus alternative paths instead of silently waking the maintainer.
+- **Visibility**: `state`, the board, and the directory (`session_directory`) expose `protected` / `service` / role, and group member lists show roles. The maintainer may stay in groups as an **observer**, but never receives ordinary tasks from them.
+- **Explicit user @ exception**: when the user explicitly @-mentions the maintainer in a world task or group message, the request is honoured as an exception with a visible notice — and the maintainer is never made coordinator/member of an auto-created group.
+- **Bug-fix group**: `bugfix.ensure` (also the "🛡️ 建修bug群" panel button and `session_board action=bugfix`) creates or reuses the "星桥 · 修bug" group in one click — the maintainer is the group manager and ordinary sessions join automatically. `bugfix.report` (the "🛡️ 报BUG" button) and `session_share kind=bug` deliver bug reports into that group and notify the maintainer; `bugfix.list` shows open/fixed reports (reusing board request status).
+- **Contract tests**: a new group G covers automatic-routing exclusion, `group.post` refusing/skipping the maintainer, `session_ask`/`session_nudge` refusals, the explicit-@ exception, bug-fix group create/reuse plus bug delivery, and member-list role tags.
 
 ## Install
 

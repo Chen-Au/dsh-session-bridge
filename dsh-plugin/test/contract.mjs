@@ -223,7 +223,7 @@ await check('session_share.parameters.required 是 ["title","text"]', () => {
 
 await check('session_share.kind/scope 用枚举约束', () => {
   const properties = toolByName.get('session_share').parameters.properties
-  assert.deepEqual(properties.kind.enum, ['note', 'handoff', 'lesson', 'decision', 'chat'])
+  assert.deepEqual(properties.kind.enum, ['note', 'handoff', 'lesson', 'decision', 'chat', 'bug'])
   assert.deepEqual(properties.scope.enum, ['workspace', 'global'])
 })
 
@@ -235,7 +235,8 @@ await check('session_board.action 用枚举约束', () => {
     'claim',
     'unclaim',
     'ack',
-    'status'
+    'status',
+    'bugfix'
   ])
 })
 
@@ -346,7 +347,7 @@ await check('查重生效（相同内容不重复发布）', async () => {
 
 await check('session_board status 报告版本与注册结果', async () => {
   const result = String(await board.execute({ action: 'status' }, { agent: rootAgent }))
-  assert.match(result, /session-bridge v2\.8\.1/)
+  assert.match(result, /session-bridge v2\.9\.1/)
   assert.match(result, /工具：session_share, session_ask, session_nudge, group_rule, session_like, session_discuss, session_identity, group_member, session_directory, group_skill, session_profile, session_board/)
   assert.match(result, /通讯录：3 个主会话/)
   assert.match(result, /contactId=aaaa0001/)
@@ -356,7 +357,7 @@ await check('session_board status 报告版本与注册结果', async () => {
 
 await check('子会话可只读查看经验板（list / status）', async () => {
   const status = String(await board.execute({ action: 'status' }, { agent: subAgent }))
-  assert.match(status, /session-bridge v2\.8\.1/)
+  assert.match(status, /session-bridge v2\.9\.1/)
   const listed = String(await board.execute({ action: 'list' }, { agent: subAgent }))
   assert.match(listed, /跨会话经验板/)
 })
@@ -451,7 +452,7 @@ await check('GET state 返回规则/群组/会话/送达结构', async () => {
   const { res, json } = await callState()
   assert.equal(res.out.status, 200)
   assert.equal(json.ok, true)
-  assert.equal(json.version, '2.8.1')
+  assert.equal(json.version, '2.9.1')
   assert.ok(Array.isArray(json.rules) && json.rules.length >= 1)
   assert.ok(Array.isArray(json.groups))
   assert.ok(Array.isArray(json.sessions) && json.sessions.length >= 2)
@@ -1060,7 +1061,7 @@ await check('面板命令：删除规矩与群组', async () => {
 
 await check('插件启动凭证写入正确（工具/注册/版本/API）', () => {
   const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))
-  assert.equal(receipt.version, '2.8.1')
+  assert.equal(receipt.version, '2.9.1')
   assert.deepEqual(receipt.tools.slice().sort(), ['group_member', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_like', 'session_nudge', 'session_profile', 'session_share'])
   assert.deepEqual(receipt.failedTools, [])
   assert.equal(receipt.registration.section, true)
@@ -1653,9 +1654,390 @@ await check('群任务派活消息带成员通讯录（避免组长再猜短 id�
   assert.match(message, /session_ask 的 to=contactId/)
 })
 
-// ---------------------------------------------------------------- 收尾
+// ---------------------------------------------------------------- G. 权限分级与修bug群（v2.9.1）
+// 用户反馈：群组长把普通实现任务派给维护者「星桥值班员」，维护者被普通任务占用、修 bug 被阻塞。
+// 期望：maintainer 默认 protected/service；普通世界路由 / group.post / session_ask / session_nudge
+// 都不派普通任务；用户显式 @ 是例外且要给提示；维护者可一键创建/复用「星桥 · 修bug」群收 bug 报告。
+console.log('== G. 权限分级与修bug群（v2.9.1）')
+const permDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-bridge-perms-'))
+const MAINTAINER = 'session-9a9a9a9a-0000-4000-8000-cccccccccccc'
+const NORMAL_A = 'session-1a1a1a1a-0000-4000-8000-aaaaaaaaaaaa'
+const NORMAL_B = 'session-2b2b2b2b-0000-4000-8000-bbbbbbbbbbbb'
+const permCaptured = { tools: [], sections: [], contexts: [], listeners: [], routes: [], followups: [] }
+const permAgent = (id) => ({
+  id,
+  status: 'idle',
+  session: { id, header: { cwd: CWD, createdAt: 1 } },
+  followup(message) {
+    permCaptured.followups.push({ sessionId: this.id, message })
+  }
+})
+const maintainerAgent = permAgent(MAINTAINER)
+const normalAgentA = permAgent(NORMAL_A)
+const normalAgentB = permAgent(NORMAL_B)
+const permAgents = [maintainerAgent, normalAgentA, normalAgentB]
+const permTitles = {
+  [MAINTAINER]: '星桥值班员',
+  [NORMAL_A]: '论文写作-第一篇',
+  [NORMAL_B]: '论文写作-第二篇'
+}
+const fakeSessionQueryPerm = {
+  async listSessions() {
+    return permAgents.map((agent) => ({ header: agent.session.header, live: true, persisted: true, formatStatus: 'current' }))
+  },
+  async readTitleSnapshots(ids) {
+    return ids.map((id) => ({
+      sessionId: id,
+      status: 'fulfilled',
+      value: { session: { id }, ...(permTitles[id] ? { title: { title: permTitles[id] } } : {}) }
+    }))
+  }
+}
+fs.writeFileSync(
+  path.join(permDir, 'identities.json'),
+  JSON.stringify(
+    {
+      sessions: {
+        [MAINTAINER]: { sessionId: MAINTAINER, handle: '值班员', avatar: '🛰️', role: '维护者' },
+        [NORMAL_A]: { sessionId: NORMAL_A, handle: '远山', avatar: '🦊' },
+        [NORMAL_B]: { sessionId: NORMAL_B, handle: '小北', avatar: '🐼' }
+      }
+    },
+    null,
+    2
+  ),
+  'utf8'
+)
+// 维护者注册（等价于面板 maintainer.set 的落盘结果）。
+fs.writeFileSync(
+  path.join(permDir, 'maintainer.json'),
+  JSON.stringify(
+    { sessionId: MAINTAINER, handle: '值班员', avatar: '🛰️', protected: true, service: true, protectionLevel: 'maintainer', updatedAt: 1 },
+    null,
+    2
+  ),
+  'utf8'
+)
+// 一个普通群：组长=远山；维护者保留观察成员位。
+fs.writeFileSync(
+  path.join(permDir, 'groups.json'),
+  JSON.stringify(
+    {
+      version: 1,
+      groups: [
+        {
+          id: 'g-normal',
+          name: '论文组',
+          kind: '',
+          workspace: CWD,
+          goal: '完成论文第 3 章',
+          managerSessionId: NORMAL_A,
+          sessionIds: [NORMAL_A, NORMAL_B, MAINTAINER],
+          createdAt: 0,
+          updatedAt: 0
+        }
+      ]
+    },
+    null,
+    2
+  ),
+  'utf8'
+)
+// 远山可以唤醒小北；维护者默认不在可唤醒名单里（保护规则应在授权检查之前生效）。
+fs.writeFileSync(
+  path.join(permDir, 'permissions.json'),
+  JSON.stringify({ grants: { [NORMAL_A]: [NORMAL_B], [NORMAL_B]: [NORMAL_A] } }, null, 2),
+  'utf8'
+)
+const fakeWebServerPerm = {
+  register(route) {
+    permCaptured.routes.push(route)
+    return () => {}
+  }
+}
+const ctxPerm = {
+  tools: {
+    register(definition) {
+      permCaptured.tools.push(definition)
+      return () => {}
+    }
+  },
+  systemPrompt: {
+    section(options) {
+      permCaptured.sections.push(options)
+      return () => {}
+    },
+    context(options) {
+      permCaptured.contexts.push(options)
+      return () => {}
+    }
+  },
+  agents: {
+    roots: () => permAgents,
+    list: () => permAgents,
+    get: (id) => permAgents.find((agent) => agent.id === id)
+  },
+  sessions: { list: () => permAgents.map((agent) => agent.session) },
+  get(name) {
+    if (name === 'sessionQuery') return fakeSessionQueryPerm
+    if (name === 'webServer') return fakeWebServerPerm
+    return undefined
+  },
+  effect(callback) {
+    const disposer = callback()
+    return typeof disposer === 'function' ? disposer : () => {}
+  },
+  on() {
+    return () => {}
+  },
+  logger: { info() {}, warn() {}, error() {} }
+}
+plugin.apply(ctxPerm, { boardDir: permDir, injectMode: 'broadcast', autoPrompt: false })
+const toolByNamePerm = new Map(permCaptured.tools.map((tool) => [tool.name, tool]))
+const routeHandlerPerm = (path) => permCaptured.routes.find((route) => route.path === path)?.handler
+const callStatePerm = async () => {
+  const res = fakeRes()
+  await routeHandlerPerm('/api/session-bridge/state')(fakeReq(), res)
+  return { res, json: JSON.parse(res.out.body) }
+}
+const callCommandPerm = async (command) => {
+  const res = fakeRes()
+  await routeHandlerPerm('/api/session-bridge/command')(
+    fakeReq({
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-session-bridge-action': '1' },
+      body: JSON.stringify(command)
+    }),
+    res
+  )
+  return { res, json: JSON.parse(res.out.body) }
+}
+const maintainerFollowups = () => permCaptured.followups.filter((item) => item.sessionId === MAINTAINER)
+
+await check('权限分级：通讯录/state 标记 protected/service 与角色', async () => {
+  const profileTool = toolByNamePerm.get('session_profile')
+  const updated = String(
+    await profileTool.execute(
+      { action: 'update', summary: 'ZQPROTECT 星桥维护者：负责修 bug、健康巡检与看板运维', direction: '维护/修bug/运维' },
+      { agent: maintainerAgent }
+    )
+  )
+  assert.match(updated, /已更新本会话申报/)
+  const state = await callStatePerm()
+  const maintainer = state.json.sessions.find((session) => session.id === MAINTAINER)
+  assert.ok(maintainer, 'state.sessions 应包含维护者')
+  assert.equal(maintainer.protected, true, '维护者应标记 protected')
+  assert.equal(maintainer.service, true, '维护者应标记 service')
+  assert.equal(maintainer.protectionLevel, 'maintainer')
+  assert.equal(maintainer.worldEligible, false, '维护者不应参与普通世界任务自动路由')
+  const managerA = state.json.sessions.find((session) => session.id === NORMAL_A)
+  assert.equal(managerA.protectionLevel, 'group-manager', '群管理应标记 group-manager')
+  assert.equal(managerA.protected, false)
+  assert.equal(state.json.maintainer.protected, true, 'state.maintainer 应标记 protected')
+  assert.equal(state.json.maintainer.protectionLevel, 'maintainer')
+  assert.equal(state.json.capabilities.bugfixGroup, true)
+  const dirTool = toolByNamePerm.get('session_directory')
+  const directory = String(await dirTool.execute({}, { agent: normalAgentA }))
+  assert.match(directory, /protected=yes/)
+  assert.match(directory, /service=yes/)
+  assert.match(directory, /角色=维护者（protected · service）/)
+  assert.match(directory, /worldEligible=no/)
+})
+
+await check('世界任务自动路由排除维护者（即使申报关键词命中）', async () => {
+  const preview = await callCommandPerm({
+    action: 'world.route',
+    payload: { text: 'ZQPROTECT 看下接口 500 报错，顺手把报告补一下' }
+  })
+  assert.equal(preview.json.ok, true, JSON.stringify(preview.json))
+  assert.notEqual(preview.json.decision.sessionId, MAINTAINER, '自动路由不得命中维护者')
+  assert.equal(preview.json.decision.route, 'new', '排除维护者后无匹配成员 → 应新建/待人工处理')
+})
+
+await check('用户显式 @ 维护者：例外放行 + 提示，且不建维护者组长群', async () => {
+  permCaptured.followups.length = 0
+  const res = await callCommandPerm({
+    action: 'world.post',
+    payload: { text: '@值班员 请看一下 ZQPROTECT 接口 500 的 bug，只在必要时修' }
+  })
+  assert.equal(res.json.ok, true, JSON.stringify(res.json))
+  assert.equal(res.json.router.engine, 'mentions')
+  assert.ok(res.json.assigned.some((item) => item.id === MAINTAINER), '显式 @ 应派给维护者')
+  assert.ok(res.json.protectedException.includes(MAINTAINER), '响应应标记保护例外')
+  assert.match(String(res.json.protectedNotice), /维护者/)
+  assert.match(String(res.json.protectedNotice), /修bug/)
+  assert.ok(!res.json.createdGroup, '维护者不应被自动建群当组长')
+  const followup = maintainerFollowups()[0]
+  assert.ok(followup, '应唤醒维护者')
+  const message = String(followup.message.content[0].text)
+  assert.match(message, /维护者例外/)
+  assert.match(message, /修bug/)
+})
+
+await check('group.post：维护者不能被指派为组长/成员（报错或跳过并提示）', async () => {
+  permCaptured.followups.length = 0
+  // 只 @ 维护者 + 普通任务 → 明确报错，不唤醒
+  const refused = await callCommandPerm({
+    action: 'group.post',
+    payload: { id: 'g-normal', text: '@值班员 请把接口重构实现一下', mentionSessionIds: [MAINTAINER] }
+  })
+  assert.equal(refused.json.ok, false, JSON.stringify(refused.json))
+  assert.match(String(refused.json.error), /protected\/service/)
+  assert.match(String(refused.json.error), /修bug/)
+  assert.equal(maintainerFollowups().length, 0, '报错时不得唤醒维护者')
+
+  // 维护者 + 普通成员一起 @ → 过滤维护者，任务照常派给普通成员
+  const mixed = await callCommandPerm({
+    action: 'group.post',
+    payload: {
+      id: 'g-normal',
+      text: '@值班员 @远山 @小北 请一起把接口重构实现一下',
+      mentionSessionIds: [MAINTAINER, NORMAL_A, NORMAL_B]
+    }
+  })
+  assert.equal(mixed.json.ok, true, JSON.stringify(mixed.json))
+  assert.ok(mixed.json.protectedSkipped.includes(MAINTAINER), '应报告被跳过的维护者')
+  assert.ok(mixed.json.task, '其余成员应照常建群任务')
+  assert.notEqual(mixed.json.task.coordinator.id, MAINTAINER)
+  assert.ok(!mixed.json.task.assignees.some((item) => item.id === MAINTAINER), '维护者不能当成员')
+  assert.equal(maintainerFollowups().length, 0, '维护者不应收到普通任务')
+
+  // @所有人 也要排除维护者
+  permCaptured.followups.length = 0
+  const all = await callCommandPerm({
+    action: 'group.post',
+    payload: { id: 'g-normal', text: '大家一起把接口重构实现一下', mentionAll: true }
+  })
+  assert.equal(all.json.ok, true, JSON.stringify(all.json))
+  assert.ok(all.json.protectedSkipped.includes(MAINTAINER))
+  assert.equal(maintainerFollowups().length, 0)
+})
+
+await check('session_ask / session_nudge：拒绝把维护者当普通任务/催收目标', async () => {
+  const askTool = toolByNamePerm.get('session_ask')
+  const nudgeTool = toolByNamePerm.get('session_nudge')
+  permCaptured.followups.length = 0
+  const askTask = String(
+    await askTool.execute({ group: '论文组', text: '请把接口重构实现完并交报告', to: '值班员', mode: 'task' }, { agent: normalAgentA })
+  )
+  assert.match(askTask, /protected\/service/)
+  assert.match(askTask, /修bug/)
+  assert.equal(maintainerFollowups().length, 0, 'session_ask 拒绝时不得唤醒维护者')
+  const askProbe = String(
+    await askTool.execute({ group: '论文组', text: '现在进度如何？', to: '值班员' }, { agent: normalAgentA })
+  )
+  assert.match(askProbe, /不接普通任务/)
+  assert.equal(maintainerFollowups().length, 0)
+  const nudge = String(
+    await nudgeTool.execute({ group: '论文组', to: '值班员', text: '催一下进度' }, { agent: normalAgentA })
+  )
+  assert.match(nudge, /protected\/service/)
+  assert.equal(maintainerFollowups().length, 0)
+})
+
+await check('bugfix.ensure：一键创建/复用「星桥 · 修bug」群，维护者为群管理', async () => {
+  const created = await callCommandPerm({ action: 'bugfix.ensure', payload: {} })
+  assert.equal(created.json.ok, true, JSON.stringify(created.json))
+  assert.equal(created.json.created, true)
+  assert.equal(created.json.name, '星桥 · 修bug')
+  assert.equal(created.json.managerSessionId, MAINTAINER)
+  const groupId = created.json.groupId
+  let state = await callStatePerm()
+  const bugfixGroup = state.json.groups.find((group) => group.id === groupId)
+  assert.ok(bugfixGroup, 'state.groups 应包含修bug群')
+  assert.equal(bugfixGroup.kind, 'bugfix')
+  assert.equal(bugfixGroup.managerSessionId, MAINTAINER, '维护者应为群管理')
+  assert.ok(bugfixGroup.sessionIds.includes(MAINTAINER))
+  assert.ok(bugfixGroup.sessionIds.includes(NORMAL_A) && bugfixGroup.sessionIds.includes(NORMAL_B), '普通成员应入群')
+  assert.equal(state.json.bugfix.exists, true)
+  assert.equal(state.json.bugfix.groupId, groupId)
+
+  // 复用：不重复建群
+  const reused = await callCommandPerm({ action: 'bugfix.ensure', payload: {} })
+  assert.equal(reused.json.ok, true, JSON.stringify(reused.json))
+  assert.equal(reused.json.created, false)
+  assert.equal(reused.json.reused, true)
+  assert.equal(reused.json.groupId, groupId)
+  state = await callStatePerm()
+  assert.equal(state.json.groups.filter((group) => group.kind === 'bugfix').length, 1, '修bug群只能有一个')
+
+  // 维护者也可以用自己的工具 action 创建/复用
+  const boardTool = toolByNamePerm.get('session_board')
+  const viaTool = String(await boardTool.execute({ action: 'bugfix' }, { agent: maintainerAgent }))
+  assert.match(viaTool, /复用|创建/)
+  assert.match(viaTool, /修bug群/)
+})
+
+await check('bug 报告进群：group.post / session_ask / session_share(kind=bug) 都能投递到维护者', async () => {
+  let state = await callStatePerm()
+  const bugfixGroup = state.json.groups.find((group) => group.kind === 'bugfix')
+  assert.ok(bugfixGroup, '缺少修bug群')
+
+  // 1) 修bug群里 @维护者 的 bug 报告 → 按 BUG 投递（不是普通任务）
+  permCaptured.followups.length = 0
+  const posted = await callCommandPerm({
+    action: 'group.post',
+    payload: { id: bugfixGroup.id, text: 'BUG：登录按钮点了没反应，控制台报 500', mentionSessionIds: [MAINTAINER] }
+  })
+  assert.equal(posted.json.ok, true, JSON.stringify(posted.json))
+  assert.equal(posted.json.bugfix, true)
+  const bugFollowup = maintainerFollowups()[0]
+  assert.ok(bugFollowup, '应唤醒维护者处理 bug')
+  const bugMessage = String(bugFollowup.message.content[0].text)
+  assert.match(bugMessage, /BUG 报告/)
+  assert.match(bugMessage, /不是普通任务派活/)
+
+  // 2) 修bug群里 session_ask（探测/投递）→ 允许，按 BUG 处理
+  permCaptured.followups.length = 0
+  const askTool = toolByNamePerm.get('session_ask')
+  const askOut = String(
+    await askTool.execute(
+      { group: '星桥 · 修bug', text: 'BUG：保存按钮再次报错，麻烦看一下', to: '值班员' },
+      { agent: normalAgentA }
+    )
+  )
+  assert.match(askOut, /BUG 报告|投递/)
+  assert.equal(maintainerFollowups().length, 1, '修bug群里应唤醒维护者收 bug')
+
+  // 3) session_share kind=bug → 自动进修bug群 + 通知维护者
+  permCaptured.followups.length = 0
+  const shareTool = toolByNamePerm.get('session_share')
+  const shareOut = String(
+    await shareTool.execute(
+      { title: '保存按钮报错', text: '保存按钮点击后抛出 JavaScript 异常，偶发', kind: 'bug' },
+      { agent: normalAgentB }
+    )
+  )
+  assert.match(shareOut, /BUG/)
+  assert.match(shareOut, /星桥 · 修bug/)
+  assert.equal(maintainerFollowups().length, 1, 'kind=bug 应通知维护者')
+  state = await callStatePerm()
+  const bugEntry = state.json.rules.find(
+    (entry) => entry.kind === 'bug' && entry.groupId === bugfixGroup.id && entry.title === '保存按钮报错'
+  )
+  assert.ok(bugEntry, 'BUG 条目应落在修bug群')
+
+  // 4) bugfix.list 能看到开放的 bug 报告
+  const listed = await callCommandPerm({ action: 'bugfix.list', payload: {} })
+  assert.equal(listed.json.ok, true)
+  assert.ok(listed.json.reports.length >= 2, 'bugfix.list 应列出 bug 报告')
+  assert.ok(listed.json.reports.some((report) => report.status === 'open'))
+})
+
+await check('维护者保留群观察位，成员列表显示保护角色', async () => {
+  const state = await callStatePerm()
+  const normalGroup = state.json.groups.find((group) => group.id === 'g-normal')
+  assert.ok(normalGroup.sessionIds.includes(MAINTAINER), '维护者保留普通群观察成员位')
+  const memberTool = toolByNamePerm.get('group_member')
+  const listText = String(await memberTool.execute({ action: 'list', group: '论文组' }, { agent: normalAgentA }))
+  assert.match(listText, /角色=维护者（保护\/服务，仅观察，不接普通任务）/)
+  assert.match(listText, /角色=群管理/)
+  assert.match(listText, /角色=成员/)
+})
+
 fs.rmSync(targetedDir, { recursive: true, force: true })
 fs.rmSync(contactDir, { recursive: true, force: true })
+fs.rmSync(permDir, { recursive: true, force: true })
 fs.rmSync(boardDir, { recursive: true, force: true })
 console.log('')
 if (failures.length) {

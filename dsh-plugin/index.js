@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.8.1'
+const VERSION = '2.9.1'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -107,8 +107,33 @@ const DEFAULT_CONFIG = {
   askOnCreate: true
 }
 
-const KIND_CN = { note: '经验', handoff: '交接', lesson: '教训', decision: '约定', request: '请求', command: '命令', task: '任务', chat: '交流' }
+const KIND_CN = { note: '经验', handoff: '交接', lesson: '教训', decision: '约定', request: '请求', command: '命令', task: '任务', chat: '交流', bug: 'BUG' }
 const KIND_SET = new Set(Object.keys(KIND_CN))
+
+// ------------------------------------------------------------------ 权限分级（v2.9.1）
+// 会话保护级别（从高到低）：user（右侧栏面板/用户本人）> maintainer（维护者）>
+// group-manager（群管理）> coordinator（群任务组长）> member（普通成员）。
+// 维护者默认 protected/service：不接普通世界任务、不接 group.post 派活、不能被
+// session_ask/session_nudge 当普通任务目标；只有用户显式 @ 或投递到「修bug群」才是例外。
+const PROTECTION_LEVELS = ['user', 'maintainer', 'group-manager', 'coordinator', 'member']
+const PROTECTION_RANK = { user: 50, maintainer: 40, 'group-manager': 30, coordinator: 20, member: 10 }
+const PROTECTION_LABEL = {
+  user: '用户/面板',
+  maintainer: '维护者（protected · service）',
+  'group-manager': '群管理',
+  coordinator: '组长',
+  member: '成员'
+}
+const BUGFIX_GROUP_NAME = '星桥 · 修bug'
+const BUGFIX_GROUP_KIND = 'bugfix'
+/** 普通派活被拒时给的标准替代路径（世界任务/group.post/session_ask 共用）。 */
+const PROTECTED_TASK_ALTERNATIVES = [
+  '维护者默认 protected/service，不接普通实现任务/普通派活（本次未唤醒它）。',
+  '替代路径：',
+  '1) 修 bug：用 session_share（kind=bug、group=星桥 · 修bug、files=…）或右侧栏「修bug群」按钮/命令 bugfix.ensure 投递，bug 报告会进入「星桥 · 修bug」群；',
+  '2) 普通任务：派给普通成员（session_ask 的 to=contactId），或由用户在世界任务里直接显式 @ 维护者（例外，会提示）；',
+  '3) 维护者可以留在群里观察，但不会再接该群的普通任务。'
+].join('\n')
 
 const INSTRUCTIONS = `## 跨会话经验桥（session-bridge，插件自动生效）
 你与同一工作区/群组的其他 DSH 会话通过「经验桥」协作。默认**按需注入**：只有「发给你的群内请求」「对你请求的回复」或「未申报时的一行提醒」会进入你的运行上下文；别人的规矩/交接不会被无条件注入（需要时用 \`session_profile action=directory\` 或 \`session_board action=list\` 查看，省 token）。
@@ -131,6 +156,8 @@ const INSTRUCTIONS = `## 跨会话经验桥（session-bridge，插件自动生�
 **群任务角色（防止人人都是组长）**：用户在群里 @ 多人发布任务时，宿主会指定唯一组长并把任务拆成两步：组长先分工、收集成员结果、最后向用户提交唯一汇总；成员只做自己那部分，用 replyTo 交给组长，不要直接向用户汇报、不要自称组长。任务创建时只唤醒组长，成员只有被组长派活时才会被唤醒一次。
 
 **催收/提醒用插话**：催进度、提醒还差什么，不要用 session_ask（会让对方多开一轮回复）；用 session_nudge（group=群名、to=成员、text=提醒内容），它只在对方下一次处理时注入一次，不唤醒。若用 session_ask 但对方已经提交过，宿主会自动改成插话，不会重复唤醒。
+
+**维护者保护（v2.9.1）**：维护者（maintainer，如「星桥值班员」）是 **protected/service** 会话，优先保证随时能修 bug：不要把它当普通成员派活——世界任务的自动路由、group.post 指派组长/成员、session_ask/session_nudge 都会拒绝并给出替代路径（不要绕过）。只有用户在正文里显式 @ 维护者才算例外（宿主会提示）。要报 bug 时用 \`session_share\` 的 \`kind=bug\`（会自动投递到「星桥 · 修bug」群并通知维护者），或用 \`session_board action=bugfix\` / 面板「修bug群」按钮一键创建或复用该群；普通任务请派给普通成员。
 
 **群规矩由群管理梳理**：聊天记录/交接/催收只是过程，不是“规矩”。群管理（AI）负责每轮结束后用 group_rule set 沉淀少量可复用结论（口径/做法/禁忌，最多 3 条）；其他会话不要把每条交接/请求直接当规矩发布。需要查看群规矩时用 group_rule action=list group=群名。
 
@@ -436,6 +463,8 @@ function createGroupStore(dir) {
     return {
       id,
       name,
+      // v2.9.1：群类型（'' 普通群 / 'bugfix' 修bug群）。维护者在该群里是群管理，但只收 bug 报告。
+      kind: typeof group.kind === 'string' ? group.kind.trim().slice(0, 24) : '',
       workspace: typeof group.workspace === 'string' ? group.workspace : '',
       goal: typeof group.goal === 'string' ? group.goal.trim().slice(0, 300) : '',
       managerSessionId: typeof group.managerSessionId === 'string' ? group.managerSessionId : '',
@@ -1293,6 +1322,78 @@ export function apply(ctx, config = {}) {
   const activityStore = createActivityStore(boardDir)
   const relationStore = createRelationStore(boardDir)
   const maintainerStore = createMaintainerStore(boardDir)
+  // ---------------------------------------------------------------- 权限分级（v2.9.1）
+  // 维护者（maintainerStore 注册的会话）默认 protected/service：优先级最高，不接普通任务。
+  const isMaintainerSession = (sessionId) => {
+    const wanted = String(sessionId || '').trim()
+    return Boolean(wanted) && maintainerStore.get() === wanted
+  }
+  const groupManagerIdsOf = (groups) =>
+    new Set((Array.isArray(groups) ? groups : []).map((group) => group && group.managerSessionId).filter(Boolean))
+  const activeCoordinatorIdsOf = () => {
+    try {
+      return new Set(
+        store
+          .readActive()
+          .filter((entry) => entry.kind === 'task' && entry.coordinator && (entry.taskStatus || 'assigned') !== 'done')
+          .map((entry) => entry.coordinator)
+      )
+    } catch {
+      return new Set()
+    }
+  }
+  /** 计算某个会话的保护级别（user/panel 不经过这里，直接视为最高级）。 */
+  const protectionLevelOf = (sessionId, context = {}) => {
+    if (!sessionId || sessionId === 'panel') return 'user'
+    if (isMaintainerSession(sessionId)) return 'maintainer'
+    const managerIds = context.managerIds instanceof Set ? context.managerIds : groupManagerIdsOf(groupStore.read())
+    if (managerIds.has(sessionId)) return 'group-manager'
+    const coordinatorIds = context.coordinatorIds instanceof Set ? context.coordinatorIds : activeCoordinatorIdsOf()
+    if (coordinatorIds.has(sessionId)) return 'coordinator'
+    return 'member'
+  }
+  const protectionOf = (sessionId, context = {}) => {
+    const level = protectionLevelOf(sessionId, context)
+    const protectedSession = level === 'maintainer'
+    return {
+      level,
+      rank: PROTECTION_RANK[level] || 0,
+      protected: protectedSession,
+      service: protectedSession,
+      label: PROTECTION_LABEL[level] || PROTECTION_LABEL.member
+    }
+  }
+  const protectedSessionIdsNow = () => {
+    const maintainerId = maintainerStore.get()
+    return maintainerId ? [maintainerId] : []
+  }
+  const bugfixGroupOf = (groups) => {
+    const list = Array.isArray(groups) ? groups : groupStore.read()
+    return (
+      list.find((group) => group && group.kind === BUGFIX_GROUP_KIND) ||
+      list.find((group) => group && /修\s*bug/i.test(String(group.name || ''))) ||
+      null
+    )
+  }
+  const isBugfixGroup = (group) => Boolean(group) && (group.kind === BUGFIX_GROUP_KIND || /修\s*bug/i.test(String(group.name || '')))
+  /** 判断正文是否像「派活/普通任务」而不是闲聊/探测。 */
+  const textLooksLikeWork = (text) => {
+    const source = String(text || '')
+    return (
+      /(请|需要|麻烦|帮忙)[^。\n]{0,16}(做|执行|核验|检查|复查|复核|重跑|重编|重绘|重新|修改|改|补|落实|审阅|审核|交付|提交|生成|排查|修复|跑|门禁|验收|复验|验证|确认|处理|整理|画|打包|实现|开发)/i.test(
+        source
+      ) ||
+      /(最后一轮|最后一版|最后一遍|门禁|验收|复核|修改项|落实|交付|重跑|重编|补图|改稿|修图|实现一下|开发一下)/i.test(source)
+    )
+  }
+  /** 判断正文是否像 bug 报告（修bug群里的普通消息按 bug 报告处理）。 */
+  const textLooksLikeBugReport = (text) =>
+    /(bug|BUG|Bug|报错|异常|崩溃|闪退|卡死|卡住|无响应|不能用|没反应|坏了|故障|错误|失败|修复|修一下|修下|修好|问题|缺陷|白屏|黑屏|报障|error|fail|crash|broken)/i.test(
+      String(text || '')
+    )
+  const protectedRefusalText = (targetLabel, extraLines = []) =>
+    [`维护者「${targetLabel}」是 protected/service 会话，不接普通任务/普通派活。`, ...extraLines, '', PROTECTED_TASK_ALTERNATIVES].join('\n')
+
   const sanitizeHandle = (value) =>
     String(value || '')
       .replace(/[^\p{L}\p{N}_-]/gu, '')
@@ -1750,6 +1851,9 @@ export function apply(ctx, config = {}) {
       if (group.managerSessionId) managerIds.add(group.managerSessionId)
     }
     const maintainerId = maintainerStore.get()
+    // 保护级别需要「群管理 + 未完成任务的组长」两个上下文：一次读盘，循环里复用。
+    const coordinatorIdsNow = activeCoordinatorIdsOf()
+    const protectionOfRecord = (sessionId) => protectionOf(sessionId, { managerIds, coordinatorIds: coordinatorIdsNow })
     return records
       .map((record) => {
         const hit = titleCache.get(record.id)
@@ -1775,6 +1879,14 @@ export function apply(ctx, config = {}) {
         }
         const repNow = reputationOf(record.id)
         const identity = identityOf(record.id, title)
+        const protection = protectionOfRecord(record.id)
+        const worldEligible =
+          !internal &&
+          !protection.protected &&
+          repNow.closed !== true &&
+          (Boolean(profilesNow[record.id] && profilesNow[record.id].summary) ||
+            groupMemberIds.has(record.id) ||
+            record.id === maintainerId)
         return {
           id: record.id,
           contactId: contactIdOf(record.id),
@@ -1797,12 +1909,15 @@ export function apply(ctx, config = {}) {
           failures: repNow.failures,
           closed: repNow.closed === true,
           hasProfile: Boolean(profilesNow[record.id] && profilesNow[record.id].summary),
-          worldEligible:
-            !internal &&
-            repNow.closed !== true &&
-            (Boolean(profilesNow[record.id] && profilesNow[record.id].summary) ||
-              groupMemberIds.has(record.id) ||
-              record.id === maintainerId),
+          // v2.9.1 权限分级：protected/service 标记（维护者不参与自动路由）。
+          protectionLevel: protection.level,
+          protectionRank: protection.rank,
+          protectionLabel: protection.label,
+          protected: protection.protected,
+          service: protection.service,
+          worldEligible,
+          // 用户显式 @ 仍可点名维护者（例外，宿主会给提示），所以单独给一个可解析标记。
+          mentionEligible: !internal && (worldEligible || protection.protected),
           isLead: true
         }
       })
@@ -1988,6 +2103,33 @@ export function apply(ctx, config = {}) {
     }
     const maintainerId = maintainerStore.get()
     const maintainerIdentity = maintainerId ? identityOf(maintainerId, identityTitleOf(maintainerId)) : null
+    // v2.9.1：面板标记 + 修bug群状态（右侧栏/星桥窗口的按钮靠它显示「已创建/可创建」）。
+    const bugfixGroup = bugfixGroupOf(groupStore.read())
+    const bugfixOpenReports = bugfixGroup
+      ? store
+          .readActive()
+          .filter((entry) => entry.groupId === bugfixGroup.id && entry.kind === 'request' && entry.status !== 'answered')
+          .length
+      : 0
+    const bugfixInfo = {
+      available: Boolean(maintainerId),
+      exists: Boolean(bugfixGroup),
+      groupId: bugfixGroup ? bugfixGroup.id : '',
+      name: bugfixGroup ? bugfixGroup.name : BUGFIX_GROUP_NAME,
+      managerSessionId: bugfixGroup ? bugfixGroup.managerSessionId || '' : maintainerId || '',
+      memberCount: bugfixGroup ? (bugfixGroup.sessionIds || []).length : 0,
+      openReports: bugfixOpenReports
+    }
+    const maintainerInfo = maintainerId
+      ? {
+          sessionId: maintainerId,
+          ...maintainerIdentity,
+          protectionLevel: 'maintainer',
+          protectionLabel: PROTECTION_LABEL.maintainer,
+          protected: true,
+          service: true
+        }
+      : null
     const rawDeliveries = deliveryStore.snapshot()
     const deliveries = {}
     for (const [ruleId, items] of Object.entries(rawDeliveries)) {
@@ -2008,7 +2150,8 @@ export function apply(ctx, config = {}) {
       reputation,
       activity,
       relations,
-      maintainer: maintainerId ? { sessionId: maintainerId, ...maintainerIdentity } : null,
+      maintainer: maintainerInfo,
+      bugfix: bugfixInfo,
       health,
       skills: skillStore.list(),
       profiles,
@@ -2017,7 +2160,10 @@ export function apply(ctx, config = {}) {
       permissions: readPermissionsOf(boardDir).grants,
       capabilities: {
         createSession: Boolean(ctx.agents && typeof ctx.agents.create === 'function'),
-        wakeSessions: Boolean(createUserMessage)
+        wakeSessions: Boolean(createUserMessage),
+        // v2.9.1：修bug群一键创建/复用（需要已注册维护者）。
+        bugfixGroup: Boolean(maintainerId),
+        protectionLevels: PROTECTION_LEVELS.slice()
       },
       config: currentSettingsSnapshot(),
       deliveries,
@@ -2839,6 +2985,183 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  // ---------------------------------------------------------------- 修bug群（v2.9.1）
+  // 维护者的专用任务池：普通成员把 BUG 报告投递到该群，维护者是群管理但只处理 bug；
+  // 该群不参与普通任务派活（group.post 里维护者仍会被保护规则排除）。
+  const nextBugfixGroupName = (groups) => {
+    const list = Array.isArray(groups) ? groups : []
+    if (!list.some((group) => group && group.name === BUGFIX_GROUP_NAME)) return BUGFIX_GROUP_NAME
+    let suffix = 2
+    while (list.some((group) => group && group.name === `${BUGFIX_GROUP_NAME} ${suffix}`)) suffix += 1
+    return `${BUGFIX_GROUP_NAME} ${suffix}`
+  }
+  const ensureBugfixGroup = async (options = {}) => {
+    const maintainerId = maintainerStore.get()
+    if (!maintainerId) {
+      return {
+        ok: false,
+        error: '尚未注册维护者会话：请先在星桥面板执行 maintainer.set（注册「星桥值班员」），再创建修bug群。'
+      }
+    }
+    const sessions = await buildSessionIndex()
+    const maintainer = sessions.find((session) => session.id === maintainerId)
+    const groups = groupStore.read()
+    const existing = bugfixGroupOf(groups)
+    const normalIds = sessions
+      .filter((session) => session.id !== maintainerId && !session.protected && !session.internal && session.closed !== true)
+      .map((session) => session.id)
+    const now = Date.now()
+    let group = existing
+    let created = false
+    let addedMembers = []
+    if (!group) {
+      group = {
+        id: 'g-' + now.toString(36) + '-' + randomBytes(3).toString('hex'),
+        name: nextBugfixGroupName(groups),
+        kind: BUGFIX_GROUP_KIND,
+        workspace: (maintainer && maintainer.cwd) || defaultWorkspaceForRule(),
+        goal: '维护者的修 bug 专用任务池：普通成员把 BUG 报告投递到本群（session_share kind=bug / 群聊 / 面板「报bug」），维护者集中处理；本群不派普通实现任务。',
+        managerSessionId: maintainerId,
+        sessionIds: [...new Set([maintainerId, ...normalIds])],
+        createdAt: now,
+        updatedAt: now
+      }
+      groups.push(group)
+      groupStore.write(groups)
+      created = true
+    } else {
+      const before = new Set(group.sessionIds)
+      const nextIds = [...group.sessionIds]
+      for (const sessionId of [maintainerId, ...normalIds]) if (!nextIds.includes(sessionId)) nextIds.push(sessionId)
+      group.managerSessionId = maintainerId
+      group.kind = BUGFIX_GROUP_KIND
+      group.sessionIds = nextIds
+      group.updatedAt = now
+      groupStore.write(groups)
+      addedMembers = nextIds.filter((sessionId) => !before.has(sessionId))
+    }
+    // 授权：维护者可以唤醒全体成员（跟进 bug）；普通成员也可以在修bug群里投递 bug 给维护者。
+    try {
+      const permissions = readPermissionsOf(boardDir)
+      const maintainerGrants = new Set(permissions.grants[maintainerId] || [])
+      for (const session of sessions) if (session.id !== maintainerId) maintainerGrants.add(session.id)
+      permissions.grants[maintainerId] = [...maintainerGrants]
+      for (const sessionId of normalIds) {
+        const grants = new Set(permissions.grants[sessionId] || [])
+        grants.add(maintainerId)
+        permissions.grants[sessionId] = [...grants]
+      }
+      writePermissionsOf(boardDir, permissions)
+    } catch {
+      /* 授权失败不阻塞建群 */
+    }
+    if (created) {
+      try {
+        addEntry(
+          {
+            title: '修bug群已就绪：' + group.name,
+            text:
+              '该群是维护者的修 bug 任务池：普通成员把 BUG 报告投递到这里（session_share kind=bug / 直接群聊 / 面板「报bug」），维护者集中处理。' +
+              '普通实现任务仍按常规派给普通成员，本群不接普通任务。',
+            kind: 'chat',
+            groupId: group.id,
+            author: 'panel',
+            origin: 'panel',
+            mentions: [maintainerId],
+            tags: '@系统',
+            skipDedupe: true
+          },
+          'panel'
+        )
+      } catch {
+        /* ignore */
+      }
+    }
+    let woken = false
+    if (created || options.kickoff === true) {
+      const intro = [
+        '【星桥 · 修bug群已就绪】你是该群的群管理（维护者，protected/service）。',
+        '职责：只处理投递到本群的 BUG 报告（按严重度排序先修最影响使用的）；修完用 session_share（kind=handoff、group=' + group.name + '、files=…）回执，必要时用 session_ask mode=task 找有权限的成员协作。',
+        '保护规则：本群和其他群都不会再把普通实现任务派给你；普通任务由普通成员承担。',
+        created ? '' : '（本次为复用现有修bug群，成员已同步。）'
+      ]
+        .filter(Boolean)
+        .join('\n')
+      await ensureSessionLive(maintainerId)
+      woken = wakeSession(maintainerId, intro, {}).ok
+    }
+    const openReports = store
+      .readActive()
+      .filter((entry) => entry.groupId === group.id && entry.kind === 'request' && entry.status !== 'answered').length
+    logger.info(
+      `修bug群${created ? '已创建' : '已复用'}「${group.name}」：成员 ${group.sessionIds.length} 人，维护者=${shortSid(maintainerId)}，待处理 bug ${openReports}`
+    )
+    return {
+      ok: true,
+      created,
+      reused: !created,
+      groupId: group.id,
+      name: group.name,
+      kind: BUGFIX_GROUP_KIND,
+      managerSessionId: maintainerId,
+      memberCount: group.sessionIds.length,
+      addedMembers,
+      openReports,
+      woken
+    }
+  }
+  /** 把一条 BUG 报告投递到修bug群并把维护者叫起来（用户/普通成员/工具共用）。 */
+  const reportBugToMaintainer = async (input = {}) => {
+    const maintainerId = maintainerStore.get()
+    if (!maintainerId) return { ok: false, error: '尚未注册维护者会话（maintainer.set），无法投递 bug。' }
+    const ensured = await ensureBugfixGroup({})
+    if (!ensured.ok) return ensured
+    const group = groupStore.read().find((item) => item.id === ensured.groupId)
+    const titleRaw = String((input && input.title) || '').trim()
+    const text = String((input && input.text) || '').trim().slice(0, 2000)
+    if (!text) return { ok: false, error: 'bug 描述不能为空。' }
+    const files = normalizeFilesOf(input && input.files)
+    const title = 'BUG：' + (titleRaw || truncate(text, 24)).slice(0, 40)
+    const entry = addEntry(
+      {
+        title,
+        text,
+        kind: 'request',
+        groupId: group ? group.id : '',
+        workspace: (input && input.workspace) || '',
+        author: (input && input.author) || 'panel',
+        requestTo: [maintainerId],
+        mentions: [maintainerId],
+        files,
+        tags: '@bug',
+        skipDedupe: true
+      },
+      (input && input.origin) || 'panel'
+    )
+    if (!entry.ok) return { ok: false, error: entry.reason || 'bug 报告写入看板失败' }
+    const message = [
+      '【BUG 报告 · 来自修bug群' + (group ? '「' + group.name + '」' : '') + '】',
+      title,
+      '',
+      text,
+      ...(files.length ? ['文件：' + files.join('、')] : []),
+      '',
+      '请按影响面排序处理；修好后用 session_share（kind=handoff、group=' + (group ? group.name : BUGFIX_GROUP_NAME) + '、replyTo=' + entry.entry.id + '、files=…）回执。',
+      '（这是 bug 投递，不是普通任务派活；维护者默认 protected/service。）'
+    ].join('\n')
+    await ensureSessionLive(maintainerId)
+    const woken = wakeSession(maintainerId, message, { requestId: entry.entry.id }).ok
+    logger.info(`BUG 报告已投递到修bug群：${entry.entry.id}，唤醒维护者=${woken}`)
+    return {
+      ok: true,
+      groupId: group ? group.id : '',
+      groupName: group ? group.name : BUGFIX_GROUP_NAME,
+      reportId: entry.entry.id,
+      title,
+      woken
+    }
+  }
+
   // ---------------------------------------------------------------- 世界聊天：按申报匹配成员
   const scoreProfileForText = (text, profile) => {
     const tokens = titleTokensOf(text)
@@ -2862,6 +3185,8 @@ export function apply(ctx, config = {}) {
       if (!profile || !profile.summary || profile.declined) continue
       const session = byId.get(sessionId)
       if (!session) continue
+      // v2.9.1：维护者（protected/service）不参与普通世界任务的自动路由。
+      if (session.protected === true || isMaintainerSession(sessionId)) continue
       const score = scoreProfileForText(text, profile)
       if (score > 0) {
         const repNow = reputationOf(sessionId)
@@ -3081,6 +3406,8 @@ export function apply(ctx, config = {}) {
     for (const [sessionId, profile] of Object.entries(profiles)) {
       if (!profile || !profile.summary || profile.declined) continue
       if (!titleById.has(sessionId)) continue
+      // v2.9.1：维护者默认 protected/service，普通自动路由一律排除（用户显式 @ 才例外）。
+      if (isMaintainerSession(sessionId)) continue
       const repNow = reputationOf(sessionId)
       candidates.push({
         sessionId,
@@ -3298,6 +3625,7 @@ export function apply(ctx, config = {}) {
     description:
       '把一条「通用注意事项 / 经验教训 / 任务交接」发布到跨会话经验板，同一工作区（scope=global 时所有工作区）的其他 DSH 会话会在下一轮自动看到。' +
       '当用户在对话里说出适用于整个项目的通用规则（「以后都…」「统一…」「所有…都要…」「注意…」「不要…」），或要求把任务交给别的会话时，必须立即调用本工具，无需用户明确要求、也不要反问。' +
+      'kind=bug 是给维护者报 bug 的专用通道：会自动投递到「星桥 · 修bug」群并通知维护者（维护者 protected/service，不接普通任务）。' +
       '只发布通用、可独立理解的内容（标题≤20字，正文≤400字）；一次性细节、隐私、密钥不要发布。',
     parameters: {
       type: 'object',
@@ -3306,8 +3634,9 @@ export function apply(ctx, config = {}) {
         text: { type: 'string', description: '可独立理解的规则/事实/交接内容，≤400 字' },
         kind: {
           type: 'string',
-          enum: ['note', 'handoff', 'lesson', 'decision', 'chat'],
-          description: 'note（通用经验，默认）/ handoff（任务交接）/ lesson（踩坑教训）/ decision（口径与约定）'
+          enum: ['note', 'handoff', 'lesson', 'decision', 'chat', 'bug'],
+          description:
+            'note（通用经验，默认）/ handoff（任务交接）/ lesson（踩坑教训）/ decision（口径与约定）/ bug（给维护者报 bug：自动进「星桥 · 修bug」群并通知维护者）'
         },
         scope: {
           type: 'string',
@@ -3340,7 +3669,21 @@ export function apply(ctx, config = {}) {
       const kind = KIND_SET.has(args && args.kind) ? args.kind : 'note'
       const scope = args && args.scope === 'global' ? 'global' : cfg.scope === 'global' ? 'global' : 'workspace'
       const groupRef = args && typeof args.group === 'string' ? args.group.trim() : ''
-      const group = groupRef ? groupStore.find(groupRef, info.cwd) : null
+      let group = groupRef ? groupStore.find(groupRef, info.cwd) : null
+      // v2.9.1：kind=bug 是给维护者的专用投递通道 → 强制落到「星桥 · 修bug」群（没有就自动建/复用）。
+      let bugRedirectFrom = ''
+      let bugfixGroupNameNow = ''
+      if (kind === 'bug') {
+        const ensuredBugfix = await ensureBugfixGroup({})
+        if (ensuredBugfix.ok) {
+          bugfixGroupNameNow = ensuredBugfix.name
+          const bugfixGroupNow = groupStore.read().find((item) => item.id === ensuredBugfix.groupId)
+          if (bugfixGroupNow) {
+            if (group && group.id !== bugfixGroupNow.id) bugRedirectFrom = group.name
+            group = bugfixGroupNow
+          }
+        }
+      }
       const replyRef = args && typeof args.replyTo === 'string' ? args.replyTo.trim() : ''
       const replyRequest = replyRef ? findRequestEntry(replyRef) : null
       const replyGroup = replyRequest && replyRequest.groupId
@@ -3408,6 +3751,28 @@ export function apply(ctx, config = {}) {
           ].join('\n')
         }
         return `发布失败：${result.reason}`
+      }
+      // v2.9.1：kind=bug → 通知维护者处理（维护者 protected/service，不当作普通任务）。
+      let bugNote = ''
+      if (kind === 'bug') {
+        const maintainerIdNow = maintainerStore.get()
+        if (maintainerIdNow) {
+          const bugFiles = normalizeFilesOf(args && args.files)
+          const message = [
+            '【BUG 报告' + (result.group ? ' · 修bug群「' + result.group.name + '」' : '') + '】',
+            String((args && args.title) || truncate(String((args && args.text) || ''), 24)),
+            '',
+            String((args && args.text) || ''),
+            ...(bugFiles.length ? ['文件：' + bugFiles.join('、')] : []),
+            '',
+            `请按影响面处理；修好后用 session_share（kind=handoff、group=${result.group ? result.group.name : BUGFIX_GROUP_NAME}、replyTo=${result.entry.id}、files=…）回执。`,
+            `（来自会话 ${shortSid(info.id)}；这是 bug 投递，不是普通任务派活。）`
+          ].join('\n')
+          const wakeOutcome = wakeSession(maintainerIdNow, message, { requestId: result.entry.id })
+          bugNote = wakeOutcome.ok
+            ? ' 已通知维护者（protected/service）处理。'
+            : ' 维护者当前不在线，下次运行会看到这条 BUG 报告。'
+        }
       }
       const liveOthers = liveRootSessions().filter((item) => item.id && item.id !== info.id)
       const others = result.group
@@ -3671,6 +4036,8 @@ export function apply(ctx, config = {}) {
         `已发布到跨会话经验板：[${KIND_CN[result.entry.kind]}/${scopeText}] ${result.entry.title}`,
         `id=${result.entry.id}，作用域=${scopeText}`,
         ...(replyNote ? [replyNote] : []),
+        ...(bugNote ? [bugNote] : []),
+        ...(bugRedirectFrom ? [`（本次指定了群「${bugRedirectFrom}」，BUG 报告已统一投递到「${bugfixGroupNameNow || BUGFIX_GROUP_NAME}」群。）`] : []),
         others > 0
           ? `当前有 ${others} 个${result.group ? '其他群成员' : '其他会话'}处于活动状态，它们会在下一步/下一轮自动看到这条内容。`
           : `当前没有其他活动${result.group ? '群成员' : '会话'}；${result.group ? '群成员' : '其他会话'}下次运行时（含重启后恢复）会自动看到这条内容。`
@@ -3772,8 +4139,24 @@ export function apply(ctx, config = {}) {
         matched = [outcome.session]
       }
       targets = matched.slice(0, 3)
+      // v2.9.1 权限分级：维护者 protected/service，不能被 session_ask 当普通任务/探测目标。
+      // 例外：在「星桥 · 修bug」群里投递 bug（按 BUG 报告处理，不挂任务角色）。
+      const protectedTargets = targets.filter((session) => session.protected === true || isMaintainerSession(session.id))
+      let bugfixDelivery = false
+      if (protectedTargets.length) {
+        if (!isBugfixGroup(group)) {
+          return protectedRefusalText(
+            protectedTargets
+              .map((session) => `${session.title}（contactId=${session.contactId || contactIdOf(session.id)}）`)
+              .join('、'),
+            ['（session_ask 不会把维护者当作普通任务/探测目标；本次未写请求、未唤醒。）']
+          )
+        }
+        bugfixDelivery = true
+      }
+      const unprotectedTargets = targets.filter((session) => !protectedTargets.includes(session))
       const grants = readPermissionsOf(boardDir).grants[info.id] || []
-      const unauthorized = targets.filter((session) => !grants.includes(session.id))
+      const unauthorized = (bugfixDelivery ? unprotectedTargets : targets).filter((session) => !grants.includes(session.id))
       if (unauthorized.length) {
         const grantedTitles = grants
           .map((sessionId) => {
@@ -3824,6 +4207,8 @@ export function apply(ctx, config = {}) {
         (workSignal && !probeSignal ? 'task' : '') ||
         (callerIsManager && workSignal ? 'task' : '') ||
         'probe'
+      // 修bug群里给维护者的投递一律按 BUG 报告（不是任务分配），避免被扣上组长/成员角色。
+      if (bugfixDelivery) askMode = 'probe'
       const assignmentTask = askMode === 'task' ? taskCandidate : null
 
       // 群任务里若成员已经提交过，不再唤醒/重复请求：改成「插话」提醒，等它下次处理时顺手看到即可。
@@ -3875,7 +4260,9 @@ export function apply(ctx, config = {}) {
           return `成员 ${nudgedMembers.map((session) => session.title).join('、')} 当前已有未回复的分工请求，本次不重复唤醒；已改用「插话」提醒（对方处理时会看到）。`
         }
       }
-      const title = String((args && args.title) || '').trim().slice(0, 60) || `群内请求：${truncate(text, 18)}`
+      const title =
+        String((args && args.title) || '').trim().slice(0, 60) ||
+        (bugfixDelivery ? `BUG 报告：${truncate(text, 18)}` : `群内请求：${truncate(text, 18)}`)
       const result = addEntry(
         {
           title,
@@ -3886,6 +4273,7 @@ export function apply(ctx, config = {}) {
           author: info.id,
           requestTo: targets.map((session) => session.id),
           mentions: targets.map((session) => session.id),
+          ...(bugfixDelivery ? { tags: '@bug' } : {}),
           ...(assignmentTask ? { taskId: assignmentTask.id, taskRole: 'member' } : {})
         },
         'tool'
@@ -3904,7 +4292,15 @@ export function apply(ctx, config = {}) {
       // 探测（提问/要进度）和任务分配用不同模板：
       // - 探测：正文顶到最前，只要求针对正文回答，不叮嘱复杂回复格式，避免对方过度分析；
       // - 任务：才附「怎么回复/交给谁」。
-      const requestMessage = askMode === 'task'
+      const requestMessage = bugfixDelivery
+        ? [
+            '【BUG 报告 · 修bug群投递（不是普通任务）】',
+            text,
+            '',
+            `请按影响面处理；修好后用 session_share（kind=handoff、group=${group.name}、replyTo=${requestId}、files=文件路径）回执。`,
+            `（来自会话 ${shortSid(info.id)} · 群组「${group.name}」· 维护者 protected/service，只收 bug 报告，不接普通派活）`
+          ].join('\n')
+        : askMode === 'task'
         ? assignmentTask
           ? [
               `【任务分配 · 群任务：${assignmentTask.title}】`,
@@ -3936,10 +4332,13 @@ export function apply(ctx, config = {}) {
         else sleepy.push(target)
       }
       return [
-        askMode === 'task'
-          ? `已向群组「${group.name}」发出任务分配：${title}（id=${requestId}）`
-          : `已向群组「${group.name}」发出探测：${title}（id=${requestId}）`,
+        bugfixDelivery
+          ? `已向修bug群「${group.name}」投递 BUG 报告：${title}（id=${requestId}）`
+          : askMode === 'task'
+            ? `已向群组「${group.name}」发出任务分配：${title}（id=${requestId}）`
+            : `已向群组「${group.name}」发出探测：${title}（id=${requestId}）`,
         `目标成员：${memberInlineText(targets) || '(无)'}`,
+        bugfixDelivery ? '（维护者 protected/service：本次按 BUG 报告投递，不当作普通任务派活。）' : '',
         woken.length
           ? `已唤醒 ${woken.length} 个在线会话（${memberInlineText(woken)}），它们会立即处理；`
           : '',
@@ -4008,11 +4407,20 @@ export function apply(ctx, config = {}) {
         ].join('\n')
       }
       const target = resolution.session
+      // v2.9.1 权限分级：维护者 protected/service，不能被 session_nudge 当普通催收对象。
+      // 例外：在修bug群里对维护者发 bug 提醒是允许的（tag @bug）。
+      const targetProtected = target.protected === true || isMaintainerSession(target.id)
+      const bugfixNudge = targetProtected && isBugfixGroup(group)
+      if (targetProtected && !bugfixNudge) {
+        return protectedRefusalText(`${target.title}（contactId=${target.contactId || contactIdOf(target.id)}）`, [
+          '（session_nudge 不会把维护者当作普通催收/提醒对象；本次未写入、未打扰。）'
+        ])
+      }
       const grants = readPermissionsOf(boardDir).grants[info.id] || []
-      if (!grants.includes(target.id)) {
+      if (!bugfixNudge && !grants.includes(target.id)) {
         return `没有插话权限：用户还没有授权本会话唤醒/提醒「${target.title}」。请让用户在群组设置里授权。`
       }
-      const title = String((args && args.title) || '').trim().slice(0, 60) || `催收：${truncate(text, 18)}`
+      const title = String((args && args.title) || '').trim().slice(0, 60) || (bugfixNudge ? `BUG 提醒：${truncate(text, 18)}` : `催收：${truncate(text, 18)}`)
       const result = addEntry(
         {
           title,
@@ -4025,6 +4433,7 @@ export function apply(ctx, config = {}) {
           mentions: [target.id],
           hiddenFromChat: true,
           nudge: true,
+          ...(bugfixNudge ? { tags: '@bug' } : {}),
           skipDedupe: true
         },
         'tool'
@@ -4033,8 +4442,11 @@ export function apply(ctx, config = {}) {
       logger.info(`插话提醒 ${shortSid(target.id)}：${title}`)
       return [
         `已插话给「${target.title}」：不会唤醒、不会额外开一轮。`,
+        bugfixNudge ? '（维护者 protected/service：这条按 BUG 提醒投递，不是普通任务催收。）' : '',
         '对方下一次处理时会在上下文里看到这条提醒；如果它已经完成，会直接忽略，不会再回复一次。'
-      ].join('\n')
+      ]
+        .filter(Boolean)
+        .join('\n')
     }
   })
 
@@ -4343,10 +4755,17 @@ export function apply(ctx, config = {}) {
       const byId = new Map(sessions.map((session) => [session.id, session]))
       const members = group.sessionIds.map((sessionId) => byId.get(sessionId)).filter(Boolean)
       if (args.action === 'list') {
+        // v2.9.1：成员列表显示保护级别/角色（维护者在群里只观察，不接普通任务）。
+        const roleTextOf = (member) => {
+          if (member.protected === true) return '维护者（保护/服务，仅观察，不接普通任务）'
+          if (group.managerSessionId === member.id) return '群管理'
+          if (member.protectionLevel === 'coordinator') return '组长（临时）'
+          return '成员'
+        }
         return (
           '群「' + group.name + '」成员（' + members.length + '）：\n' +
           members
-            .map((member) => '- ' + member.avatar + ' ' + (member.handle || member.title) + '（' + member.title + '）· contactId=' + (member.contactId || contactIdOf(member.id)) + ' · 完整 id=' + member.id)
+            .map((member) => '- ' + member.avatar + ' ' + (member.handle || member.title) + '（' + member.title + '）· 角色=' + roleTextOf(member) + ' · contactId=' + (member.contactId || contactIdOf(member.id)) + ' · 完整 id=' + member.id)
             .join('\n')
         )
       }
@@ -4417,9 +4836,10 @@ export function apply(ctx, config = {}) {
   register({
     name: 'session_directory',
     description:
-      '跨会话通讯录：列出主会话的 contactId（稳定短 ID）、完整 id、handle、标题、工作区、在线状态、所属群组、是否可派世界任务。' +
+      '跨会话通讯录：列出主会话的 contactId（稳定短 ID）、完整 id、handle、标题、工作区、在线状态、所属群组、角色/保护级别、是否可派世界任务（worldEligible）。' +
       '支持 group（只看某个群组的成员）和 query（按 contactId / 完整 id / handle / 标题 / 工作区 模糊筛选）。' +
-      '任何主会话可用。不确定派给谁、或不知道成员 id 时先查这里：contactId 可直接用于 session_ask/session_nudge 的 to、group_member 的 sessions、世界任务正文 @。',
+      '任何主会话可用。不确定派给谁、或不知道成员 id 时先查这里：contactId 可直接用于 session_ask/session_nudge 的 to、group_member 的 sessions、世界任务正文 @。' +
+      '维护者会标记 protected=yes/service=yes：不接普通任务，只能通过显式 @ 或「修bug群」投递 bug。',
     parameters: {
       type: 'object',
       properties: {
@@ -4481,7 +4901,7 @@ export function apply(ctx, config = {}) {
           `- contactId=${session.contactId || contactIdOf(session.id)} · handle=${session.handle || '（无）'} · title=${session.title || shortSid(session.id)}`
         )
         lines.push(
-          `  fullId=${session.id} · live=${session.live ? 'yes' : 'no'} · status=${session.status || (session.live ? 'idle' : 'history')} · 群组=${groupNames.length ? groupNames.join('、') : '（无）'} · worldEligible=${session.worldEligible ? 'yes' : 'no'} · cwd=${session.cwd || '（无）'}`
+          `  fullId=${session.id} · live=${session.live ? 'yes' : 'no'} · status=${session.status || (session.live ? 'idle' : 'history')} · 群组=${groupNames.length ? groupNames.join('、') : '（无）'} · 角色=${session.protectionLabel || PROTECTION_LABEL.member} · protected=${session.protected ? 'yes' : 'no'} · service=${session.service ? 'yes' : 'no'} · worldEligible=${session.worldEligible ? 'yes' : 'no'} · cwd=${session.cwd || '（无）'}`
         )
       }
       if (group && group.managerSessionId) {
@@ -4664,15 +5084,16 @@ export function apply(ctx, config = {}) {
       'action=groups 列出所有群组及其成员；' +
       'action=remove 删除一条（id 可用前缀）；action=claim 认领一条任务交接；' +
       'action=ack 标记本会话已接受某条规矩（id 可用前缀）；' +
-      'action=status 查看插件加载状态、看板路径、活动会话与看板面板。' +
+      'action=status 查看插件加载状态、看板路径、活动会话与看板面板；' +
+      'action=bugfix 一键创建或复用「星桥 · 修bug」群（维护者/群管理可用，维护者为群管理，普通成员可投递 bug 报告）。' +
       '发布新经验请用 session_share（可用 group 参数指定群组）；向群内其他会话要文件/进度请用 session_ask。',
     parameters: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['list', 'groups', 'remove', 'claim', 'unclaim', 'ack', 'status'],
-          description: 'list（默认）/ groups / remove / claim / unclaim / ack / status'
+          enum: ['list', 'groups', 'remove', 'claim', 'unclaim', 'ack', 'status', 'bugfix'],
+          description: 'list（默认）/ groups / remove / claim / unclaim / ack / status / bugfix（创建或复用修bug群）'
         },
         id: { type: 'string', description: '条目 id（remove/claim/unclaim/ack 时用，支持前缀匹配）' },
         limit: { type: 'integer', minimum: 1, maximum: 50, description: 'list 时最多显示多少条，默认 12' },
@@ -4706,6 +5127,29 @@ export function apply(ctx, config = {}) {
         )
       }
 
+      if (action === 'bugfix') {
+        const isMaintainerNow = isMaintainerSession(info.id)
+        const isGroupManagerNow = groupStore.read().some((group) => group.managerSessionId === info.id)
+        if (!isMaintainerNow && !isGroupManagerNow) {
+          return (
+            '只有维护者或群管理可以创建/复用修bug群。' +
+            '普通成员/用户请用右侧栏「修bug群」按钮或面板命令 bugfix.ensure；报 bug 用 session_share（kind=bug）即可自动进群。'
+          )
+        }
+        const ensured = await ensureBugfixGroup({ kickoff: isMaintainerNow })
+        if (!ensured.ok) return ensured.error
+        const groupNow = groupStore.read().find((item) => item.id === ensured.groupId)
+        return [
+          `已${ensured.created ? '创建' : '复用'}修bug群：${ensured.name}（id=${ensured.groupId.slice(0, 12)}…）`,
+          `群管理（维护者）：${shortSid(ensured.managerSessionId)} · 成员 ${ensured.memberCount} 人 · 待处理 bug ${ensured.openReports} 条`,
+          ensured.addedMembers && ensured.addedMembers.length ? `本次补入 ${ensured.addedMembers.length} 个普通成员` : '',
+          groupNow ? `群目标：${groupNow.goal}` : '',
+          '普通成员报 bug：session_share（kind=bug、group=星桥 · 修bug）或面板「报bug」；该群不派普通任务。'
+        ]
+          .filter(Boolean)
+          .join('\n')
+      }
+
       if (action === 'groups') {
         const groups = groupStore.read()
         if (!groups.length) {
@@ -4719,15 +5163,22 @@ export function apply(ctx, config = {}) {
         }
         const lines = [`跨会话经验板 · ${groups.length} 个群组：`]
         groups.forEach((group, index) => {
+          const tag = isBugfixGroup(group) ? '[修bug群] ' : ''
           lines.push(
-            `${index + 1}. ${group.name}（id=${group.id.slice(0, 12)}…，${group.sessionIds.length} 个会话，${ruleCount.get(group.id) || 0} 条群规矩）`
+            `${index + 1}. ${tag}${group.name}（id=${group.id.slice(0, 12)}…，${group.sessionIds.length} 个会话，${ruleCount.get(group.id) || 0} 条群规矩）`
           )
           if (group.sessionIds.length) {
             lines.push(
               `   成员：${group.sessionIds
                 .map((id) => {
                   const session = sessionById.get(id)
-                  return session ? `${session.contactId || contactIdOf(id)}（${session.handle || session.title}）` : shortSid(id)
+                  if (!session) return shortSid(id)
+                  const roleTag = session.protected
+                    ? '（维护者·观察，不接普通任务）'
+                    : group.managerSessionId === id
+                      ? '（群管理）'
+                      : ''
+                  return `${session.contactId || contactIdOf(id)}（${session.handle || session.title}）${roleTag}`
                 })
                 .join('、')}`
             )
@@ -4766,6 +5217,13 @@ export function apply(ctx, config = {}) {
           `看板条目：活动 ${all.length} 条（其中我发布的 ${mine.length} 条）· 群组 ${groups.length} 个`,
           `当前会话：contactId=${contactIdOf(info.id) || '?'} · ${info.id || '?'}${info.cwd ? ` · 工作区 ${info.cwd}` : ''}`,
           `通讯录：${sessionsNow.length} 个主会话（contactId 见下，可用 session_directory 查询/过滤；派活用 session_ask 的 to=contactId）`,
+          `权限分级：维护者=${(() => {
+            const maintainerId = maintainerStore.get()
+            return maintainerId ? shortSid(maintainerId) + '（protected/service，不接普通任务）' : '未注册'
+          })()} · 修bug群=${(() => {
+            const bugfixNow = bugfixGroupOf(groups)
+            return bugfixNow ? bugfixNow.name + '（' + bugfixNow.sessionIds.length + ' 人）' : '未创建（session_board action=bugfix 或 bugfix.ensure）'
+          })()}`,
           `配置：scope=${cfg.scope} · maxShown=${cfg.maxShown} · ttl=${cfg.ttlHours}h · autoCapture=${cfg.autoCapture !== false}`,
           `注册：系统提示词说明=${registration.section ? '是' : '否'} · 运行时上下文=${registration.context ? '是' : '否'} · 看板 API=${registration.api ? '是' : '否'} · 面板 client.js=${fs.existsSync(path.resolve(HERE, '..', 'client.js')) || fs.existsSync(path.join(HERE, 'client.js')) ? '存在' : '缺失'}`,
           `客户端模块：${moduleInfo.available ? `已挂载（${moduleInfo.count} 个，本插件=${moduleInfo.hasSelf ? '已注册' : '未注册'}）` : '服务不可用'}${moduleInfo.available && !moduleInfo.hasSelf && moduleInfo.ids ? `\n  ids：${moduleInfo.ids.join(', ')}` : ''}`,
@@ -5008,8 +5466,10 @@ export function apply(ctx, config = {}) {
       const forceNew = payload.forceNew === true || FORCE_NEW_RE.test(text)
       // 世界任务的 @ 解析与「扩充新成员」意图：这两类不交给路由器，避免把新成员外包给子代理。
       const sessionsNow = await buildSessionIndex()
-      const mentionCandidates = sessionsNow.filter((session) => session.worldEligible === true)
+      // 自动路由/路由建议只用 worldEligible（已排除维护者）；用户显式 @ 仍可点名 protected 会话（例外）。
+      const mentionCandidates = sessionsNow.filter((session) => session.worldEligible === true || session.protected === true)
       const parsedWorldMentions = parseMentionsInText(text, mentionCandidates)
+      const explicitProtectedMentions = parsedWorldMentions.ids.filter((sessionId) => isMaintainerSession(sessionId))
       if (parsedWorldMentions.ambiguous.length) {
         return {
           ok: false,
@@ -5186,6 +5646,16 @@ export function apply(ctx, config = {}) {
         }
       }
       const createdSessions = []
+      // v2.9.1：维护者只能通过「用户显式 @」进入 assigned（自动路由已排除），这里标记并给提示。
+      const assignedProtectedIds = assigned.filter((item) => isMaintainerSession(item.id)).map((item) => item.id)
+      const protectedOnlyAssigned = assigned.length > 0 && assigned.every((item) => isMaintainerSession(item.id))
+      const protectedNotice = assignedProtectedIds.length
+        ? '维护者例外：用户在正文里显式 @ 了维护者（' +
+          assignedProtectedIds.map((sessionId) => shortSid(sessionId)).join('、') +
+          '），本次按「用户显式 @」例外处理并提示；维护者 protected/service，不接自动路由/普通派活，也不会担任组长；普通任务请派给其他成员，bug 请投递到「' +
+          BUGFIX_GROUP_NAME +
+          '」群。'
+        : ''
       if (decision.engine === 'new-members') {
         const baseSession = parsedWorldMentions.ids
           .map((sessionId) => sessionsNow.find((session) => session.id === sessionId))
@@ -5267,7 +5737,7 @@ export function apply(ctx, config = {}) {
         }
       }
       let createdGroup = null
-      if (assigned.length >= 1) {
+      if (assigned.length >= 1 && !protectedOnlyAssigned) {
         try {
           const memberIds = [...new Set(assigned.map((item) => item.id))]
           const baseName = ('协作：' + String(text).replace(/\s+/g, ' ')).slice(0, 24)
@@ -5325,8 +5795,11 @@ export function apply(ctx, config = {}) {
       if (createdGroup) {
         try {
           const memberIds = [...new Set(assigned.map((item) => item.id))]
-          autoCoordinatorId = memberIds[0]
-          const assignees = memberIds.slice(1)
+          // v2.9.1：维护者 protected/service，不担任组长/成员；组长优先从普通成员里选。
+          autoCoordinatorId = memberIds.find((sessionId) => !isMaintainerSession(sessionId)) || memberIds[0]
+          const assignees = memberIds.filter(
+            (sessionId) => sessionId !== autoCoordinatorId && !isMaintainerSession(sessionId)
+          )
           autoGroupTask = addEntry(
             {
               title: '世界任务：' + truncate(text, 20),
@@ -5395,7 +5868,8 @@ export function apply(ctx, config = {}) {
       const woken = []
       for (const item of assigned) {
         // 自动协作群里，只有组长拿正式任务请求；其他成员先待命，由组长 session_ask 分工。
-        if (createdGroup && autoGroupTask && item.id !== autoCoordinatorId) {
+        // 维护者（protected/service）不进入这个体系：不待命、不挂任务角色。
+        if (createdGroup && autoGroupTask && item.id !== autoCoordinatorId && !isMaintainerSession(item.id)) {
           const memberMessage = [
             '【协作群任务 · 你是成员，先待命】',
             `你已被拉入自动协作群「${createdGroup.name}」，组长是 ${assigned[0].title || shortSid(autoCoordinatorId)}。`,
@@ -5423,7 +5897,7 @@ export function apply(ctx, config = {}) {
             mentions: [item.id],
             hiddenFromChat: true,
             skipDedupe: true,
-            ...(createdGroup && autoGroupTask ? { taskId: autoGroupTask.id, taskRole: 'coordinator' } : {})
+            ...(createdGroup && autoGroupTask && item.id === autoCoordinatorId ? { taskId: autoGroupTask.id, taskRole: 'coordinator' } : {})
           },
           'panel'
         )
@@ -5461,6 +5935,11 @@ export function apply(ctx, config = {}) {
                 createdWorkspace ? `（本任务新开了工作区：${createdWorkspace}）` : '',
                 createdGroup ? `（已自动拉协作群「${createdGroup.name}」）` : '',
                 `路由理由：${decision.reason}`,
+                isMaintainerSession(item.id)
+                  ? '（维护者例外：本次是用户在正文里显式 @ 你，按例外处理；普通任务不会自动派给你，你也不会成为组长/成员；bug 请走「' +
+                    BUGFIX_GROUP_NAME +
+                    '」群。）'
+                  : '',
                 '',
                 text,
                 '',
@@ -5489,7 +5968,10 @@ export function apply(ctx, config = {}) {
         requestIds,
         forceNew,
         route: decision.route,
-        router: { engine: decision.engine, reason: decision.reason }
+        router: { engine: decision.engine, reason: decision.reason },
+        // v2.9.1：用户显式 @ 维护者的例外提示（普通自动路由不会命中维护者）。
+        protectedException: assignedProtectedIds,
+        protectedNotice
       }
     }
     if (action === 'session.revive') {
@@ -5644,10 +6126,60 @@ export function apply(ctx, config = {}) {
         ? [...group.sessionIds]
         : requested.filter((sessionId) => group.sessionIds.includes(sessionId))
       targetIds = [...new Set(targetIds)]
-      if (mentionAll) targetIds = targetIds.filter((sessionId) => sessionId !== maintainerStore.get())
       const titleById = new Map(sessions.map((session) => [session.id, session.title]))
       const sessionById = new Map(sessions.map((session) => [session.id, session]))
       const titleOf = (sessionId) => titleById.get(sessionId) || shortSid(sessionId)
+      // v2.9.1 权限分级：维护者 protected/service —— 不得被 group.post 指派为组长/成员。
+      // 例外：修bug群里的 BUG 报告按「bug 投递」处理（不是任务）；普通群只报错/跳过并提示。
+      const maintainerIdNow = maintainerStore.get()
+      const bugfixChannel = isBugfixGroup(group)
+      let protectedSkipped = []
+      let protectedNotice = ''
+      let bugfixDelivery = false
+      if (mentionAll && maintainerIdNow && targetIds.includes(maintainerIdNow)) {
+        targetIds = targetIds.filter((sessionId) => sessionId !== maintainerIdNow)
+        protectedSkipped = [maintainerIdNow]
+        protectedNotice =
+          '已按保护规则把维护者排除在 @所有人 之外：维护者 protected/service，不接普通任务、不当组长/成员。'
+      }
+      const targetProtectedIds = targetIds.filter((sessionId) => sessionId === maintainerIdNow)
+      if (targetProtectedIds.length) {
+        const remaining = targetIds.filter((sessionId) => sessionId !== maintainerIdNow)
+        const isBugDelivery = bugfixChannel && (textLooksLikeBugReport(text) || !textLooksLikeWork(text))
+        if (!remaining.length) {
+          if (!isBugDelivery) {
+            return {
+              ok: false,
+              error: [
+                '维护者「' +
+                  titleOf(maintainerIdNow) +
+                  '」是 protected/service 会话，group.post 不会把维护者指派为组长/成员（本次未派活、未唤醒）。',
+                '',
+                PROTECTED_TASK_ALTERNATIVES
+              ].join('\n')
+            }
+          }
+          bugfixDelivery = true
+        } else {
+          protectedSkipped = targetProtectedIds.slice()
+          targetIds = remaining
+          protectedNotice =
+            '已按保护规则跳过维护者 ' +
+            targetProtectedIds.map((sessionId) => titleOf(sessionId)).join('、') +
+            '：维护者不接普通任务，也不会担任组长/成员。'
+          if (isBugDelivery) {
+            const bugCopy = await reportBugToMaintainer({
+              text,
+              author: 'panel',
+              workspace: group.workspace,
+              origin: 'panel'
+            })
+            if (bugCopy.ok) {
+              protectedNotice += ' 已同时把这条 BUG 报告投递到修bug群「' + bugCopy.groupName + '」。'
+            }
+          }
+        }
+      }
 
       // 多人任务：一个任务只能有一个组长；成员只交组长、不直接向用户汇报，避免“人人都是组长”。
       if (targetIds.length >= 2) {
@@ -5770,7 +6302,9 @@ export function apply(ctx, config = {}) {
             status: 'assigned'
           },
           woken,
-          requestIds
+          requestIds,
+          protectedSkipped,
+          protectedNotice
         }
       }
 
@@ -5782,7 +6316,7 @@ export function apply(ctx, config = {}) {
           groupId: group.id,
           author: 'panel',
           origin: 'panel',
-          tags: '@群消息',
+          tags: bugfixDelivery ? '@bug' : '@群消息',
           mentions: targetIds,
           skipDedupe: true
         },
@@ -5795,32 +6329,41 @@ export function apply(ctx, config = {}) {
       for (const sessionId of targetIds) {
         const request = addEntry(
           {
-            title: `@${shortSid(sessionId)} ${truncate(text, 18)}`,
+            title: bugfixDelivery ? `BUG：${truncate(text, 18)}` : `@${shortSid(sessionId)} ${truncate(text, 18)}`,
             text,
             kind: 'request',
             groupId: group.id,
             author: 'panel',
             origin: 'panel',
             requestTo: [sessionId],
-            hiddenFromChat: true,
+            hiddenFromChat: bugfixDelivery ? false : true,
+            ...(bugfixDelivery ? { tags: '@bug' } : {}),
             skipDedupe: true
           },
           'panel'
         )
         if (!request.ok) continue
         requests.push(request.entry.id)
-        const message = [
-          `【群内工作安排 · 用户在群里 @ 你（群组「${group.name}」）】`,
-          text,
-          '',
-          `请开始处理。完成后用 session_share 汇报（kind=handoff、group=${group.name}、replyTo=${request.entry.id}、files=文件路径）；无法处理请说明原因。`
-        ].join('\n')
+        const message = bugfixDelivery
+          ? [
+              `【BUG 报告 · 用户在修bug群里投递（群组「${group.name}」）】`,
+              text,
+              '',
+              `请按影响面处理；修好后用 session_share（kind=handoff、group=${group.name}、replyTo=${request.entry.id}、files=文件路径）回执。`,
+              '（维护者 protected/service：这是 bug 投递，不是普通任务派活。）'
+            ].join('\n')
+          : [
+              `【群内工作安排 · 用户在群里 @ 你（群组「${group.name}」）】`,
+              text,
+              '',
+              `请开始处理。完成后用 session_share 汇报（kind=handoff、group=${group.name}、replyTo=${request.entry.id}、files=文件路径）；无法处理请说明原因。`
+            ].join('\n')
         await ensureSessionLive(sessionId)
         const outcome = wakeSession(sessionId, message, { requestId: request.entry.id })
         if (outcome.ok) woken.push({ sessionId, title: titleById.get(sessionId) || shortSid(sessionId) })
       }
       logger.info(
-        `群「${group.name}」面板发布消息 ${note.entry.id}，@ ${targetIds.length} 人，唤醒 ${woken.length} 人`
+        `群「${group.name}」面板发布消息 ${note.entry.id}，@ ${targetIds.length} 人，唤醒 ${woken.length} 人${bugfixDelivery ? '（BUG 投递）' : ''}`
       )
       return {
         ok: true,
@@ -5828,7 +6371,10 @@ export function apply(ctx, config = {}) {
         requestIds: requests,
         targets: targetIds.length,
         woken: woken.length,
-        wokenTitles: woken.map((item) => item.title)
+        wokenTitles: woken.map((item) => item.title),
+        bugfix: bugfixDelivery,
+        protectedSkipped,
+        protectedNotice
       }
     }
     if (action === 'group.create') {
@@ -6004,7 +6550,14 @@ export function apply(ctx, config = {}) {
         persona,
         updatedAt: Date.now()
       })
-      maintainerStore.set(sessionId, { handle, avatar })
+      maintainerStore.set(sessionId, {
+        handle,
+        avatar,
+        // v2.9.1：维护者默认 protected/service（最高保护级别，不接普通任务）。
+        protected: true,
+        service: true,
+        protectionLevel: 'maintainer'
+      })
       try {
         mutateGroups((list) => {
           for (const group of list) {
@@ -6027,12 +6580,67 @@ export function apply(ctx, config = {}) {
         /* ignore */
       }
       logger.info('维护者已注册：' + avatar + ' ' + handle + '（' + shortSid(sessionId) + '）')
-      return { ok: true, sessionId, handle, avatar, role: '维护者', grants: (await buildSessionIndex()).length - 1 }
+      return {
+        ok: true,
+        sessionId,
+        handle,
+        avatar,
+        role: '维护者',
+        protectionLevel: 'maintainer',
+        protected: true,
+        service: true,
+        grants: (await buildSessionIndex()).length - 1,
+        hint: '维护者已设为 protected/service（普通路由/group.post/session_ask 都不会再派普通任务）。建议接着执行 bugfix.ensure 创建/复用「' + BUGFIX_GROUP_NAME + '」群，作为维护者的 bug 任务池。'
+      }
     }
     if (action === 'maintainer.get') {
       const sessionId = maintainerStore.get()
       const identity = sessionId ? identityOf(sessionId, identityTitleOf(sessionId)) : null
-      return { ok: true, sessionId, identity }
+      return {
+        ok: true,
+        sessionId,
+        identity,
+        protectionLevel: sessionId ? 'maintainer' : '',
+        protected: Boolean(sessionId),
+        service: Boolean(sessionId)
+      }
+    }
+    if (action === 'bugfix.ensure') {
+      const ensured = await ensureBugfixGroup({ kickoff: true })
+      if (!ensured.ok) return { ok: false, error: ensured.error }
+      return { ...ensured, bugfix: { groupId: ensured.groupId, name: ensured.name, managerSessionId: ensured.managerSessionId } }
+    }
+    if (action === 'bugfix.report') {
+      let source = 'panel'
+      if (typeof payload.sessionId === 'string' && payload.sessionId.trim()) source = payload.sessionId.trim()
+      const result = await reportBugToMaintainer({
+        title: payload.title,
+        text: payload.text,
+        files: payload.files,
+        author: source,
+        workspace: payload.workspace || '',
+        origin: source === 'panel' ? 'panel' : 'tool'
+      })
+      return result
+    }
+    if (action === 'bugfix.list') {
+      const bugfixNow = bugfixGroupOf(groupStore.read())
+      if (!bugfixNow) return { ok: true, groupId: '', name: BUGFIX_GROUP_NAME, reports: [] }
+      const reports = store
+        .readActive()
+        .filter((entry) => entry.groupId === bugfixNow.id && entry.kind === 'request' && !entry.hiddenFromChat)
+        .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+        .slice(0, 30)
+        .map((entry) => ({
+          id: entry.id,
+          title: entry.title,
+          text: String(entry.text || '').slice(0, 300),
+          status: entry.status === 'answered' || entry.answeredBy ? 'fixed' : 'open',
+          author: entry.author,
+          ts: entry.ts,
+          files: Array.isArray(entry.files) ? entry.files : []
+        }))
+      return { ok: true, groupId: bugfixNow.id, name: bugfixNow.name, reports }
     }
     if (action === 'health.check') {
       const report = await runHealthCheck({ alert: false })
@@ -6981,7 +7589,9 @@ export function apply(ctx, config = {}) {
         if (!managerId) {
           if (group.sessionIds.length < 2) continue
           try {
-            const firstMember = group.sessionIds[0]
+            // v2.9.1：维护者 protected/service，不作为普通群的群管理兜底（保持观察身份）。
+            const firstMember =
+              group.sessionIds.find((sessionId) => !isMaintainerSession(sessionId)) || group.sessionIds[0]
             const groupsToFix = groupStore.read()
             const targetGroup = groupsToFix.find((item) => item.id === group.id)
             if (targetGroup) {

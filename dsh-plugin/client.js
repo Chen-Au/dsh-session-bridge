@@ -39,7 +39,8 @@ window.__ModuleLoader__.load({
       request: '请求',
       command: '命令',
       task: '任务',
-      chat: '交流'
+      chat: '交流',
+      bug: 'BUG'
     }
     var KIND_ORDER = ['note', 'handoff', 'lesson', 'decision']
     var KIND_TONE = {
@@ -50,7 +51,8 @@ window.__ModuleLoader__.load({
       request: 'error',
       command: 'warn',
       task: 'brand',
-      chat: 'business'
+      chat: 'business',
+      bug: 'error'
     }
     /** 用户自己在面板发的内容显示为「命令」，而不是「经验」。 */
     function displayKindOf(rule) {
@@ -1704,7 +1706,11 @@ window.__ModuleLoader__.load({
               'div',
               { style: styles.rowTitle },
               (session.avatar || '👤') + ' ' + session.title,
-              props.group && props.group.managerSessionId === session.id ? '（群管理）' : ''
+              props.group && props.group.managerSessionId === session.id
+                ? '（群管理）'
+                : session.protected
+                  ? '（维护者·观察）'
+                  : ''
             ),
             session.handle
               ? h(
@@ -2437,6 +2443,7 @@ window.__ModuleLoader__.load({
             'div',
             { style: styles.rowLine },
             h('span', { style: mergeStyle(styles.rowTitle, { flex: 1 }) }, group.name),
+            group.kind === 'bugfix' ? h(Badge, { tone: 'warn', title: '维护者的修bug群：只收 BUG 报告，不派普通任务' }, '修bug群') : null,
             h('span', { style: mergeStyle(styles.rowMuted, { flex: 'none' }) }, last ? chatClock(last.ts) : '')
           ),
           h(
@@ -2795,6 +2802,7 @@ window.__ModuleLoader__.load({
               'div',
               { style: styles.rowLine },
               h('span', { style: mergeStyle(styles.rowTitle, { flex: 1 }) }, group.name),
+              group.kind === 'bugfix' ? h(Badge, { tone: 'warn', title: '维护者的修bug群：只收 BUG 报告，不派普通任务' }, '修bug群') : null,
               h('span', { style: mergeStyle(styles.rowMuted, { flex: 'none' }) }, members.length + ' 人')
             ),
             h(
@@ -3021,6 +3029,18 @@ window.__ModuleLoader__.load({
           h(
             Btn,
             {
+              variant: 'ghost',
+              title: '一键创建/复用「星桥 · 修bug」群：维护者为群管理，普通成员把 BUG 报告投递到该群，维护者不再接普通任务',
+              disabled: props.busy || !(state && state.capabilities && state.capabilities.bugfixGroup),
+              onClick: function () {
+                Promise.resolve(props.run('bugfix.ensure', {}))
+              }
+            },
+            state && state.bugfix && state.bugfix.exists ? '🛡️ 修bug群' : '🛡️ 建修bug群'
+          ),
+          h(
+            Btn,
+            {
               variant: showForm ? undefined : 'primary',
               onClick: function () {
                 setShowForm(!showForm)
@@ -3091,6 +3111,13 @@ window.__ModuleLoader__.load({
             { tone: running ? 'business' : live ? 'success' : 'neutral' },
             running ? '运行中' : live ? '在线' : '离线'
           ),
+          session.protected
+            ? h(
+                Badge,
+                { tone: 'warn', title: '维护者 protected/service：不接普通任务，只能通过显式 @ 或修bug群投递 bug' },
+                '维护者·服务'
+              )
+            : null,
           session.hasProfile
             ? h(Badge, { tone: 'success' }, '已申报')
             : session.profileDeclined

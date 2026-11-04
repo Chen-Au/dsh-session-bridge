@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.8.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.9.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 
@@ -81,6 +81,14 @@
 - **统一会话引用解析**：`session_ask` / `session_nudge` 的 `to`、`group_member` 的 `sessions`、面板加/移成员、世界任务正文 `@` 都支持完整 id、无前缀 id、contactId、短 id（6 位压缩前缀）、唯一前后缀、handle、标题；命中多个时**返回候选并明确报错**，不会静默选错；
 - 群任务派活消息自动附带成员通讯录（contactId + handle + 标题），面板群成员列表显示可点击复制的 contactId，组长不必再猜短 ID；
 - **修复**：此前 6 位短 id（如 `4f51e9`）无法用于 `session_ask` 的 `to`（旧逻辑只支持完整 id / startsWith / 标题），只能退回给值班员；现在可直接派活。
+
+### 9. 权限分级与修bug群（v2.9.1）
+
+- **保护级别**：`user（用户/面板）> maintainer（维护者）> group-manager（群管理）> coordinator（组长）> member（成员）`。维护者（`maintainer.set` 注册的会话，如「星桥值班员」）默认 **protected/service**：不接普通世界任务自动路由、不被 `group.post` 指派为组长/成员、不能被 `session_ask` / `session_nudge` 当普通任务目标；派活请求会返回明确错误 + 替代路径，不会静默唤醒；
+- **可见性**：`state` / 看板 / 通讯录（`session_directory`）标出 `protected` / `service` / 角色，群成员列表显示角色；维护者可继续留在群里**观察**，但不再接该群的普通任务；
+- **用户显式 @ 例外**：用户在世界任务/群聊正文里显式 @ 维护者时按例外处理并给出提示，且不会让维护者成为自动建群的组长/成员；
+- **修bug群**：`bugfix.ensure` 命令 / 右侧栏「🛡️ 建修bug群」按钮 / `session_board action=bugfix` 一键创建或复用「星桥 · 修bug」群——维护者为群管理、普通成员自动入群；`bugfix.report`（面板「🛡️ 报BUG」按钮）与 `session_share kind=bug` 会把 bug 报告投递到该群并通知维护者；`bugfix.list` 可查看开放/已修复的 bug 列表（复用看板 request 状态）；
+- **契约测试**：新增 G 组覆盖「自动路由排除维护者、group.post 指派维护者报错/跳过、session_ask 与 session_nudge 拒绝、用户显式 @ 例外、修bug群创建/复用与 bug 投递、成员列表角色标记」。
 
 ---
 
