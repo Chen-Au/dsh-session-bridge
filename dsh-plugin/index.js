@@ -58,7 +58,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.2.0'
+const VERSION = '2.2.1'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -4985,6 +4985,42 @@ export function apply(ctx, config = {}) {
         'panel'
       )
       return { ok: true, targetId, handle: identity.handle }
+    }
+    if (action === 'share.post') {
+      // 维护者/面板回帖：等价于 session_share（kind=handoff），可回复某条请求。
+      const text = String(payload.text || '').trim().slice(0, 4000)
+      if (!text) return { ok: false, error: '内容不能为空' }
+      const kind = KIND_SET.has(payload.kind) ? payload.kind : 'handoff'
+      const groupRef = String(payload.group || payload.groupId || '').trim()
+      const group = groupRef ? groupStore.find(groupRef, defaultWorkspaceForRule() || undefined) : null
+      if (groupRef && !group) return { ok: false, error: '找不到群组' }
+      const author = maintainerStore.get() || 'panel'
+      const replyTo = String(payload.replyTo || '').trim()
+      const request = replyTo ? findRequestEntry(replyTo) : null
+      const entry = addEntry(
+        {
+          title: String(payload.title || text.slice(0, 20)).slice(0, 60),
+          text,
+          kind,
+          scope: group ? 'group' : 'global',
+          groupId: group ? group.id : '',
+          author,
+          origin: 'tool',
+          files: Array.isArray(payload.files) ? payload.files.filter((item) => typeof item === 'string' && item) : [],
+          replyTo: request ? request.id : '',
+          skipDedupe: true
+        },
+        'tool'
+      )
+      if (!entry.ok) return { ok: false, error: entry.reason || '发布失败' }
+      if (request) {
+        appendEvents(boardDir, [{ op: 'answer', id: request.id, by: author, replyId: entry.entry.id, ts: Date.now() }])
+        if (request.author && request.author !== 'panel' && request.author !== author) {
+          wakeSession(request.author, ['【群内请求已收到回复 · 来自维护者】', '请求：' + request.title, '回复：' + entry.entry.title + '：' + truncate(text, 300)].join('\n'), { requestId: request.id })
+        }
+      }
+      logger.info('维护者发布 ' + KIND_CN[kind] + '：' + entry.entry.title)
+      return { ok: true, id: entry.entry.id, title: entry.entry.title, kind, groupId: group ? group.id : '', answered: request ? request.id : '' }
     }
     if (action === 'maintainer.set') {
       const sessionId = String(payload.sessionId || '').trim()
