@@ -58,7 +58,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.0.2'
+const VERSION = '2.1.1'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -747,7 +747,7 @@ function createReputationStore(dir) {
 }
 
 // ------------------------------------------------------------------ 身份（ID + 头像）
-const AVATAR_PALETTE = ['🦊', '🐼', '🐯', '🐸', '🦁', '🐨', '🐧', '🦉', '🐙', '🦄', '🐳', '🦖', '👾', '🤖', '🧠', '🎯', '🚀', '🌙', '🔥', '💎', '🪐', '🍀']
+const AVATAR_PALETTE = ['🦊', '🐼', '🐯', '🐸', '🦁', '🐨', '🐧', '🦉', '🐙', '🦄', '🐳', '🦖', '👾', '🤖', '🧠', '🎯', '🚀', '🌙', '🔥', '💎', '🪐', '🍀', '🛰️']
 function createIdentityStore(dir) {
   const file = path.join(dir, IDENTITY_FILE)
   const read = () => {
@@ -911,6 +911,31 @@ function createActivityStore(dir) {
     write(data)
   }
   return { file, read, hasTea, markTea, hasRetro, markRetro, sparkLast, markSpark }
+}
+
+// ------------------------------------------------------------------ 维护者 / 健康巡检
+function createMaintainerStore(dir) {
+  const file = path.join(dir, 'maintainer.json')
+  const read = () => {
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+      return raw && typeof raw === 'object' ? raw : {}
+    } catch {
+      return {}
+    }
+  }
+  const write = (data) => {
+    ensureDir(dir)
+    fs.writeFileSync(file + '.tmp', JSON.stringify(data, null, 2), 'utf8')
+    fs.renameSync(file + '.tmp', file)
+  }
+  const get = () => read().sessionId || ''
+  const set = (sessionId, extra = {}) => {
+    const data = { ...read(), ...extra, sessionId, updatedAt: Date.now() }
+    write(data)
+    return data
+  }
+  return { file, read, write, get, set }
 }
 
 // ------------------------------------------------------------------ 插件入口
@@ -1220,6 +1245,7 @@ export function apply(ctx, config = {}) {
   const skillStore = createSkillStore(boardDir)
   const activityStore = createActivityStore(boardDir)
   const relationStore = createRelationStore(boardDir)
+  const maintainerStore = createMaintainerStore(boardDir)
   const sanitizeHandle = (value) =>
     String(value || '')
       .replace(/[^\p{L}\p{N}_-]/gu, '')
@@ -1717,6 +1743,14 @@ export function apply(ctx, config = {}) {
         lastAt: pair.lastAt || 0
       }
     })
+    let health = null
+    try {
+      health = JSON.parse(fs.readFileSync(path.join(boardDir, 'health.json'), 'utf8'))
+    } catch {
+      health = null
+    }
+    const maintainerId = maintainerStore.get()
+    const maintainerIdentity = maintainerId ? identityOf(maintainerId, identityTitleOf(maintainerId)) : null
     const rawDeliveries = deliveryStore.snapshot()
     const deliveries = {}
     for (const [ruleId, items] of Object.entries(rawDeliveries)) {
@@ -1737,6 +1771,8 @@ export function apply(ctx, config = {}) {
       reputation,
       activity,
       relations,
+      maintainer: maintainerId ? { sessionId: maintainerId, ...maintainerIdentity } : null,
+      health,
       skills: skillStore.list(),
       profiles,
       world: worldEntriesOf(),
@@ -4813,6 +4849,48 @@ export function apply(ctx, config = {}) {
       )
       return { ok: true, targetId, handle: identity.handle }
     }
+    if (action === 'maintainer.set') {
+      const sessionId = String(payload.sessionId || '').trim()
+      if (!sessionId) return { ok: false, error: '缺少 sessionId' }
+      const sessions = await buildSessionIndex()
+      const target = sessions.find((session) => session.id === sessionId)
+      if (!target) return { ok: false, error: '会话不在当前会话索引里' }
+      const handleWanted = sanitizeHandle(payload.handle) || '星桥值班员'
+      const avatar = isAvatar(payload.avatar) ? payload.avatar : '🛰️'
+      const handle = uniqueHandle(handleWanted, sessionId)
+      const style = PERSONA_STYLES.includes(String(payload.style || '')) ? String(payload.style) : '严谨'
+      const persona = String(payload.persona || '盯着星桥，有 bug 先修再报').slice(0, 120)
+      identityStore.set(sessionId, {
+        handle,
+        avatar,
+        role: '维护者',
+        skills: ['协调', '代码', '数据'],
+        style,
+        persona,
+        updatedAt: Date.now()
+      })
+      maintainerStore.set(sessionId, { handle, avatar })
+      try {
+        const permissions = readPermissionsOf(boardDir)
+        const grants = new Set(permissions.grants[sessionId] || [])
+        for (const session of sessions) if (session.id !== sessionId) grants.add(session.id)
+        permissions.grants[sessionId] = [...grants]
+        writePermissionsOf(boardDir, permissions)
+      } catch {
+        /* ignore */
+      }
+      logger.info('维护者已注册：' + avatar + ' ' + handle + '（' + shortSid(sessionId) + '）')
+      return { ok: true, sessionId, handle, avatar, role: '维护者', grants: (await buildSessionIndex()).length - 1 }
+    }
+    if (action === 'maintainer.get') {
+      const sessionId = maintainerStore.get()
+      const identity = sessionId ? identityOf(sessionId, identityTitleOf(sessionId)) : null
+      return { ok: true, sessionId, identity }
+    }
+    if (action === 'health.check') {
+      const report = await runHealthCheck({ alert: false })
+      return { ok: true, report }
+    }
     if (action === 'workspace.list') {
       const registry = (ctx.get && ctx.get('workspaceRegistry')) || ctx.workspaceRegistry
       if (!registry || typeof registry.list !== 'function') return { ok: false, error: '宿主不提供 workspaceRegistry' }
@@ -5518,6 +5596,152 @@ export function apply(ctx, config = {}) {
   } catch {
     /* ignore */
   }
+
+  // ---------------------------------------------------------------- 维护者 / 健康巡检
+  const healthFile = path.join(boardDir, 'health.json')
+  let lastHealthAlertAt = 0
+  const runHealthCheck = async (options = {}) => {
+    const issues = []
+    const fixes = []
+    try {
+      // HTTP API 掉线时尝试重注册（冷启动晚就绪兜底）
+      if (!registration.api && typeof registerWebServer === 'function') {
+        registerWebServer()
+        if (registration.api) fixes.push('重新注册 HTTP API')
+      }
+      // 群管理在线状态
+      const groups = groupStore.read()
+      for (const group of groups) {
+        const managerId = group.managerSessionId
+        if (!managerId) {
+          if (group.sessionIds.length >= 2) issues.push('群「' + group.name + '」没有群管理')
+          continue
+        }
+        const existed = ctx.agents.get ? ctx.agents.get(managerId) : undefined
+        const agent = existed || (await ensureSessionLive(managerId))
+        if (!agent) {
+          issues.push('群「' + group.name + '」的群管理离线且恢复失败')
+          continue
+        }
+        if (!existed) fixes.push('恢复群管理 ' + shortSid(managerId) + ' 上线')
+      }
+      // 维护者在线 + 全局唤醒授权
+      const maintainerId = maintainerStore.get()
+      if (!maintainerId) issues.push('尚未设置维护者会话')
+      else {
+        const existed = ctx.agents.get ? ctx.agents.get(maintainerId) : undefined
+        const agent = existed || (await ensureSessionLive(maintainerId))
+        if (!agent) issues.push('维护者会话离线且恢复失败')
+        else if (!existed) fixes.push('恢复维护者会话上线')
+        try {
+          const sessions = await buildSessionIndex()
+          const permissions = readPermissionsOf(boardDir)
+          const grants = new Set(permissions.grants[maintainerId] || [])
+          for (const session of sessions) if (session.id !== maintainerId) grants.add(session.id)
+          const nextGrants = [...grants].sort()
+          const prevGrants = [...(permissions.grants[maintainerId] || [])].sort()
+          if (JSON.stringify(nextGrants) !== JSON.stringify(prevGrants)) {
+            permissions.grants[maintainerId] = nextGrants
+            writePermissionsOf(boardDir, permissions)
+            fixes.push('更新维护者全局唤醒授权（' + nextGrants.length + ' 个会话）')
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      // 工作区目录可用性
+      try {
+        const registry = (ctx.get && ctx.get('workspaceRegistry')) || ctx.workspaceRegistry
+        const workspaces = registry && typeof registry.list === 'function' ? registry.list() : []
+        for (const workspace of workspaces) {
+          if (workspace.path && !fs.existsSync(workspace.path)) {
+            issues.push('工作区目录缺失：' + workspace.title + '（' + workspace.path + '）')
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+      // 工作区备份新鲜度
+      try {
+        const backupDir = path.join(boardDir, 'backups')
+        const latest = fs.existsSync(backupDir)
+          ? fs.readdirSync(backupDir).filter((name) => name.startsWith('workspace-')).sort().pop()
+          : null
+        const latestAt = latest ? fs.statSync(path.join(backupDir, latest)).mtimeMs : 0
+        if (Date.now() - latestAt > 24 * 3600 * 1000) {
+          backupWorkspaceRegistry()
+          fixes.push('刷新 workspace.json 备份')
+        }
+      } catch {
+        /* ignore */
+      }
+      // 卡住的任务（> 6h 未完成）
+      try {
+        const tasks = store.readActive().filter((entry) => entry.kind === 'task' && (entry.taskStatus || 'assigned') !== 'done')
+        for (const task of tasks) {
+          const age = Date.now() - (task.ts || 0)
+          if (age > 6 * 3600 * 1000) {
+            issues.push('任务「' + truncate(task.title || task.id, 24) + '」超过 6 小时未完成')
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+      // 日志近期警告数量
+      try {
+        const logFile = path.join(boardDir, 'session-bridge.log')
+        if (fs.existsSync(logFile)) {
+          const lines = fs.readFileSync(logFile, 'utf8').split(/\r?\n/).slice(-300)
+          const warnings = lines.filter((line) => /\[warn\]|失败|error|unhandled/i.test(line)).length
+          if (warnings > 25) issues.push('近期日志警告偏多（' + warnings + ' 条 / 300 行）')
+        }
+      } catch {
+        /* ignore */
+      }
+      const report = {
+        ts: Date.now(),
+        ok: issues.length === 0,
+        version: VERSION,
+        issues,
+        fixes,
+        counts: { groups: groups.length }
+      }
+      try {
+        fs.writeFileSync(healthFile, JSON.stringify(report, null, 2), 'utf8')
+      } catch {
+        /* ignore */
+      }
+      if (issues.length && options.alert !== false && maintainerId && Date.now() - lastHealthAlertAt > 30 * 60 * 1000) {
+        lastHealthAlertAt = Date.now()
+        try {
+          await ensureSessionLive(maintainerId)
+          const message = [
+            '【星桥值班 · 健康巡检】发现 ' + issues.length + ' 个问题：',
+            ...issues.slice(0, 8).map((issue) => '- ' + issue),
+            '',
+            '请检查并修复；修复后可用 health.check 复检。'
+          ].join('\n')
+          wakeSession(maintainerId, message, {})
+        } catch {
+          /* ignore */
+        }
+      }
+      return report
+    } catch (error) {
+      logger.warn('健康巡检失败：' + (error && error.message ? error.message : error))
+      return { ok: false, ts: Date.now(), issues: ['巡检异常：' + (error && error.message ? error.message : error)], fixes }
+    }
+  }
+  const healthTimer = setInterval(() => {
+    void runHealthCheck({})
+  }, 5 * 60 * 1000)
+  if (healthTimer && typeof healthTimer.unref === 'function') healthTimer.unref()
+  try {
+    ctx.effect(() => () => clearInterval(healthTimer), 'session-bridge: health timer')
+  } catch {
+    /* ignore */
+  }
+  setTimeout(() => { void runHealthCheck({ alert: false }) }, 20000).unref?.()
 
   // ---------------------------------------------------------------- 启动凭证
   // 注意：部署后 index.js 会被复制到 dsh-plugin/loaded/ 下执行，HERE 指向 loaded/，
