@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.9.6'
+const VERSION = '2.10.0'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
