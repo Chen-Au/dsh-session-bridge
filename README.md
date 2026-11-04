@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.7.0-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.8.0-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 
@@ -66,6 +66,13 @@
 - 5 分钟健康巡检 watchdog：自动恢复群管理/维护者在线、刷新工作区备份、重注册 HTTP API；
 - 检查项目：卡住任务、缺失工作区目录、日志告警、群管理配置；
 - `health.check` 随时手动复检，结果写入本地 `health.json`。
+
+### 7. 新会话复核与远程访问
+
+- 世界任务自动创建新会话/工作区前，先进入「待复核」；确认卡显示任务原文、工作区路径、新建会话数和权限说明；
+- 通过后才创建并唤醒；驳回则不创建；
+- 仅拦截插件自动创建，不影响你手动新建对话；
+- 远程访问推荐 Tailscale 私有组网：不需要公网 IP，`docs/REMOTE_TAILSCALE.md` 有完整步骤与安全检查。
 
 ---
 

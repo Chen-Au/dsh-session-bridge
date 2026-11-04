@@ -1,7 +1,8 @@
 {
   "name": "dsh-plugin-session-bridge",
-  "version": "2.7.0",
-  "description": "DSH multi-session social bridge: shared context, task routing, groups, reputation and an independent social window for DSH Desktop sessions.",
+  "version": "2.8.0",
+  "private": true,
+  "description": "跨会话经验桥：同一工作区的 DSH 会话自动同步通用注意事项、经验教训与任务交接；右侧栏看板可查看规矩、送达/接受情况并管理群组",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -12,25 +13,14 @@
   "files": [
     "index.js",
     "client.js",
-    "app.html",
-    "preview.py"
+    "cordis.patch.yml"
   ],
-  "license": "MIT",
-  "engines": {
-    "node": ">=20"
-  },
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web"
     }
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/Chen-Au/dsh-session-bridge.git"
-  },
-  "homepage": "https://github.com/Chen-Au/dsh-session-bridge#readme",
-  "bugs": {
-    "url": "https://github.com/Chen-Au/dsh-session-bridge/issues"
-  },
-  "author": "session-bridge contributors"
+  }
 }

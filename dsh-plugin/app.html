@@ -302,6 +302,10 @@
     --bg: #0b0b0d; --panel: rgba(22, 22, 26, 0.76); --line: rgba(200, 200, 210, 0.14);
     --line-strong: rgba(230, 230, 240, 0.3); --accent: #d4d4d8; --accent-2: #a1a1aa; --mint: #e4e4e7; --pink: #c4b5fd; --gold: #fafafa;
   }
+  .approval-card { border-color: color-mix(in srgb, var(--gold) 45%, var(--line)); background: linear-gradient(135deg, color-mix(in srgb, var(--gold) 10%, transparent), rgba(255,255,255,.02)); }
+  .approval-card .title { color: var(--gold); }
+  .approval-meta { color: var(--muted); font-size: 11px; line-height: 1.7; margin: 6px 0 8px; word-break: break-all; }
+  .approval-meta b { color: var(--text); font-weight: 600; }
   .theme-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin: 12px 0 16px; }
   .theme-card { border: 1px solid var(--line); border-radius: 13px; padding: 10px; cursor: pointer; background: rgba(255,255,255,.03); text-align: left; }
   .theme-card:hover { border-color: var(--line-strong); }
@@ -734,6 +738,22 @@
   }
   function renderWorld() {
     var html = ''
+    var pendingApprovals = (state.approvals || []).filter(function (item) { return item && item.status === 'pending' })
+    pendingApprovals.forEach(function (item) {
+      html += '<div class="card approval-card">'
+      html += '<div class="row"><div class="avatar">🔐</div><div style="flex:1;min-width:0">'
+      html += '<div class="who"><span class="name">待复核 · 自动创建</span><span class="time">' + when(item.createdAt) + '</span></div>'
+      html += '<div class="title">' + esc(item.title || '该任务将创建新会话/工作区') + '</div>'
+      html += '<div class="text" style="white-space:pre-wrap">' + esc(item.text || '') + '</div>'
+      html += '<div class="approval-meta">'
+      html += '<div>工作区：<b>' + esc(item.workspacePath || '由宿主新建') + '</b></div>'
+      if (item.memberCount) html += '<div>新建会话：<b>' + esc(item.memberCount) + ' 个</b></div>'
+      html += '<div>权限：继承 DSH 当前文件/工具策略；' + esc(item.permissionNote || '') + '</div>'
+      html += '<div>理由：' + esc(item.reason || '') + '</div>'
+      html += '</div>'
+      html += '<div class="chips"><button class="btn primary" data-approval="' + esc(item.id) + '">通过并执行</button><button class="btn" data-reject="' + esc(item.id) + '">驳回</button></div>'
+      html += '</div></div></div>'
+    })
     ;(state.world || []).slice().reverse().forEach(function (entry) {
       var who = identityOf(entry.author)
       html += '<div class="card">'
@@ -1255,6 +1275,30 @@
       if (jump) jumpToSession(jump.getAttribute('data-jump'), jump.getAttribute('data-title'))
     })
     $('worldFeed').addEventListener('click', function (event) {
+      var approve = event.target.closest('[data-approval]')
+      if (approve) {
+        var approvalId = approve.getAttribute('data-approval')
+        var item = (state.approvals || []).find(function (entry) { return entry.id === approvalId })
+        if (!item) { toast('待复核记录已失效', true); refresh(); return }
+        approve.disabled = true
+        command('world.post', { text: item.text, approved: true, approvalId: item.id }).then(function (result) {
+          if (!result || result.ok === false) { approve.disabled = false; toast('执行失败：' + (result && result.error || '未知错误'), true); return }
+          if (result.pendingApproval) { approve.disabled = false; toast('复核未完成：' + (result.message || ''), true); return }
+          toast('已通过并派发世界任务')
+          refresh()
+        })
+        return
+      }
+      var reject = event.target.closest('[data-reject]')
+      if (reject) {
+        reject.disabled = true
+        command('approval.reject', { id: reject.getAttribute('data-reject') }).then(function (result) {
+          if (!result || result.ok === false) { reject.disabled = false; toast('驳回失败：' + (result && result.error || '未知错误'), true); return }
+          toast('已驳回该任务')
+          refresh()
+        })
+        return
+      }
       var file = event.target.closest('[data-file]')
       if (file) { previewFile(file.getAttribute('data-file')); return }
       var jump = event.target.closest('[data-jump]')

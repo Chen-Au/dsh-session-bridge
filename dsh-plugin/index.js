@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.7.0'
+const VERSION = '2.8.0'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -86,6 +86,8 @@ const DEFAULT_CONFIG = {
   maxStored: 80,
   /** 主机侧自动捕获用户消息里的「共享给其他会话」指令 */
   autoCapture: true,
+  /** 世界任务自动创建新会话/工作区前，是否先让用户复核 */
+  approveAutoCreate: true,
   /** 是否注入系统提示词里的使用说明 */
   instructions: true,
   /** 系统提示词说明段的顺序（第一方 TEAM_POLICY=600 / PTC_ONLY=800 之间） */
@@ -958,6 +960,22 @@ export function apply(ctx, config = {}) {
 
   const boardDir = resolveBoardDir(cfg)
   ensureDir(boardDir)
+  const approvalsPath = path.join(boardDir, 'approvals.json')
+  const readApprovals = () => {
+    try {
+      const raw = JSON.parse(fs.readFileSync(approvalsPath, 'utf8'))
+      return Array.isArray(raw) ? raw : []
+    } catch {
+      return []
+    }
+  }
+  const writeApprovals = (list) => {
+    try {
+      fs.writeFileSync(approvalsPath, JSON.stringify((Array.isArray(list) ? list : []).slice(-80), null, 2), 'utf8')
+    } catch (error) {
+      logger.warn('写入待复核记录失败：' + (error && error.message ? error.message : error))
+    }
+  }
 
   // ---------------------------------------------------------------- 日志
   const logFile = path.join(boardDir, LOG_FILE)
@@ -992,6 +1010,7 @@ export function apply(ctx, config = {}) {
     if (typeof raw.autoPrompt === 'boolean') cfg.autoPrompt = raw.autoPrompt
     if (typeof raw.autoCapture === 'boolean') cfg.autoCapture = raw.autoCapture
     if (typeof raw.askOnCreate === 'boolean') cfg.askOnCreate = raw.askOnCreate
+    if (typeof raw.approveAutoCreate === 'boolean') cfg.approveAutoCreate = raw.approveAutoCreate
     if (typeof raw.instructions === 'boolean') cfg.instructions = raw.instructions
     if (raw.scope !== undefined) cfg.scope = raw.scope === 'global' ? 'global' : 'workspace'
     if (raw.maxShown !== undefined) cfg.maxShown = Math.max(1, Math.min(30, toNumber(raw.maxShown, cfg.maxShown)))
@@ -1011,6 +1030,7 @@ export function apply(ctx, config = {}) {
     autoPrompt: cfg.autoPrompt !== false,
     autoCapture: cfg.autoCapture !== false,
     askOnCreate: cfg.askOnCreate !== false,
+    approveAutoCreate: cfg.approveAutoCreate !== false,
     instructions: cfg.instructions !== false,
     scope: cfg.scope === 'global' ? 'global' : 'workspace',
     maxShown: cfg.maxShown,
@@ -1022,7 +1042,7 @@ export function apply(ctx, config = {}) {
     const input = patch && typeof patch === 'object' ? patch : {}
     const current = readSavedSettings()
     const next = { ...current }
-    for (const key of ['injectMode', 'autoPrompt', 'autoCapture', 'askOnCreate', 'instructions', 'scope', 'maxShown', 'maxChars', 'maxStored']) {
+    for (const key of ['injectMode', 'autoPrompt', 'autoCapture', 'askOnCreate', 'approveAutoCreate', 'instructions', 'scope', 'maxShown', 'maxChars', 'maxStored']) {
       if (input[key] !== undefined) next[key] = input[key]
     }
     if (input.router !== undefined) {
@@ -1829,6 +1849,7 @@ export function apply(ctx, config = {}) {
       skills: skillStore.list(),
       profiles,
       world: worldEntriesOf(),
+      approvals: readApprovals().filter((item) => item && item.status === 'pending'),
       permissions: readPermissionsOf(boardDir).grants,
       capabilities: {
         createSession: Boolean(ctx.agents && typeof ctx.agents.create === 'function'),
@@ -4749,6 +4770,67 @@ export function apply(ctx, config = {}) {
         decision.sessionId = ''
         decision.reason = `用户明确要求全新；${decision.reason || ''}`
       }
+      // 自动创建新会话/工作区前，先让用户复核（仅针对方舟自动创建，不拦手动新对话）。
+      if (decision.route === 'new') {
+        const approvalRef = String((payload && payload.approvalId) || '').trim()
+        const approvalsNow = readApprovals()
+        let approvalHit = null
+        if (approvalRef) {
+          approvalHit = approvalsNow.find((item) => item && (item.id === approvalRef || item.id.startsWith(approvalRef))) || null
+          if (approvalHit && approvalHit.status === 'rejected') {
+            return { ok: false, error: '该任务已被驳回，如需重新执行请重新发布任务。' }
+          }
+          if (approvalHit && approvalHit.status === 'pending' && payload.approved === true) {
+            approvalHit.status = 'approved'
+            approvalHit.approvedAt = Date.now()
+            approvalHit.approvedBy = 'panel'
+            writeApprovals(approvalsNow)
+          }
+        }
+        const approvalBypass = payload.approved === true && approvalHit && (approvalHit.status === 'approved' || approvalHit.status === 'pending')
+        if (cfg.approveAutoCreate !== false && !approvalBypass) {
+          const existingPending = approvalsNow.find(
+            (item) => item && item.status === 'pending' && String(item.text || '') === text && Date.now() - (item.createdAt || 0) < 30 * 60 * 1000
+          )
+          if (existingPending) return { ok: true, pendingApproval: true, approval: existingPending }
+          const requestedWorkspace = decision.folderPath || ''
+          const approval = {
+            id: 'ap-' + Date.now().toString(36) + '-' + randomBytes(3).toString('hex'),
+            status: 'pending',
+            createdAt: Date.now(),
+            text,
+            title: text.slice(0, 60),
+            route: decision.route,
+            engine: decision.engine,
+            reason: decision.reason,
+            memberCount: decision.engine === 'new-members' ? requestedMemberCount : 0,
+            workspacePath: requestedWorkspace,
+            workspaceName: decision.workspaceName || '',
+            permissionNote: requestedWorkspace
+              ? '工作区：' + requestedWorkspace + '；继承 DSH 当前文件/工具权限'
+              : '由宿主新建工作区；继承 DSH 当前文件/工具权限',
+            source: 'world.post'
+          }
+          approvalsNow.push(approval)
+          writeApprovals(approvalsNow)
+          addEntry(
+            {
+              title: '待复核：' + text.slice(0, 20),
+              text: '世界任务需要创建新会话/工作区，等待用户在星桥窗口复核。\n任务：' + text.slice(0, 300),
+              kind: 'chat',
+              scope: 'global',
+              channel: 'world',
+              author: 'panel',
+              origin: 'panel',
+              hiddenFromChat: true,
+              skipDedupe: true
+            },
+            'panel'
+          )
+          logger.info('世界任务已进入待复核：' + approval.id + '，' + text.slice(0, 60))
+          return { ok: true, pendingApproval: true, approval, message: '已进入待复核，请在星桥窗口确认' }
+        }
+      }
       let assigned = []
       let createdSession = ''
       let createdTitle = ''
@@ -5179,6 +5261,23 @@ export function apply(ctx, config = {}) {
       }
       logger.info(`会话 ${shortSid(sessionId)} 补挂到工作区 ${workspace.path}${renamed ? `，改名 ${renamed}` : ''}`)
       return { ok: true, sessionId, workspacePath: workspace.path, workspaceTitle: workspace.title, renamed }
+    }
+    if (action === 'approval.list') {
+      return { ok: true, approvals: readApprovals().filter((item) => item && item.status === 'pending') }
+    }
+    if (action === 'approval.reject') {
+      const approvalRef = String((payload && payload.id) || '').trim()
+      if (!approvalRef) return { ok: false, error: '缺少待复核 id' }
+      const approvals = readApprovals()
+      const target = approvals.find((item) => item && (item.id === approvalRef || item.id.startsWith(approvalRef)))
+      if (!target) return { ok: false, error: '找不到待复核记录' }
+      if (target.status !== 'pending') return { ok: false, error: '该记录已处理：' + target.status }
+      target.status = 'rejected'
+      target.rejectedAt = Date.now()
+      target.rejectedBy = 'panel'
+      writeApprovals(approvals)
+      logger.info('世界任务复核被驳回：' + target.id)
+      return { ok: true, approval: target }
     }
     if (action === 'config.update') {
       return saveSettingsPatch(payload.patch)

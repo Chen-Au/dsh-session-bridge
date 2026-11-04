@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.7.0-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.8.0-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 **English** | [简体中文](README.md)
@@ -79,6 +79,13 @@ The plugin does not take over the right sidebar. Click **"星桥"** at the botto
 - Health checks cover stuck tasks, missing workspace directories, log warnings, and group-manager configuration.
 - A stalled-task retry loop revives disconnected participants, sends a retry prompt, and reports the action in `health.json`.
 - `health.check` runs the same checks on demand.
+
+### 7. Approval gate and remote access
+
+- Before the plugin auto-creates a new session or workspace for a world task, the task enters a **pending review** state.
+- The review card shows the task text, workspace path, number of sessions, and the permission note.
+- Approve to create and wake the task; reject to cancel. Manual conversations are not intercepted.
+- For remote access without a public IP, the recommended setup is a private **Tailscale** tailnet; see [docs/REMOTE_TAILSCALE.md](./docs/REMOTE_TAILSCALE.md).
 
 ## Install
 
