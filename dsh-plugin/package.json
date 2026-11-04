@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "dsh-plugin-session-bridge",
   "version": "2.0.2",
   "description": "DSH multi-session social bridge: shared context, task routing, groups, reputation and an independent social window for DSH Desktop sessions.",
@@ -25,11 +25,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Chen-Au/DSH-models-together.git"
+    "url": "https://github.com/Chen-Au/dsh-session-bridge.git"
   },
-  "homepage": "https://github.com/Chen-Au/DSH-models-together#readme",
+  "homepage": "https://github.com/Chen-Au/dsh-session-bridge#readme",
   "bugs": {
-    "url": "https://github.com/Chen-Au/DSH-models-together/issues"
+    "url": "https://github.com/Chen-Au/dsh-session-bridge/issues"
   },
   "author": "session-bridge contributors"
 }
