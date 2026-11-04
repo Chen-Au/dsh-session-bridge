@@ -58,7 +58,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.2.2'
+const VERSION = '2.3.0'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -2724,6 +2724,19 @@ export function apply(ctx, config = {}) {
   }
 
   /** 没有匹配成员时：尝试创建一个新会话并让它接手（失败则返回可读错误，由用户手动新建）。 */
+  const MEMBER_CODENAMES = ['青岚', '白汀', '远山', '流光', '拾光', '临界', '云舟', '星野', '墨羽', '初雪', '长风', '澄川', '观澜', '听雨', '折光', '栖迟']
+  const prettyMemberName = (cwd, index, text) => {
+    const base = path.basename(String(cwd || '')).replace(/-mw[0-9a-z]+$/i, '').trim()
+    const project = base && !/^world-workspaces?$/i.test(base) && !/^default-workspace$/i.test(base)
+      ? base.slice(0, 14)
+      : '星桥'
+    let hash = 0
+    const seed = String(cwd || '') + '|' + String(text || '') + '|' + index
+    for (let cursor = 0; cursor < seed.length; cursor += 1) hash = (hash * 31 + seed.charCodeAt(cursor)) >>> 0
+    const codename = MEMBER_CODENAMES[(hash + index * 5) % MEMBER_CODENAMES.length]
+    return { title: project + ' · ' + codename, codename, project }
+  }
+
   const createSessionForTask = async (cwdOverride, titleHint) => {
     const cwd = cwdOverride || defaultWorkspaceForRule()
     if (!cwd) return { ok: false, error: '没有可用的工作目录' }
@@ -4496,13 +4509,26 @@ export function apply(ctx, config = {}) {
           }
         }
         for (let index = 0; index < requestedMemberCount; index += 1) {
-          const created = await createSessionForTask(
-            cwdOverride || undefined,
-            '世界任务·新成员' + (index + 1) + '：' + truncate(text, 18)
-          )
+          const prettyName = prettyMemberName(cwdOverride, index, text)
+          const created = await createSessionForTask(cwdOverride || undefined, prettyName.title)
           if (created.ok) {
-            createdSessions.push({ id: created.sessionId, title: created.title || '新成员 ' + (index + 1) })
-            assigned.push({ id: created.sessionId, title: '新成员 ' + (index + 1), score: 0 })
+            try {
+              let hash = 0
+              for (let cursor = 0; cursor < created.sessionId.length; cursor += 1) hash = (hash * 31 + created.sessionId.charCodeAt(cursor)) >>> 0
+              identityStore.set(created.sessionId, {
+                handle: uniqueHandle(prettyName.codename, created.sessionId),
+                avatar: AVATAR_PALETTE[hash % AVATAR_PALETTE.length],
+                role: '新成员',
+                skills: [],
+                style: '',
+                persona: '',
+                updatedAt: Date.now()
+              })
+            } catch {
+              /* ignore */
+            }
+            createdSessions.push({ id: created.sessionId, title: created.title || prettyName.title })
+            assigned.push({ id: created.sessionId, title: created.title || prettyName.title, score: 0 })
             if (!createdSession) {
               createdSession = created.sessionId
               createdTitle = created.title || ''
@@ -4530,6 +4556,51 @@ export function apply(ctx, config = {}) {
           assigned = [{ id: createdSession, title: '新会话', score: 0 }]
         } else {
           createError = createError ? `${createError}；${created.error}` : created.error
+        }
+      }
+      let createdGroup = null
+      if (assigned.length >= 2) {
+        try {
+          const memberIds = [...new Set(assigned.map((item) => item.id))]
+          const baseName = ('协作：' + String(text).replace(/\s+/g, ' ')).slice(0, 24)
+          const groupsNow = groupStore.read()
+          let groupName = baseName
+          let suffix = 2
+          while (groupsNow.some((group) => group.name === groupName)) {
+            groupName = baseName + ' ' + suffix
+            suffix += 1
+          }
+          const firstSession = sessionsNow.find((session) => session.id === memberIds[0])
+          const group = {
+            id: 'g-' + Date.now().toString(36) + '-' + randomBytes(3).toString('hex'),
+            name: groupName,
+            workspace: (firstSession && firstSession.cwd) || '',
+            goal: text.slice(0, 300),
+            managerSessionId: '',
+            sessionIds: memberIds,
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+          }
+          groupsNow.push(group)
+          groupStore.write(groupsNow)
+          addEntry(
+            {
+              title: '协作群：' + groupName,
+              text: '为这次世界任务自动建群（' + memberIds.length + ' 人）。任务：' + text,
+              kind: 'chat',
+              groupId: group.id,
+              author: 'panel',
+              origin: 'panel',
+              mentions: memberIds,
+              tags: '@自动建群',
+              skipDedupe: true
+            },
+            'panel'
+          )
+          createdGroup = { id: group.id, name: group.name, members: memberIds.length }
+          logger.info('世界任务自动建群：' + groupName + '（' + memberIds.length + ' 人）')
+        } catch (error) {
+          logger.warn('世界任务自动建群失败：' + (error && error.message ? error.message : error))
         }
       }
       const note = addEntry(
@@ -4575,6 +4646,7 @@ export function apply(ctx, config = {}) {
           ? [
               '【新成员报到 · 用户在世界里要求扩充成员】',
               `你刚刚作为根会话加入工作区，不是子代理。`,
+              createdGroup ? `（已自动拉协作群「${createdGroup.name}」，可到群聊里和队友打招呼）` : '',
               '',
               '请先用 session_profile（action=update）提交一句话申报（方向/擅长/需要什么），再用一句话介绍自己；',
               '不要执行【任务】主体，等待主责成员或群主分配；有想法可以主动请缨。'
@@ -4582,6 +4654,7 @@ export function apply(ctx, config = {}) {
           : [
               '【世界任务 · 用户 @ 你】',
               createdWorkspace ? `（本任务新开了工作区：${createdWorkspace}）` : '',
+              createdGroup ? `（已自动拉协作群「${createdGroup.name}」）` : '',
               `路由理由：${decision.reason}`,
               '',
               text,
@@ -4604,6 +4677,7 @@ export function apply(ctx, config = {}) {
         createdSession,
         createdSessionTitle: createdTitle,
         createdSessions,
+        createdGroup,
         createdWorkspace,
         createError,
         requestIds,
@@ -4652,6 +4726,7 @@ export function apply(ctx, config = {}) {
       } catch (error) {
         return { ok: false, error: `会话已恢复但改名失败：${error && error.message ? error.message : error}`, resumed }
       }
+      if (renamed) titleCache.delete(sessionId)
       logger.info(`会话 ${shortSid(sessionId)} 恢复为 live${renamed ? `，改名 ${renamed}` : ''}`)
       return { ok: true, sessionId, resumed, renamed }
     }

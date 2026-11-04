@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.2.2-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.3.0-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 
@@ -50,6 +50,9 @@
 - 点击成员/任务可跳转回主窗口对应会话。
 
 ### 5. 世界 @ 与新成员
+
+- 多人任务（≥2 人）会自动创建协作群，新成员直接进群；
+- 新成员命名采用「项目名 · 中文代号」，并自动配头像/角色。
 
 - 世界任务输入框支持 `@` 光标联想，正文 @ 可直接把任务派给指定会话；
 - 说「要新成员/新会话」时由宿主创建**根会话**（并尽量按正文里的工作区名入驻），不会把现有 agent 的子代理冒充成员；

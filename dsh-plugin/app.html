@@ -804,13 +804,16 @@
     command('world.post', { text: text }).then(function (result) {
       $('worldSend').disabled = false
       if (!result || result.ok === false) { toast('发布失败：' + (result && result.error || '未知错误'), true); return }
+      var notes = []
       if (result.createdSessions && result.createdSessions.length) {
-        toast('已创建 ' + result.createdSessions.length + ' 个新成员：' + result.createdSessions.map(function (item) { return item.title }).join('、'))
+        notes.push('新成员：' + result.createdSessions.map(function (item) { return item.title }).join('、'))
       } else if (result.createdSessionTitle) {
-        toast('已新建会话：' + result.createdSessionTitle)
-      } else {
-        toast('已发布到世界，等待处理')
+        notes.push('新会话：' + result.createdSessionTitle)
       }
+      if (result.createdGroup && result.createdGroup.name) {
+        notes.push('已自动拉群「' + result.createdGroup.name + '」')
+      }
+      toast(notes.length ? notes.join('；') : '已发布到世界，等待处理')
       refresh()
     }).catch(function (error) {
       $('worldSend').disabled = false
