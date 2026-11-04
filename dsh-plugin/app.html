@@ -37,9 +37,9 @@
     inset: 0;
     pointer-events: none;
     background:
-      radial-gradient(900px 500px at 12% -10%, rgba(124, 92, 255, 0.28), transparent 60%),
-      radial-gradient(800px 520px at 108% 8%, rgba(79, 216, 255, 0.16), transparent 62%),
-      radial-gradient(700px 600px at 50% 120%, rgba(255, 122, 200, 0.12), transparent 60%);
+      radial-gradient(900px 500px at 12% -10%, color-mix(in srgb, var(--accent) 28%, transparent), transparent 60%),
+      radial-gradient(800px 520px at 108% 8%, color-mix(in srgb, var(--accent-2) 16%, transparent), transparent 62%),
+      radial-gradient(700px 600px at 50% 120%, color-mix(in srgb, var(--pink) 12%, transparent), transparent 60%);
     z-index: -2;
   }
   body::after {
@@ -286,6 +286,33 @@
   .msg.collapsible.expanded { display: block; cursor: zoom-out; }
   .scroll::-webkit-scrollbar { width: 6px; height: 6px; }
   .scroll::-webkit-scrollbar-thumb { background: rgba(124,92,255,.35); border-radius: 6px; }
+  body[data-theme="forest"] {
+    --bg: #06120b; --panel: rgba(12, 30, 20, 0.74); --line: rgba(110, 231, 183, 0.16);
+    --line-strong: rgba(134, 239, 172, 0.34); --accent: #34d399; --accent-2: #a3e635; --mint: #86efac; --pink: #f0abfc;
+  }
+  body[data-theme="sunset"] {
+    --bg: #150b08; --panel: rgba(40, 20, 18, 0.74); --line: rgba(251, 146, 60, 0.18);
+    --line-strong: rgba(251, 191, 36, 0.36); --accent: #fb7185; --accent-2: #fbbf24; --mint: #fcd34d; --pink: #f472b6;
+  }
+  body[data-theme="ocean"] {
+    --bg: #04101a; --panel: rgba(8, 26, 40, 0.74); --line: rgba(56, 189, 248, 0.18);
+    --line-strong: rgba(125, 211, 252, 0.38); --accent: #38bdf8; --accent-2: #22d3ee; --mint: #67e8f9; --pink: #818cf8;
+  }
+  body[data-theme="mono"] {
+    --bg: #0b0b0d; --panel: rgba(22, 22, 26, 0.76); --line: rgba(200, 200, 210, 0.14);
+    --line-strong: rgba(230, 230, 240, 0.3); --accent: #d4d4d8; --accent-2: #a1a1aa; --mint: #e4e4e7; --pink: #c4b5fd; --gold: #fafafa;
+  }
+  .theme-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin: 12px 0 16px; }
+  .theme-card { border: 1px solid var(--line); border-radius: 13px; padding: 10px; cursor: pointer; background: rgba(255,255,255,.03); text-align: left; }
+  .theme-card:hover { border-color: var(--line-strong); }
+  .theme-card.active { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }
+  .theme-dots { display: flex; gap: 5px; margin-bottom: 7px; }
+  .theme-dots span { width: 15px; height: 15px; border-radius: 50%; border: 1px solid rgba(255,255,255,.18); }
+  .theme-card b { display: block; font-size: 12px; }
+  .theme-card small { color: var(--muted); font-size: 10px; }
+  .theme-colors { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .theme-colors label { display: flex; gap: 5px; align-items: center; color: var(--muted); font-size: 11px; }
+  .theme-colors input[type=color] { width: 30px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: transparent; }
   @media (max-width: 980px) { .aside { display: none; } }
 </style>
 </head>
@@ -306,6 +333,7 @@
     </div>
     <div class="spacer"></div>
     <div class="stat" id="statLine">连接中…</div>
+    <button class="icon-btn" id="themeBtn" title="主题">🎨</button>
     <button class="icon-btn" id="refreshBtn" title="刷新">↻</button>
     <button class="icon-btn" id="closeBtn" title="关闭窗口">✕</button>
   </header>
@@ -371,6 +399,20 @@
   </main>
 </div>
 <div class="mention-pop" id="mentionPop"></div>
+<div class="modal-mask" id="themeModal">
+  <div class="modal" style="width:min(560px,92vw)">
+    <h3>主题工坊</h3>
+    <p>挑一个预设，或用自定义三色生成你的星桥主题。</p>
+    <div class="theme-grid" id="themeGrid"></div>
+    <div class="theme-colors">
+      <label>主色 <input type="color" id="themeAccent" value="#7c5cff" /></label>
+      <label>辅色 <input type="color" id="themeAccent2" value="#4fd8ff" /></label>
+      <label>背景 <input type="color" id="themeBg" value="#06070f" /></label>
+      <button class="btn primary" id="themeApply">应用自定义</button>
+      <button class="btn" id="themeReset">恢复默认</button>
+    </div>
+  </div>
+</div>
 <div class="modal-mask" id="fileModal">
   <div class="modal file-modal-box">
     <div class="bar" style="margin-bottom:10px">
@@ -411,6 +453,14 @@
   var AVATARS = ['🦊','🐼','🐯','🐸','🦁','🐨','🐧','🦉','🐙','🦄','🐳','🦖','👾','🤖','🧠','🎯','🚀','🌙','🔥','💎','🪐','🍀','🛰️']
   var SKILL_TAGS = ['审稿','画图','仿真','写作','排版','数据','代码','协调','答辩','检索']
   var PERSONA_STYLES = ['严谨','简洁','幽默','温和','犀利','热情','佛系']
+  var THEMES = [
+    { name: 'nebula', label: '星云', desc: '默认深空紫', dots: ['#7c5cff', '#4fd8ff', '#06070f'] },
+    { name: 'forest', label: '森林', desc: '青苔与荧光绿', dots: ['#34d399', '#a3e635', '#06120b'] },
+    { name: 'sunset', label: '日落', desc: '暖橙与玫红', dots: ['#fb7185', '#fbbf24', '#150b08'] },
+    { name: 'ocean', label: '海洋', desc: '冷蓝与潮汐', dots: ['#38bdf8', '#22d3ee', '#04101a'] },
+    { name: 'mono', label: '极简', desc: '黑灰与银白', dots: ['#d4d4d8', '#a1a1aa', '#0b0b0d'] }
+  ]
+  var currentTheme = { name: 'nebula', custom: null }
   var KIND = { note:'经验', handoff:'交接', lesson:'教训', decision:'约定', request:'请求', command:'命令', task:'任务', chat:'交流' }
   var state = { rules: [], groups: [], sessions: [], world: [], reputation: [], config: {}, profiles: {}, deliveries: {} }
   var sessionById = {}
@@ -775,10 +825,14 @@
           var fileChips = (entry.files || []).map(function (file) {
             return '<button class="chip file file-chip" data-file="' + esc(file) + '">📎 ' + esc(short(String(file).split(/[\\/]/).pop() || file, 30)) + '</button>'
           }).join('')
+          var mentionMarks = (entry.mentions || []).filter(function (id) { return id !== 'panel' }).map(function (id) {
+            var marked = identityOf(id)
+            return '<button class="chip jump" data-jump="' + esc(id) + '" data-title="' + esc((sessionById[id] && sessionById[id].title) || marked.handle) + '">@' + esc(marked.handle) + '</button>'
+          }).join('')
           return '<div class="bubble' + (mine ? ' mine' : '') + '"><div class="avatar clickable" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + avatarHtml(who.avatar) + '</div>' +
             '<div class="body"><div class="head"><b class="jump" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + esc(who.handle) + '</b><small>' + esc(kind) + ' · ' + when(entry.ts) + '</small></div>' +
             '<div class="msg' + (collapsible ? ' collapsible' : '') + '" data-expandable="' + (collapsible ? '1' : '0') + '" title="' + (collapsible ? '点击展开/收起' : '') + '">' + esc(chatBody) + '</div>' +
-            (fileChips ? '<div class="chips">' + fileChips + '</div>' : '') + '</div></div>'
+            ((fileChips || mentionMarks) ? '<div class="chips">' + mentionMarks + fileChips + '</div>' : '') + '</div></div>'
         }).join('')
       : '<div class="empty">群里还很安静，说点什么或发起一个讨论吧。</div>'
     $('groupChat').scrollTop = $('groupChat').scrollHeight
@@ -1008,6 +1062,62 @@
       send()
     }
   }
+  function applyTheme(theme) {
+    currentTheme = theme && theme.name ? theme : { name: 'nebula', custom: null }
+    var body = document.body
+    var root = document.documentElement
+    if (currentTheme.name === 'custom' && currentTheme.custom) {
+      body.dataset.theme = 'custom'
+      root.style.setProperty('--accent', currentTheme.custom.accent)
+      root.style.setProperty('--accent-2', currentTheme.custom.accent2)
+      root.style.setProperty('--bg', currentTheme.custom.bg)
+      root.style.setProperty('--panel', 'color-mix(in srgb, ' + currentTheme.custom.bg + ' 72%, transparent)')
+        || root.style.setProperty('--panel', 'rgba(17,19,38,.72)')
+    } else {
+      body.dataset.theme = currentTheme.name === 'custom' ? 'nebula' : currentTheme.name
+      root.style.removeProperty('--accent')
+      root.style.removeProperty('--accent-2')
+      root.style.removeProperty('--bg')
+      root.style.removeProperty('--panel')
+    }
+    try {
+      localStorage.setItem('nebula-theme', JSON.stringify(currentTheme))
+    } catch (e) {
+      /* ignore */
+    }
+    renderThemeGrid()
+  }
+  function loadTheme() {
+    try {
+      var saved = JSON.parse(localStorage.getItem('nebula-theme') || 'null')
+      if (saved && saved.name) {
+        applyTheme(saved)
+        return
+      }
+    } catch (e) {
+      /* ignore */
+    }
+    applyTheme({ name: 'nebula', custom: null })
+  }
+  function renderThemeGrid() {
+    var grid = $('themeGrid')
+    if (!grid) return
+    var active = currentTheme.name
+    grid.innerHTML = THEMES.map(function (theme) {
+      return '<button class="theme-card' + (active === theme.name ? ' active' : '') + '" data-theme-name="' + esc(theme.name) + '">' +
+        '<div class="theme-dots">' + theme.dots.map(function (dot) { return '<span style="background:' + esc(dot) + '"></span>' }).join('') + '</div>' +
+        '<b>' + esc(theme.label) + '</b><small>' + esc(theme.desc) + '</small></button>'
+    }).join('')
+    if (currentTheme.custom) {
+      $('themeAccent').value = currentTheme.custom.accent
+      $('themeAccent2').value = currentTheme.custom.accent2
+      $('themeBg').value = currentTheme.custom.bg
+    }
+  }
+  function openThemeModal() {
+    renderThemeGrid()
+    $('themeModal').classList.add('open')
+  }
   function bindEvents() {
     document.querySelectorAll('.tab').forEach(function (tab) {
       tab.addEventListener('click', function () {
@@ -1071,6 +1181,31 @@
     $('mentionPop').addEventListener('click', function (event) {
       var item = event.target.closest('[data-mention-id]')
       if (item) selectMention(item.getAttribute('data-mention-handle'))
+    })
+    $('themeBtn').addEventListener('click', openThemeModal)
+    $('themeGrid').addEventListener('click', function (event) {
+      var card = event.target.closest('[data-theme-name]')
+      if (!card) return
+      applyTheme({ name: card.getAttribute('data-theme-name'), custom: null })
+      toast('主题已切换：' + (THEMES.find(function (item) { return item.name === card.getAttribute('data-theme-name') }) || {}).label)
+    })
+    $('themeApply').addEventListener('click', function () {
+      applyTheme({
+        name: 'custom',
+        custom: {
+          accent: $('themeAccent').value,
+          accent2: $('themeAccent2').value,
+          bg: $('themeBg').value
+        }
+      })
+      toast('自定义主题已应用')
+    })
+    $('themeReset').addEventListener('click', function () {
+      applyTheme({ name: 'nebula', custom: null })
+      toast('已恢复默认主题')
+    })
+    $('themeModal').addEventListener('click', function (event) {
+      if (event.target === $('themeModal')) $('themeModal').classList.remove('open')
     })
     $('fileClose').addEventListener('click', function () { $('fileModal').classList.remove('open'); $('fileBody').innerHTML = '' })
     $('fileModal').addEventListener('click', function (event) {
@@ -1164,6 +1299,7 @@
     })
   }
   bindEvents()
+  loadTheme()
   refresh(true)
   setInterval(function () { refresh(false) }, 5000)
 })()

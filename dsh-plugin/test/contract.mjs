@@ -196,11 +196,11 @@ function assertJsonSchema(node, where) {
 }
 
 await check('恰好注册 session_share / session_board / session_ask', () => {
-  assert.deepEqual([...toolByName.keys()].sort(), ['group_rule', 'group_skill', 'session_ask', 'session_board', 'session_discuss', 'session_identity', 'session_like', 'session_nudge', 'session_profile', 'session_share'])
+  assert.deepEqual([...toolByName.keys()].sort(), ['group_member', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_discuss', 'session_identity', 'session_like', 'session_nudge', 'session_profile', 'session_share'])
   assert.equal(captured.harnessLogs.filter(([level]) => level === 'error').length, 0, '注册阶段不应有 error 级日志')
 })
 
-for (const name of ['session_share', 'session_board', 'session_ask', 'session_profile', 'session_nudge', 'group_rule', 'session_like', 'session_discuss', 'session_identity', 'group_skill']) {
+for (const name of ['session_share', 'session_board', 'session_ask', 'session_profile', 'session_nudge', 'group_rule', 'session_like', 'session_discuss', 'session_identity', 'group_skill', 'group_member']) {
   check(`${name}.parameters 是对象根 JSON Schema`, () => {
     const tool = toolByName.get(name)
     assert.ok(tool, `缺少工具 ${name}`)
@@ -346,15 +346,15 @@ await check('查重生效（相同内容不重复发布）', async () => {
 
 await check('session_board status 报告版本与注册结果', async () => {
   const result = String(await board.execute({ action: 'status' }, { agent: rootAgent }))
-  assert.match(result, /session-bridge v2\.4\.1/)
-  assert.match(result, /工具：session_share, session_ask, session_nudge, group_rule, session_like, session_discuss, session_identity, group_skill, session_profile, session_board/)
+  assert.match(result, /session-bridge v2\.5\.0/)
+  assert.match(result, /工具：session_share, session_ask, session_nudge, group_rule, session_like, session_discuss, session_identity, group_member, group_skill, session_profile, session_board/)
   assert.match(result, /看板 API=是/)
   assert.ok(!/失败=(session_share|session_board)/.test(result), '不应有注册失败的工具')
 })
 
 await check('子会话可只读查看经验板（list / status）', async () => {
   const status = String(await board.execute({ action: 'status' }, { agent: subAgent }))
-  assert.match(status, /session-bridge v2\.4\.1/)
+  assert.match(status, /session-bridge v2\.5\.0/)
   const listed = String(await board.execute({ action: 'list' }, { agent: subAgent }))
   assert.match(listed, /跨会话经验板/)
 })
@@ -449,7 +449,7 @@ await check('GET state 返回规则/群组/会话/送达结构', async () => {
   const { res, json } = await callState()
   assert.equal(res.out.status, 200)
   assert.equal(json.ok, true)
-  assert.equal(json.version, '2.4.1')
+  assert.equal(json.version, '2.5.0')
   assert.ok(Array.isArray(json.rules) && json.rules.length >= 1)
   assert.ok(Array.isArray(json.groups))
   assert.ok(Array.isArray(json.sessions) && json.sessions.length >= 2)
@@ -1058,8 +1058,8 @@ await check('面板命令：删除规矩与群组', async () => {
 
 await check('插件启动凭证写入正确（工具/注册/版本/API）', () => {
   const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))
-  assert.equal(receipt.version, '2.4.1')
-  assert.deepEqual(receipt.tools.slice().sort(), ['group_rule', 'group_skill', 'session_ask', 'session_board', 'session_discuss', 'session_identity', 'session_like', 'session_nudge', 'session_profile', 'session_share'])
+  assert.equal(receipt.version, '2.5.0')
+  assert.deepEqual(receipt.tools.slice().sort(), ['group_member', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_discuss', 'session_identity', 'session_like', 'session_nudge', 'session_profile', 'session_share'])
   assert.deepEqual(receipt.failedTools, [])
   assert.equal(receipt.registration.section, true)
   assert.equal(receipt.registration.context, true)

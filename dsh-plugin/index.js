@@ -36,6 +36,7 @@ import os from 'node:os'
 import { randomBytes, createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import zlib from 'node:zlib'
+import { execFile } from 'node:child_process'
 
 // 群内请求要唤醒其它会话：DSH 的 Agent.followup() 需要一个带 id/source 的 UserMessage。
 // 宿主内可解析 @deepseek-ai/dsh-llm 时用官方构造器；解析不到时退回结构等价的普通对象。
@@ -58,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.4.1'
+const VERSION = '2.5.0'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -3941,6 +3942,105 @@ export function apply(ctx, config = {}) {
   })
 
   register({
+    name: 'group_member',
+    description: '群管理专用：根据组内需要拉人入群或踢出成员（action=add/remove/list）。拉人后会给新成员发入群欢迎/申报提示；踢人只移出群，不删除会话。',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['add', 'remove', 'list'], description: 'add 拉人；remove 踢人；list 查看成员' },
+        group: { type: 'string', description: '群名或群 id' },
+        sessions: {
+          type: 'array',
+          description: '要加入/移出的成员（会话 ID、handle 或标题，可给多个）',
+          items: { type: 'string' }
+        }
+      },
+      required: ['action', 'group']
+    },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute(args, exec) {
+      const guard = requireRootAgent(exec)
+      if (guard.error) return guard.error
+      const info = sessionInfoOf(guard.agent)
+      const groupRef = String((args && args.group) || '').trim()
+      const group = groupStore.find(groupRef, info.cwd)
+      if (!group) return '找不到群组「' + groupRef + '」。'
+      const isManager = group.managerSessionId === info.id || maintainerStore.get() === info.id
+      if (!isManager) return '只有本群群管理或维护者可以拉人/踢人。'
+      const sessions = await buildSessionIndex()
+      const byId = new Map(sessions.map((session) => [session.id, session]))
+      const members = group.sessionIds.map((sessionId) => byId.get(sessionId)).filter(Boolean)
+      if (args.action === 'list') {
+        return '群「' + group.name + '」成员（' + members.length + '）：\n' + members.map((member) => '- ' + member.avatar + ' ' + (member.handle || member.title) + '（' + member.title + '）').join('\n')
+      }
+      const refs = Array.isArray(args.sessions) ? args.sessions.filter((item) => typeof item === 'string' && item) : []
+      if (!refs.length) return '请提供 sessions（会话 ID / handle / 标题）。'
+      const resolved = []
+      for (const ref of refs) {
+        const hit = sessions.find(
+          (session) =>
+            session.id === ref ||
+            session.id.startsWith(ref) ||
+            String(session.handle || '').includes(ref) ||
+            String(session.title || '').includes(ref)
+        )
+        if (hit && !resolved.some((item) => item.id === hit.id)) resolved.push(hit)
+      }
+      if (!resolved.length) return '没有匹配到可操作的会话。'
+      let nextIds = group.sessionIds.slice()
+      if (args.action === 'add') {
+        for (const member of resolved) if (!nextIds.includes(member.id)) nextIds.push(member.id)
+      } else {
+        nextIds = nextIds.filter((sessionId) => !resolved.some((member) => member.id === sessionId))
+      }
+      const groups = groupStore.read()
+      const target = groups.find((item) => item.id === group.id)
+      if (!target) return '找不到群组。'
+      target.sessionIds = nextIds
+      target.updatedAt = Date.now()
+      groupStore.write(groups)
+      try {
+        const permissions = readPermissionsOf(boardDir)
+        const grants = new Set(permissions.grants[info.id] || [])
+        for (const member of resolved) grants.add(member.id)
+        permissions.grants[info.id] = [...grants]
+        writePermissionsOf(boardDir, permissions)
+      } catch {
+        /* ignore */
+      }
+      const handles = resolved.map((member) => member.handle || member.title || shortSid(member.id))
+      addEntry(
+        {
+          title: (args.action === 'add' ? '新成员入群：' : '成员移出群：') + handles.join('、'),
+          text: (args.action === 'add' ? '群管理拉入 ' : '群管理移出 ') + handles.join('、') + '。',
+          kind: 'chat',
+          groupId: group.id,
+          author: info.id,
+          mentions: resolved.map((member) => member.id),
+          tags: '@系统',
+          skipDedupe: true
+        },
+        'tool'
+      )
+      if (args.action === 'add') {
+        for (const member of resolved) {
+          await ensureSessionLive(member.id)
+          wakeSession(
+            member.id,
+            [
+              '【入群通知】',
+              '你被群管理拉入群「' + group.name + '」。',
+              '请先用 session_profile 提交一句话申报（方向/擅长/需要什么），然后按群里的任务/分工参与。'
+            ].join('\n'),
+            {}
+          )
+        }
+      }
+      return (args.action === 'add' ? '已拉入：' : '已移出：') + handles.join('、') + '；当前成员 ' + nextIds.length + ' 人。'
+    }
+  })
+
+  register({
     name: 'group_skill',
     description: '群管理专用：把本轮心得/流程沉淀成 SKILL.md（写入星桥技能库，不需要工作区写权限）；也可 list 查看已有技能。需要项目内文件时再用 session_ask mode=task 找有权限成员。',
     parameters: {
@@ -4439,7 +4539,7 @@ export function apply(ctx, config = {}) {
       const sessionsNow = await buildSessionIndex()
       const mentionCandidates = sessionsNow.filter((session) => session.worldEligible === true)
       const parsedWorldMentions = parseMentionsInText(text, mentionCandidates)
-      const wantsNewMembers = /(新成员|新会话|新建会话|开新会话|创建.{0,10}(会话|成员)|入驻|扩编|扩招|帮手|人手|增援|加.{0,4}(个|位)?.{0,4}(人|成员|会话))/i.test(text)
+      const wantsNewMembers = /(新成员|新会话|新建会话|开新会话|创建.{0,10}(会话|成员)|入驻|扩编|扩招|加.{0,4}(个|位)?.{0,4}(人|成员|会话))/i.test(text)
       const parseMemberCount = () => {
         const arabic = text.match(/(\d{1,2})\s*(?:个|位|名)?\s*(?:新)?(?:会话|成员|人)/)
         if (arabic) return Math.min(5, Math.max(1, Number(arabic[1])))
@@ -4499,7 +4599,7 @@ export function apply(ctx, config = {}) {
       }
       // 协同类任务：如果只命中一个会话，再挑 1-2 个申报相关的成员一起拉群。
       if (decision.route === 'existing' && decision.engine !== 'mentions' && assigned.length === 1) {
-        const collaborative = /(大家|一起|协同|协作|分工|多人|帮忙|协助|配合|团队|各自)/.test(text)
+        const collaborative = /(大家|一起|协同|协作|分工|多人|帮忙|帮手|人手|增援|协助|配合|团队|各自)/.test(text)
         if (collaborative) {
           try {
             const profilesNow = listProfilesOf(boardDir)
@@ -5151,6 +5251,24 @@ export function apply(ctx, config = {}) {
       const groups = groupStore.read()
       groups.push(group)
       groupStore.write(groups)
+      try {
+        addEntry(
+          {
+            title: '群已创建：' + name,
+            text: '群「' + name + '」已创建，成员 ' + sessionIds.length + ' 人。',
+            kind: 'chat',
+            groupId: group.id,
+            author: 'panel',
+            origin: 'panel',
+            mentions: sessionIds,
+            tags: '@系统',
+            skipDedupe: true
+          },
+          'panel'
+        )
+      } catch {
+        /* ignore */
+      }
       // 入群自动申报：在线的新成员立即唤醒它提交申报；离线的下次运行会看到「未申报」提示。
       let profileRequests = 0
       try {
@@ -5485,6 +5603,7 @@ export function apply(ctx, config = {}) {
         '普通汇报、已完成、已定稿、已经有人在做的，**不要回复、不要凑热闹**；没有实质动作就安静结束。',
         '群规矩默认用 **group_rule action=replace 整体重建**：先合并去重现有规矩，再一次性提交一份完整列表（≤5 条，口径/做法/禁忌）；不要用 set 一条条堆叠，更不要把聊天记录/交接/催收原文写进规矩。',
         '让群更有活力：偶尔（每天最多一次）用 session_discuss 发起一个轻量讨论；讨论里要接前面的话并 @ 成员继续；看到成员表现好用 session_like 点赞 +2 积分。不要刷屏，没内容就不发。',
+        '组内缺人或角色不合适时，可用 group_member 拉人/踢人（自己判断需要谁，不必等人安排）。',
         '遇到「没权限 / 需要落文件 / 需要沉淀技能」不要停下：① 心得/流程直接用 group_skill 写入星桥技能库（不需要工作区权限）；② 项目内文件用 session_ask mode=task 找有写盘权限的成员，写清文件路径、内容、验收口径；③ 不知道找谁先 session_profile action=directory 看申报。要像活人一样主动交涉、追问、跟进，不要一句“没权限”就放弃。',
         '收到探测消息时只看正文、简短响应；没有实质动作就不要回复。'
       ].join('\n')
@@ -5560,6 +5679,7 @@ export function apply(ctx, config = {}) {
       if (!sessionIds.length) return { ok: false, error: '缺少会话 id' }
       let affectedGroup = null
       let addedSessionIds = []
+      let removedSessionIds = []
       const result = mutateGroups((groups) => {
         const group = groups.find((item) => item.id === wanted || item.id.startsWith(wanted))
         if (!group) return { ok: false, error: '找不到群组' }
@@ -5569,11 +5689,57 @@ export function apply(ctx, config = {}) {
           addedSessionIds = group.sessionIds.filter((sessionId) => !before.has(sessionId))
           affectedGroup = { id: group.id, name: group.name, managerSessionId: group.managerSessionId || '' }
         } else {
+          const before = new Set(group.sessionIds)
           group.sessionIds = group.sessionIds.filter((id) => !sessionIds.includes(id))
+          removedSessionIds = [...before].filter((sessionId) => !group.sessionIds.includes(sessionId))
+          affectedGroup = { id: group.id, name: group.name }
         }
         group.updatedAt = Date.now()
         return { ok: true, groupId: group.id }
       })
+      if (result.ok && affectedGroup) {
+        try {
+          const sessionsNow = await buildSessionIndex()
+          const titleOf = (sessionId) => {
+            const hit = sessionsNow.find((session) => session.id === sessionId)
+            return (hit && (hit.handle || hit.title)) || shortSid(sessionId)
+          }
+          if (addedSessionIds.length) {
+            addEntry(
+              {
+                title: '新成员入群：' + addedSessionIds.map(titleOf).join('、'),
+                text: '邀请 ' + addedSessionIds.map(titleOf).join('、') + ' 加入群「' + affectedGroup.name + '」。',
+                kind: 'chat',
+                groupId: affectedGroup.id,
+                author: 'panel',
+                origin: 'panel',
+                mentions: addedSessionIds,
+                tags: '@系统',
+                skipDedupe: true
+              },
+              'panel'
+            )
+          }
+          if (removedSessionIds.length) {
+            addEntry(
+              {
+                title: '成员移出群：' + removedSessionIds.map(titleOf).join('、'),
+                text: '已将 ' + removedSessionIds.map(titleOf).join('、') + ' 移出群「' + affectedGroup.name + '」。',
+                kind: 'chat',
+                groupId: affectedGroup.id,
+                author: 'panel',
+                origin: 'panel',
+                mentions: removedSessionIds,
+                tags: '@系统',
+                skipDedupe: true
+              },
+              'panel'
+            )
+          }
+        } catch {
+          /* ignore */
+        }
+      }
       if (action === 'group.add' && result.ok && affectedGroup && addedSessionIds.length) {
         try {
           requestMemberProfiles(affectedGroup, addedSessionIds)
@@ -5621,6 +5787,35 @@ export function apply(ctx, config = {}) {
     })
     res.end(fs.readFileSync(file, 'utf8'))
   }
+
+  const runOfficePreview = (file) => new Promise((resolve) => {
+    const candidates = [
+      path.resolve(HERE, '..', 'preview.py'),
+      path.join(HERE, 'preview.py'),
+      path.resolve(HERE, '..', 'dsh-plugin', 'preview.py')
+    ]
+    const script = candidates.find((candidate) => fs.existsSync(candidate))
+    if (!script) {
+      resolve('')
+      return
+    }
+    try {
+      execFile(
+        process.env.PYTHON || 'python',
+        [script, file],
+        { timeout: 25000, maxBuffer: 8 * 1024 * 1024, windowsHide: true },
+        (error, stdout) => {
+          if (error && !stdout) {
+            resolve('<div style="font:14px sans-serif;color:#a33">预览失败：' + String(error.message || error) + '</div>')
+            return
+          }
+          resolve(String(stdout || ''))
+        }
+      )
+    } catch (error) {
+      resolve('<div style="font:14px sans-serif;color:#a33">预览失败：' + String(error.message || error) + '</div>')
+    }
+  })
 
   const handleFileRoute = async (req, res) => {
     if (req.method !== 'GET') {
@@ -5685,6 +5880,17 @@ export function apply(ctx, config = {}) {
         return
       }
       const ext = path.extname(normalized).toLowerCase()
+      if (['.docx', '.xlsx', '.pptx'].includes(ext)) {
+        const html = await runOfficePreview(normalized)
+        if (html) {
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+          res.end(html)
+          return
+        }
+        res.writeHead(415, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('Office preview unavailable: preview.py/Python missing')
+        return
+      }
       const types = {
         '.txt': 'text/plain; charset=utf-8',
         '.md': 'text/markdown; charset=utf-8',
