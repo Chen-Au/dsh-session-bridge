@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.9.0'
+const VERSION = '2.9.6'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -69,6 +69,9 @@ const PROFILES_DIR = 'profiles'
 const PROFILE_BOOTSTRAP_FILE = '.profile-bootstrap.json'
 const LOADED_FILE = '.plugin-loaded.json'
 const LOG_FILE = 'session-bridge.log'
+/** 健康巡检里的「近期日志警告」只看最近 24h；不再按 300 行历史统计，避免历史噪音永久占用配额。 */
+const HEALTH_LOG_WINDOW_MS = 24 * 3600 * 1000
+const HEALTH_LOG_WARN_THRESHOLD = 10
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
 const DEFAULT_CONFIG = {
@@ -2852,10 +2855,32 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  // 恢复会话时的良性竞态：会话已在别处活跃（被写句柄占用），或宿主上下文已关闭。
+  // 这两种情况重试也不会成功，属于预期路径，只记 info，不再刷 warn。
+  const BENIGN_RESUME_ERROR = /already owned by an active (?:write )?handle|already (?:live|active|open)|inactive context|cannot get required service .*agents/i
+  const isBenignResumeError = (message) => BENIGN_RESUME_ERROR.test(String(message || ''))
+
+  /** 找到会话当前的 live agent：agents.get 偶尔会漏（被别的写句柄占用时），再查 list 兜底。 */
+  const liveAgentOf = (sessionId) => {
+    if (!sessionId) return undefined
+    try {
+      const direct = ctx.agents && typeof ctx.agents.get === 'function' ? ctx.agents.get(sessionId) : undefined
+      if (direct) return direct
+    } catch {
+      /* ignore */
+    }
+    try {
+      const all = ctx.agents && typeof ctx.agents.list === 'function' ? ctx.agents.list() : []
+      return all.find((agent) => agent && agent.id === sessionId)
+    } catch {
+      return undefined
+    }
+  }
+
   /** 唤醒一个在线会话（followup 会开一轮并让它处理消息）；不在线返回 not-live。 */
   const wakeSession = (sessionId, text, meta = {}) => {
     try {
-      const agent = ctx.agents.get(sessionId)
+      const agent = liveAgentOf(sessionId)
       if (!agent || typeof agent.followup !== 'function') return { ok: false, reason: 'not-live' }
       ensurePersona(sessionId)
       const persona = personaLineFor(sessionId)
@@ -2982,13 +3007,34 @@ export function apply(ctx, config = {}) {
     logger.warn(`注册新会话询问监听失败：${error && error.message ? error.message : error}`)
   }
 
-  /** 确保一个会话是 live；history 会话需要恢复后才能收到 followup。 */
-  const ensureSessionLive = async (sessionId) => {
+  /** 会话索引里的 live/owned 状态（5 秒缓存，避免巡检逐个会话重复枚举）。 */
+  let sessionLookCache = { at: 0, records: null }
+  const sessionLookOf = async (sessionId) => {
     if (!sessionId) return null
     try {
-      const existing = ctx.agents.get ? ctx.agents.get(sessionId) : undefined
-      if (existing) return existing
-      if (!ctx.agents || typeof ctx.agents.resume !== 'function') return null
+      const now = Date.now()
+      if (!sessionLookCache.records || now - sessionLookCache.at > 5000) {
+        sessionLookCache = { at: now, records: await buildSessionIndex() }
+      }
+      return sessionLookCache.records.find((record) => record.id === sessionId) || null
+    } catch {
+      return null
+    }
+  }
+
+  /** 恢复会话并返回细节：agent 为 live agent；skipped=已在活跃/上下文不可用（意料之中的跳过）。 */
+  const resumeSessionForLive = async (sessionId) => {
+    if (!sessionId) return { agent: null, skipped: false }
+    const existing = liveAgentOf(sessionId)
+    if (existing) return { agent: existing, skipped: false }
+    // 巡检/任务重试可能重复恢复已经活跃的会话；先看索引里的 live，避免 resume 抛 already owned。
+    const known = await sessionLookOf(sessionId)
+    if (known && known.live === true) {
+      logger.info(`恢复会话 ${shortSid(sessionId)}：会话已活跃，跳过恢复`)
+      return { agent: null, skipped: true, reason: 'already-live' }
+    }
+    try {
+      if (!ctx.agents || typeof ctx.agents.resume !== 'function') return { agent: null, skipped: false }
       const selection = resolveDefaultSelection()
       const setup =
         installModelSelection && selection
@@ -3001,11 +3047,23 @@ export function apply(ctx, config = {}) {
         agentOptions: {},
         ...(setup ? { setup } : {})
       })
-      return handle && handle.agent ? handle.agent : handle || null
+      const agent = handle && handle.agent ? handle.agent : handle || null
+      return { agent: agent || null, skipped: false }
     } catch (error) {
-      logger.warn(`恢复会话 ${shortSid(sessionId)} 失败：${error && error.message ? error.message : error}`)
-      return null
+      const message = error && error.message ? error.message : String(error)
+      if (isBenignResumeError(message)) {
+        logger.info(`恢复会话 ${shortSid(sessionId)} 跳过：${message}`)
+        return { agent: null, skipped: true, reason: message }
+      }
+      logger.warn(`恢复会话 ${shortSid(sessionId)} 失败：${message}`)
+      return { agent: null, skipped: false, error: message }
     }
+  }
+
+  /** 确保一个会话是 live；history 会话需要恢复后才能收到 followup。 */
+  const ensureSessionLive = async (sessionId) => {
+    const outcome = await resumeSessionForLive(sessionId)
+    return outcome.agent || null
   }
 
   // ---------------------------------------------------------------- 世界聊天：按申报匹配成员
@@ -3137,11 +3195,17 @@ export function apply(ctx, config = {}) {
       try {
         const titles = (ctx.get && ctx.get('sessionTitle')) || ctx.sessionTitle
         // ctx.agents.create() 返回 AgentHandle（{agent,...}），标题需要真正的 Session。
+        // 宿主失败路径可能返回没有 session / session.id 的 handle：这里必须先判空，
+        // 否则 titles.rename 内部读 undefined.id 会抛 "Cannot read properties of undefined (reading 'id')"。
         const createdAgent = agent && agent.agent ? agent.agent : agent
         const createdSession = createdAgent && createdAgent.session
-        if (titles && typeof titles.rename === 'function' && createdSession && typeof createdSession.id === 'string') {
-          const renamed = titles.rename(createdSession, String(titleHint || '世界任务').slice(0, 40))
-          title = (renamed && renamed.title) || ''
+        if (titles && typeof titles.rename === 'function') {
+          if (createdSession && typeof createdSession.id === 'string') {
+            const renamed = titles.rename(createdSession, String(titleHint || '世界任务').slice(0, 40))
+            title = (renamed && renamed.title) || ''
+          } else {
+            logger.info(`新会话设置标题跳过：宿主未返回带 id 的 session（${shortSid(sessionId)}）`)
+          }
         }
       } catch (error) {
         logger.warn(`新会话设置标题失败：${error && error.message ? error.message : error}`)
@@ -3234,7 +3298,9 @@ export function apply(ctx, config = {}) {
         }
         const out = (deltaText || blockText).trim()
         if (out) return out
-        logger.warn(`任务路由器：第 ${attempt + 1} 次模型无文本输出（chunks=${seenTypes.join(',')}）`)
+        // 模型只回 reasoning/usage 属于预期路径：会回退到关键词匹配，不需要 warn。
+        const chunkSummary = [...new Set(seenTypes)].slice(0, 8).join(',')
+        logger.info(`任务路由器：第 ${attempt + 1} 次模型无文本输出（chunks=${chunkSummary}），按预期回退`)
       } catch (error) {
         logger.warn(`任务路由器模型调用失败（第 ${attempt + 1} 次）：${error && error.message ? error.message : error}`)
       }
@@ -5714,9 +5780,15 @@ export function apply(ctx, config = {}) {
       const sessionId = String(payload.sessionId || '').trim()
       const title = String(payload.title || '').trim().slice(0, 40)
       if (!sessionId) return { ok: false, error: '缺少 sessionId' }
-      let agent = ctx.agents.get ? ctx.agents.get(sessionId) : undefined
+      let agent = liveAgentOf(sessionId)
       let resumed = false
       if (!agent) {
+        // 会话已经 live（可能被别的写句柄占用）时不要再 resume，否则只会得到 already owned 警告。
+        const known = await sessionLookOf(sessionId)
+        if (known && known.live === true) {
+          logger.info(`会话 ${shortSid(sessionId)} 已活跃，跳过恢复`)
+          return { ok: true, sessionId, resumed: false, skipped: true, message: '会话已活跃，无需恢复' }
+        }
         if (!ctx.agents || typeof ctx.agents.resume !== 'function') {
           return { ok: false, error: '宿主不提供 agents.resume' }
         }
@@ -5736,7 +5808,12 @@ export function apply(ctx, config = {}) {
           agent = handle && handle.agent ? handle.agent : handle
           resumed = Boolean(agent)
         } catch (error) {
-          return { ok: false, error: `恢复会话失败：${error && error.message ? error.message : error}` }
+          const message = error && error.message ? error.message : String(error)
+          if (isBenignResumeError(message)) {
+            logger.info(`会话 ${shortSid(sessionId)} 跳过恢复：${message}`)
+            return { ok: true, sessionId, resumed: false, skipped: true, message }
+          }
+          return { ok: false, error: `恢复会话失败：${message}` }
         }
       }
       let renamed = ''
@@ -6930,7 +7007,10 @@ export function apply(ctx, config = {}) {
         return
       }
     } catch (error) {
-      logger.warn(`注册看板 HTTP API 失败：${error && error.message ? error.message : error}`)
+      // 冷启动时 webServer 可能尚未就绪；注册失败会继续重试，先记 info，2 分钟仍失败才 warn。
+      if (webServerAttempts === 1 || webServerAttempts % 20 === 0) {
+        logger.info(`注册看板 HTTP API 暂不可用（第 ${webServerAttempts} 次）：${error && error.message ? error.message : error}`)
+      }
     }
     if (webServerAttempts === 1 || webServerAttempts % 20 === 0) {
       logger.info(`webServer 尚未就绪，等待重试注册 API（第 ${webServerAttempts} 次）`)
@@ -7165,7 +7245,8 @@ export function apply(ctx, config = {}) {
         logger.warn('恢复工作区失败 ' + cwd + '：' + (error && error.message ? error.message : error))
       }
     }
-    if (created) logger.warn('工作区自愈：从会话存储恢复了 ' + created + ' 个工作区、挂回 ' + attached + ' 个会话')
+    // 自愈成功属于预期恢复，不是故障：记 info，避免巡检长期把它当警告。
+    if (created) logger.info('工作区自愈：从会话存储恢复了 ' + created + ' 个工作区、挂回 ' + attached + ' 个会话')
     return { created, attached }
   }
   // 只做备份，不再自动恢复：用户手动删除的工作区不应被插件复活。
@@ -7264,22 +7345,23 @@ export function apply(ctx, config = {}) {
           }
           continue
         }
-        const existed = ctx.agents.get ? ctx.agents.get(managerId) : undefined
-        const agent = existed || (await ensureSessionLive(managerId))
-        if (!agent) {
+        const existed = liveAgentOf(managerId)
+        const resumed = existed ? { agent: existed, skipped: false } : await resumeSessionForLive(managerId)
+        // 会话已活跃（可能被别的写句柄占用）时跳过恢复，不算故障。
+        if (!resumed.agent && !resumed.skipped) {
           issues.push('群「' + group.name + '」的群管理离线且恢复失败')
           continue
         }
-        if (!existed) fixes.push('恢复群管理 ' + shortSid(managerId) + ' 上线')
+        if (!existed && resumed.agent) fixes.push('恢复群管理 ' + shortSid(managerId) + ' 上线')
       }
       // 维护者在线 + 全局唤醒授权
       const maintainerId = maintainerStore.get()
       if (!maintainerId) issues.push('尚未设置维护者会话')
       else {
-        const existed = ctx.agents.get ? ctx.agents.get(maintainerId) : undefined
-        const agent = existed || (await ensureSessionLive(maintainerId))
-        if (!agent) issues.push('维护者会话离线且恢复失败')
-        else if (!existed) fixes.push('恢复维护者会话上线')
+        const existed = liveAgentOf(maintainerId)
+        const resumed = existed ? { agent: existed, skipped: false } : await resumeSessionForLive(maintainerId)
+        if (!resumed.agent && !resumed.skipped) issues.push('维护者会话离线且恢复失败')
+        else if (!existed && resumed.agent) fixes.push('恢复维护者会话上线')
         try {
           mutateGroups((list) => {
             for (const group of list) {
@@ -7406,13 +7488,22 @@ export function apply(ctx, config = {}) {
       } catch (error) {
         logger.warn('任务掉线重试失败：' + (error && error.message ? error.message : error))
       }
-      // 日志近期警告数量
+      // 日志近期警告：只看时间窗口（最近 24h）内的显式 [warn]/[error]，不再按末 300 行统计历史 warn。
       try {
         const logFile = path.join(boardDir, 'session-bridge.log')
         if (fs.existsSync(logFile)) {
-          const lines = fs.readFileSync(logFile, 'utf8').split(/\r?\n/).slice(-300)
-          const warnings = lines.filter((line) => /\[warn\]|失败|error|unhandled/i.test(line)).length
-          if (warnings > 25) issues.push('近期日志警告偏多（' + warnings + ' 条 / 300 行）')
+          const since = Date.now() - HEALTH_LOG_WINDOW_MS
+          const lines = fs.readFileSync(logFile, 'utf8').split(/\r?\n/)
+          let warnings = 0
+          for (const line of lines) {
+            const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\s+\[(?:warn|error)\]/.exec(line)
+            if (!match) continue
+            const ts = Date.parse(match[1])
+            if (Number.isFinite(ts) && ts >= since) warnings += 1
+          }
+          if (warnings > HEALTH_LOG_WARN_THRESHOLD) {
+            issues.push('近期日志警告偏多（' + warnings + ' 条 / 最近 ' + HEALTH_LOG_WINDOW_MS / 3600000 + 'h）')
+          }
         }
       } catch {
         /* ignore */
