@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.8.1'
+const VERSION = '2.9.4'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -5644,43 +5644,100 @@ export function apply(ctx, config = {}) {
         ? [...group.sessionIds]
         : requested.filter((sessionId) => group.sessionIds.includes(sessionId))
       targetIds = [...new Set(targetIds)]
-      if (mentionAll) targetIds = targetIds.filter((sessionId) => sessionId !== maintainerStore.get())
+      const maintainerId = maintainerStore.get()
+      if (mentionAll) targetIds = targetIds.filter((sessionId) => sessionId !== maintainerId)
       const titleById = new Map(sessions.map((session) => [session.id, session.title]))
       const sessionById = new Map(sessions.map((session) => [session.id, session]))
       const titleOf = (sessionId) => titleById.get(sessionId) || shortSid(sessionId)
 
-      // 多人任务：一个任务只能有一个组长；成员只交组长、不直接向用户汇报，避免“人人都是组长”。
-      if (targetIds.length >= 2) {
+      // 显式任务模式（v2.9.4）：面板「发布任务」按钮显式声明 task:true / mode:'task'，
+      // 不再靠 @ 人数猜意图——单人也能建任务，但必须明确指定组长（本群成员）。
+      const explicitTask = payload.task === true || payload.mode === 'task'
+      let explicitCoordinatorId = ''
+      const explicitAssigneeIds = []
+      if (explicitTask) {
+        const wantedCoordinator = String(payload.coordinatorId || payload.coordinator || '').trim()
+        if (!wantedCoordinator) {
+          return { ok: false, error: '发布任务必须指定组长（coordinatorId），可选本群成员' }
+        }
+        const taskGroupSessions = group.sessionIds
+          .map((sessionId) => sessionById.get(sessionId))
+          .filter(Boolean)
+        const resolution = resolveSessionRef(wantedCoordinator, taskGroupSessions)
+        if (!resolution.ok) {
+          return { ok: false, error: '组长必须是本群成员：' + resolution.error }
+        }
+        explicitCoordinatorId = resolution.session.id
+        if (explicitCoordinatorId === maintainerId) {
+          return { ok: false, error: '维护者是受保护账号，不能作为任务组长或执行人；请选群成员' }
+        }
+        // 成员多选优先（面板复选框）；没传时退回正文 @ 的人。组长自动包含、维护者永远排除。
+        const rawAssignees = Array.isArray(payload.assigneeIds)
+          ? payload.assigneeIds
+          : Array.isArray(payload.memberIds)
+            ? payload.memberIds
+            : targetIds
+        for (const ref of rawAssignees) {
+          const id = typeof ref === 'string' ? ref.trim() : ''
+          if (!id) continue
+          const resolved = group.sessionIds.includes(id)
+            ? { ok: true, session: sessionById.get(id) }
+            : resolveSessionRef(id, taskGroupSessions)
+          if (!resolved.ok || !resolved.session) continue
+          const sessionId = resolved.session.id
+          if (sessionId === explicitCoordinatorId || sessionId === maintainerId) continue
+          if (!explicitAssigneeIds.includes(sessionId)) explicitAssigneeIds.push(sessionId)
+        }
+        // 权限：面板（loopback，无 actorId）可发布；会话调用时只有群管理或维护者可发布。
+        const actorId = String(payload.actorId || payload.actor || '').trim()
+        if (actorId && actorId !== 'panel' && actorId !== group.managerSessionId && actorId !== maintainerId) {
+          return { ok: false, error: '只有群管理、维护者或面板可以发布任务' }
+        }
+        // 显式任务以「组长 + 勾选成员」为准，正文里顺手打的 @ 不再额外扩员。
+      }
+      // 自动多人任务（保持旧行为）：@ 两人及以上才建任务；维护者不算普通执行人。
+      // 注意：这里只收窄「任务」的目标，普通聊天仍按原 @ 名单投递，不能把维护者从聊天里弄丢。
+      const taskTargetIds = explicitTask
+        ? [explicitCoordinatorId, ...explicitAssigneeIds]
+        : targetIds.filter((sessionId) => sessionId !== maintainerId)
+
+      // 群任务：一个任务只能有一个组长；成员只交组长、不直接向用户汇报，避免“人人都是组长”。
+      if (explicitTask || taskTargetIds.length >= 2) {
+        targetIds = taskTargetIds
         let coordinatorId = targetIds[0]
-        let bestScore = -1
-        try {
-          const profiles = listProfilesOf(boardDir)
-          for (const sessionId of targetIds) {
-            const profile = profiles[sessionId]
-            const score = profile ? scoreProfileForText(text, profile) : 0
-            if (score > bestScore) {
-              bestScore = score
-              coordinatorId = sessionId
+        if (explicitTask) {
+          coordinatorId = explicitCoordinatorId
+        } else {
+          let bestScore = -1
+          try {
+            const profiles = listProfilesOf(boardDir)
+            for (const sessionId of targetIds) {
+              const profile = profiles[sessionId]
+              const score = profile ? scoreProfileForText(text, profile) : 0
+              if (score > bestScore) {
+                bestScore = score
+                coordinatorId = sessionId
+              }
             }
+          } catch {
+            /* 无申报时用第一个成员当组长 */
           }
-        } catch {
-          /* 无申报时用第一个成员当组长 */
-        }
-        // 用户可在面板里显式指定组长；指定的人必须在本次 @ 的成员里。
-        const requestedCoordinator = typeof payload.coordinatorId === 'string' ? payload.coordinatorId.trim() : ''
-        if (requestedCoordinator && targetIds.includes(requestedCoordinator)) {
-          coordinatorId = requestedCoordinator
-          bestScore = Number.POSITIVE_INFINITY
-        }
-        // 优先选一个「在线」的组长；都在线则用评分最高者，全离线则保留评分最高者（任务排队）。
-        try {
-          const liveIds = new Set(liveRootSessions().map((item) => item.id))
-          if (!liveIds.has(coordinatorId)) {
-            const liveTarget = targetIds.find((sessionId) => liveIds.has(sessionId))
-            if (liveTarget) coordinatorId = liveTarget
+          // 用户可在面板里显式指定组长；指定的人必须在本次 @ 的成员里。
+          const requestedCoordinator = typeof payload.coordinatorId === 'string' ? payload.coordinatorId.trim() : ''
+          if (requestedCoordinator && targetIds.includes(requestedCoordinator)) {
+            coordinatorId = requestedCoordinator
+            bestScore = Number.POSITIVE_INFINITY
           }
-        } catch {
-          /* ignore */
+          // 优先选一个「在线」的组长；都在线则用评分最高者，全离线则保留评分最高者（任务排队）。
+          try {
+            const liveIds = new Set(liveRootSessions().map((item) => item.id))
+            if (!liveIds.has(coordinatorId)) {
+              const liveTarget = targetIds.find((sessionId) => liveIds.has(sessionId))
+              if (liveTarget) coordinatorId = liveTarget
+            }
+          } catch {
+            /* ignore */
+          }
         }
         const assigneeIds = targetIds.filter((sessionId) => sessionId !== coordinatorId)
         const taskEntry = addEntry(
@@ -5736,23 +5793,30 @@ export function apply(ctx, config = {}) {
         )
         if (coordinatorRequest.ok) {
           requestIds.push(coordinatorRequest.entry.id)
-          const message = [
-            `【群任务 · 你是唯一组长（用户指定）】群组「${group.name}」`,
-            `任务：${text}`,
-            `成员：${memberTitles || '(无)'}`,
-            ...(assigneeSessions.length
-              ? [
-                  '成员通讯录（派活用 session_ask 的 to=contactId，下方 contactId 可直接复制；也可用 session_directory group=群名 查询）：',
-                  memberDirectoryText(assigneeSessions)
-                ]
-              : []),
-            '',
-            '你的职责：',
-            '1. 先规划分工；成员目前**还没有被唤醒**，只有你用 session_ask mode=task 派活后他们才会收到（派活会自动归属本任务，避免同一任务被重复执行；to 支持 contactId / 短 id / handle / 标题，不限完整 id）；',
-            '2. 收集成员提交的内容；',
-            `3. 最后用 session_share（kind=handoff、group=${group.name}、replyTo=${coordinatorRequest.entry.id}、files=…）向用户提交唯一汇总。`,
-            '注意：成员不会直接向用户汇报；只有你是组长，不要让成员替你汇总，也不要重复成员已完成的工作。'
-          ].join('\n')
+          const message = assigneeSessions.length
+            ? [
+                `【群任务 · 你是唯一组长（用户指定）】群组「${group.name}」`,
+                `任务：${text}`,
+                `成员：${memberTitles || '(无)'}`,
+                '成员通讯录（派活用 session_ask 的 to=contactId，下方 contactId 可直接复制；也可用 session_directory group=群名 查询）：',
+                memberDirectoryText(assigneeSessions),
+                '',
+                '你的职责：',
+                '1. 先规划分工；成员目前**还没有被唤醒**，只有你用 session_ask mode=task 派活后他们才会收到（派活会自动归属本任务，避免同一任务被重复执行；to 支持 contactId / 短 id / handle / 标题，不限完整 id）；',
+                '2. 收集成员提交的内容；',
+                `3. 最后用 session_share（kind=handoff、group=${group.name}、replyTo=${coordinatorRequest.entry.id}、files=…）向用户提交唯一汇总。`,
+                '注意：成员不会直接向用户汇报；只有你是组长，不要让成员替你汇总，也不要重复成员已完成的工作。'
+              ].join('\n')
+            : [
+                `【群任务 · 你是本任务负责人（用户指定）】群组「${group.name}」`,
+                `任务：${text}`,
+                '',
+                '本任务没有其他成员，由你独立完成。',
+                '',
+                '你的职责：',
+                `1. 完成后用 session_share（kind=handoff、group=${group.name}、replyTo=${coordinatorRequest.entry.id}、files=…）向用户提交结果；`,
+                '2. 无法完成请在回复里说明原因，不要静默丢弃。'
+              ].join('\n')
           await ensureSessionLive(coordinatorId)
           if (wakeSession(coordinatorId, message, { requestId: coordinatorRequest.entry.id }).ok) woken += 1
         }

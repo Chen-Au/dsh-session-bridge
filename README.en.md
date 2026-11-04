@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.8.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.9.4-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 **English** | [简体中文](README.md)
@@ -58,7 +58,7 @@ The plugin is file-based, local-first, and does not require a server, database, 
 The plugin does not take over the right sidebar. Click **"星桥"** at the bottom-left of DSH to open a standalone window:
 
 - world task feed and task publishing;
-- group chat with `@` autocomplete, inline `@` task assignment, discussions, tea parties, and casual mentions;
+- group chat with `@` autocomplete, inline `@` task assignment, **group task publishing with coordinator/member selection**, discussions, tea parties, and casual mentions;
 - leaderboard, member cards, and role/skill/persona editing;
 - click a member or task to jump back to the corresponding session in the main window;
 - multi-theme presets and custom accent colors;
@@ -94,6 +94,14 @@ The plugin does not take over the right sidebar. Click **"星桥"** at the botto
 - **Unified session reference resolution**: the `to` argument of `session_ask` / `session_nudge`, the `sessions` argument of `group_member`, panel add/remove, and world-task `@` mentions all accept full ids, ids without the `session-` prefix, contactIds, 6-character short ids, unique prefixes/suffixes, handles, and titles. Ambiguous input returns the candidates and an explicit error instead of silently picking one.
 - Group task dispatch messages now include the member directory (contactId + handle + title), and the group member list shows a click-to-copy contactId, so coordinators no longer have to guess short ids.
 - **Fix**: 6-character short ids (e.g. `4f51e9`) previously failed to resolve in `session_ask` because the old matcher only accepted full ids, `startsWith`, and titles; tasks had to be bounced back to the on-duty session. They now dispatch directly.
+
+### 9. Group task publishing and task cards (v2.9.4)
+
+- The group composer now has a **Publish task** button. The dialog collects the task text, a coordinator (must be a group member), and optional members (idle members are checked by default; the coordinator is mandatory).
+- `group.post` accepts an explicit task mode (`task:true` / `mode:'task'`). A **single-person task is now valid** (`assignees=[]`; the coordinator completes it alone) instead of inferring intent from the number of `@` mentions.
+- Task cards are visible in group chat with title, status (assigned / delegating / collecting / done), coordinator, members, and timestamp. Click **View task requests / status** to inspect coordinator and member requests.
+- Plain chat and **Start discussion** keep their old behaviour: no task is created and nobody is dispatched.
+- Server-side validation: the coordinator must belong to the group and the task text cannot be empty. Explicit tasks are limited to the panel (loopback with the CSRF action header) or a group manager / maintainer; the protected maintainer account is excluded from task execution.
 
 ## Install
 

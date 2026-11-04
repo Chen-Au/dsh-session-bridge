@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.8.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.9.4-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 
@@ -47,7 +47,7 @@
 不占用右侧边栏，点击 DSH 左下角「星桥」打开独立窗口：
 
 - 世界任务流、发布任务；
-- 群聊、@ 光标联想、内嵌 @ 拆任务、发起讨论、茶话会、闲聊点名；
+- 群聊、@ 光标联想、内嵌 @ 拆任务、**发布群任务（选组长/成员）**、发起讨论、茶话会、闲聊点名；
 - 积分榜、成员名片、角色/技能/人格编辑；
 - 点击成员/任务可跳转回主窗口对应会话。
 
@@ -81,6 +81,14 @@
 - **统一会话引用解析**：`session_ask` / `session_nudge` 的 `to`、`group_member` 的 `sessions`、面板加/移成员、世界任务正文 `@` 都支持完整 id、无前缀 id、contactId、短 id（6 位压缩前缀）、唯一前后缀、handle、标题；命中多个时**返回候选并明确报错**，不会静默选错；
 - 群任务派活消息自动附带成员通讯录（contactId + handle + 标题），面板群成员列表显示可点击复制的 contactId，组长不必再猜短 ID；
 - **修复**：此前 6 位短 id（如 `4f51e9`）无法用于 `session_ask` 的 `to`（旧逻辑只支持完整 id / startsWith / 标题），只能退回给值班员；现在可直接派活。
+
+### 9. 群任务发布与任务卡（v2.9.4）
+
+- 群聊输入区新增 **「发布任务」** 按钮：弹窗内填写任务正文、选组长（必须是本群成员）、多选成员（默认只勾空闲成员，组长必选）；
+- `group.post` 支持显式任务模式 `task:true` / `mode:'task'`：**单人也能创建群任务**（`assignees=[]`，由组长独立完成），不再靠 @ 人数猜用户意图；
+- 任务卡直接出现在群聊里：标题、状态（已分派 / 派工中 / 汇总中 / 已完成）、组长、成员、时间；点击「查看任务请求 / 状态」可查看组长请求、成员请求与当前状态；
+- 普通聊天与「发起讨论」保持原行为：只聊天，不创建任务、不触发派工；
+- 服务端校验：组长必须在本群、任务正文非空；显式任务由面板（loopback，带 CSRF 动作头）或群管理 / 维护者发起；维护者是受保护账号，自动排除出任务执行人名单。
 
 ---
 
