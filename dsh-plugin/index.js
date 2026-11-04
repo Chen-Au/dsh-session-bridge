@@ -58,7 +58,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.4.0'
+const VERSION = '2.4.1'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -4618,13 +4618,22 @@ export function apply(ctx, config = {}) {
             name: groupName,
             workspace: (firstSession && firstSession.cwd) || '',
             goal: text.slice(0, 300),
-            managerSessionId: '',
+            managerSessionId: memberIds[0],
             sessionIds: memberIds,
             createdAt: Date.now(),
             updatedAt: Date.now()
           }
           groupsNow.push(group)
           groupStore.write(groupsNow)
+          try {
+            const permissions = readPermissionsOf(boardDir)
+            const grants = new Set(permissions.grants[memberIds[0]] || [])
+            for (const memberId of memberIds) if (memberId !== memberIds[0]) grants.add(memberId)
+            permissions.grants[memberIds[0]] = [...grants]
+            writePermissionsOf(boardDir, permissions)
+          } catch {
+            /* ignore */
+          }
           addEntry(
             {
               title: '协作群：' + groupName,
@@ -6129,7 +6138,25 @@ export function apply(ctx, config = {}) {
       for (const group of groups) {
         const managerId = group.managerSessionId
         if (!managerId) {
-          if (group.sessionIds.length >= 2) issues.push('群「' + group.name + '」没有群管理')
+          if (group.sessionIds.length < 2) continue
+          try {
+            const firstMember = group.sessionIds[0]
+            const groupsToFix = groupStore.read()
+            const targetGroup = groupsToFix.find((item) => item.id === group.id)
+            if (targetGroup) {
+              targetGroup.managerSessionId = firstMember
+              targetGroup.updatedAt = Date.now()
+              groupStore.write(groupsToFix)
+            }
+            const permissions = readPermissionsOf(boardDir)
+            const grants = new Set(permissions.grants[firstMember] || [])
+            for (const sessionId of group.sessionIds) if (sessionId !== firstMember) grants.add(sessionId)
+            permissions.grants[firstMember] = [...grants]
+            writePermissionsOf(boardDir, permissions)
+            fixes.push('为群「' + group.name + '」自动指定 ' + shortSid(firstMember) + ' 为群管理并授权')
+          } catch (error) {
+            issues.push('群「' + group.name + '」没有群管理，自动补位失败：' + (error && error.message ? error.message : error))
+          }
           continue
         }
         const existed = ctx.agents.get ? ctx.agents.get(managerId) : undefined
