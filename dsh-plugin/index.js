@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.8.1'
+const VERSION = '2.9.0'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -129,6 +129,8 @@ const INSTRUCTIONS = `## 跨会话经验桥（session-bridge，插件自动生�
 **会话引用（统一解析）**：\`session_ask\`/\`session_nudge\` 的 \`to\`、\`group_member\` 的 \`sessions\`、面板加/移成员、世界任务正文里的 \`@\` 都支持同一种写法：完整 id、不带 \`session-\` 前缀的 id、contactId（8 位）、短 id（6 位压缩前缀）、handle、标题（精确优先，其次包含）。唯一前缀/后缀也可以。**匹配到多个时会报错并列出候选，不会替你猜**；这时改用 contactId 或完整 id 重试即可。
 
 **群任务角色（防止人人都是组长）**：用户在群里 @ 多人发布任务时，宿主会指定唯一组长并把任务拆成两步：组长先分工、收集成员结果、最后向用户提交唯一汇总；成员只做自己那部分，用 replyTo 交给组长，不要直接向用户汇报、不要自称组长。任务创建时只唤醒组长，成员只有被组长派活时才会被唤醒一次。
+
+**空闲看板（availability）**：宿主为每个主会话维护 idle/busy——有「未回答的 request」或「未完成的群任务（组长）」即 busy，交回结果/回答后自动回到 idle。世界任务的非显式匹配、协同扩展只派 idle 成员；显式 @ 某人时仍尊重用户选择（忙也派）。群任务指派组长时也优先空闲成员，若组长忙会在派活消息里提示「可能排队」。
 
 **催收/提醒用插话**：催进度、提醒还差什么，不要用 session_ask（会让对方多开一轮回复）；用 session_nudge（group=群名、to=成员、text=提醒内容），它只在对方下一次处理时注入一次，不唤醒。若用 session_ask 但对方已经提交过，宿主会自动改成插话，不会重复唤醒。
 
@@ -232,6 +234,110 @@ function formatContactLine(session) {
   const handle = typeof session.handle === 'string' && session.handle.trim() ? session.handle.trim() : ''
   const title = String(session.title || '').trim() || shortSid(session.id)
   return [cid || '?', handle, title].filter(Boolean).join(' · ')
+}
+
+// ------------------------------------------------------------------ 群名生成（v2.9.0）
+/**
+ * 旧版自动群名是 `'协作：' + text.slice(0, 24)`，会把任务截成半句（例如
+ * 「协作：现在招募几位成员去给shootgame做三」）。这里改成：
+ *  1) 先剥掉口语填充词（现在/帮我/请/麻烦/需要/我们/招募/几位/成员/去/给/做…等开头）；
+ *  2) 提取项目名：正文里的英文项目名（如 shootgame / shoot_game）或工作区 basename；
+ *  3) 结合动作类型生成可读名称，例如「shoot_game · 招募协作」；没有项目名时用
+ *     前 12 个有效字 + 「协作」，避免半句。
+ */
+const GROUP_NAME_FILLERS = [
+  '现在', '目前', '当前', '刚刚', '我们', '大家', '帮我', '帮忙', '请你', '请', '麻烦', '需要', '想要', '希望',
+  '一起', '继续', '马上', '立刻', '先去', '去', '来', '给', '把', '将', '对', '在', '从', '为',
+  '安排', '组织', '召集', '招募', '招', '找', '叫', '让', '拉', '邀请', '新建', '建', '开',
+  '几位', '几个', '两名', '三位', '一位', '各位', '成员', '同学', '伙伴', '同事', '人员',
+  '一个', '一下', '做', '干', '搞', '弄', '整', '处理', '完成', '推进', '看看', '检查', '协作', '协同'
+]
+const GROUP_ACTION_RULES = [
+  { re: /(招募|召集|招人|扩招|扩编|拉人|找人|组队|组团|请人)/, label: '招募协作' },
+  { re: /(性能|优化|提速|加速|卡顿|帧率)/, label: '性能优化' },
+  { re: /(修复|修\s*bug|debug|排错|报错|崩溃|异常)/i, label: '修复' },
+  { re: /(测试|验证|验收|复验|门禁|压测)/, label: '测试' },
+  { re: /(审阅|审稿|评审|复核|校对)/, label: '审阅' },
+  { re: /(写作|论文|撰写|初稿|定稿|改稿)/, label: '写作' },
+  { re: /(设计|方案|架构|原型|界面|UI)/i, label: '设计' },
+  { re: /(调研|研究|分析|数据|实验|仿真)/, label: '分析' },
+  { re: /(协作|协同|一起|分工|多人|团队|帮忙|协助|配合|各自)/, label: '协作' }
+]
+const GENERIC_PROJECT_WORDS = new Set([
+  'world', 'task', 'tasks', 'session', 'sessions', 'dsh', 'desktop', 'harness', 'workspace',
+  'default-workspace', 'world-workspace', 'world-workspaces', 'exe', 'app', 'the', 'and', 'for', 'with', 'new',
+  'bug', 'bugs', 'ui', 'api', 'pdf', 'ppt', 'doc', 'docs', 'docx', 'xlsx', 'png', 'jpg', 'json', 'log', 'logs',
+  'test', 'tests', 'true', 'false', 'null', 'none', 'ok', 'id', 'ip', 'url', 'http', 'https'
+])
+const CJK_CHAR_RE = /[\u3400-\u9fff\uf900-\ufaff]/
+
+const compactProject = (value) => String(value || '').toLowerCase().replace(/[^0-9a-z]/g, '')
+
+function stripGroupNameFillers(input) {
+  let rest = String(input || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s:：,，.。;；!！?？\-—_、·]+/, '')
+    .trim()
+  let changed = true
+  let guard = 0
+  while (changed && guard < 40) {
+    changed = false
+    guard += 1
+    for (const filler of GROUP_NAME_FILLERS) {
+      if (!rest.startsWith(filler)) continue
+      const after = rest.slice(filler.length)
+      if (after && /[A-Za-z0-9]/.test(after[0]) && !/[\s:：,，.。;；!！?？]/.test(after[0])) {
+        // 填充词紧贴英文项目名时（如 toshootgame）不拆，交给项目名提取
+        if (!CJK_CHAR_RE.test(filler)) continue
+      }
+      rest = after.replace(/^[\s:：,，.。;；!！?？\-—_、·]+/, '').trim()
+      changed = true
+      break
+    }
+  }
+  return rest
+}
+
+/** 从正文/工作区里提取项目名：优先工作区 basename 与正文英文名匹配者，其次正文英文名，最后工作区 basename。 */
+function projectNameOf(text, options = {}) {
+  // 去掉 @mention（@contactId/@短id 不算项目名），再提取英文项目名。
+  const source = String(text || '').replace(/@[^\s@，,。；;：:！!？?、（）()\[\]【】]+/g, ' ')
+  const workspace = String(options.workspace || options.cwd || '').trim()
+  const cwdBase = workspace ? path.basename(workspace.replace(/[\\/]+$/, '')) : ''
+  const tokens = [...new Set(source.match(/[A-Za-z][A-Za-z0-9_-]{2,}/g) || [])]
+  const usableCwd = cwdBase && !GENERIC_PROJECT_WORDS.has(cwdBase.toLowerCase()) && !/^mw[0-9a-z]+$/i.test(cwdBase)
+  for (const token of tokens) {
+    const low = token.toLowerCase()
+    if (GENERIC_PROJECT_WORDS.has(low)) continue
+    // 带数字的 token 多半是 id/版本号（例如 contactId 片段 b9b11），不当作项目名
+    if (/\d/.test(token)) continue
+    if (usableCwd && (compactProject(cwdBase).includes(compactProject(token)) || compactProject(token).includes(compactProject(cwdBase)))) {
+      return cwdBase
+    }
+    return token
+  }
+  return usableCwd ? cwdBase : ''
+}
+
+function actionLabelOf(text) {
+  const source = String(text || '')
+  for (const rule of GROUP_ACTION_RULES) if (rule.re.test(source)) return rule.label
+  return '协作'
+}
+
+/** 生成可读群名（≤16 个有效字；带项目名时形如 `shoot_game · 招募协作`）。 */
+function generateGroupName(text, options = {}) {
+  const source = String(text || '').replace(/\s+/g, ' ').trim()
+  const project = projectNameOf(source, options)
+  const action = actionLabelOf(source)
+  if (project) {
+    const name = `${String(project).slice(0, 12)} · ${action}`
+    return name.slice(0, 24) || '协作群'
+  }
+  const cleaned = stripGroupNameFillers(source).replace(/[\s:：,，.。;；!！?？\-—_、·]+/g, '')
+  const cjk = [...cleaned].filter((ch) => CJK_CHAR_RE.test(ch)).join('')
+  const head = (cjk || cleaned).slice(0, 12) || '任务'
+  return (head + '协作').slice(0, 16)
 }
 
 function truncate(text, max) {
@@ -1750,6 +1856,64 @@ export function apply(ctx, config = {}) {
       if (group.managerSessionId) managerIds.add(group.managerSessionId)
     }
     const maintainerId = maintainerStore.get()
+    // ---------------------------------------------------------------- 空闲看板（v2.9.0）
+    // availability 完全由看板派生（不新增存储）：
+    //  - 有「发给该会话且未回答的 request」→ busy；request 被 answer（status=answered）后自动回 idle；
+    //  - 该会话是未完成群任务的 coordinator → 也视为 busy（正常情况下 coordinator request open 已覆盖）；
+    //  - 记录 currentTask（谁占着）、openRequestCount、lastSubmittedAt（最近一次提交/交接时间）。
+    const activeEntriesNow = store.readActive()
+    const openRequestsBySession = new Map()
+    const openTasksByCoordinator = new Map()
+    const lastSubmittedBySession = new Map()
+    for (const entry of activeEntriesNow) {
+      if (!entry || typeof entry !== 'object') continue
+      const isOpenRequest = entry.kind === 'request' && entry.status !== 'answered' && !entry.answeredBy
+      if (isOpenRequest) {
+        const targets = [
+          ...new Set([
+            ...(Array.isArray(entry.requestTo) ? entry.requestTo : []),
+            ...(Array.isArray(entry.mentions) ? entry.mentions : [])
+          ])
+        ]
+        for (const targetId of targets) {
+          if (typeof targetId !== 'string' || !targetId || targetId === 'panel') continue
+          if (!openRequestsBySession.has(targetId)) openRequestsBySession.set(targetId, [])
+          openRequestsBySession.get(targetId).push(entry)
+        }
+      }
+      if (entry.kind === 'task' && typeof entry.coordinator === 'string' && entry.coordinator && (entry.taskStatus || 'assigned') !== 'done') {
+        if (!openTasksByCoordinator.has(entry.coordinator)) openTasksByCoordinator.set(entry.coordinator, [])
+        openTasksByCoordinator.get(entry.coordinator).push(entry)
+      }
+      if (
+        typeof entry.author === 'string' &&
+        entry.author &&
+        entry.author !== 'panel' &&
+        (entry.kind === 'handoff' || entry.kind === 'decision')
+      ) {
+        const ts = toNumber(entry.answeredAt || entry.ts, 0)
+        if (ts > (lastSubmittedBySession.get(entry.author) || 0)) lastSubmittedBySession.set(entry.author, ts)
+      }
+    }
+    const availabilityOf = (sessionId) => {
+      const requests = openRequestsBySession.get(sessionId) || []
+      const tasks = openTasksByCoordinator.get(sessionId) || []
+      const source = requests[0] || tasks[0] || null
+      return {
+        availability: source ? 'busy' : 'idle',
+        currentTask: source
+          ? {
+              id: source.id,
+              title: String(source.title || '').slice(0, 40),
+              kind: requests[0] ? 'request' : 'task',
+              role: String(source.taskRole || ''),
+              since: toNumber(source.ts, 0)
+            }
+          : null,
+        openRequestCount: requests.length,
+        lastSubmittedAt: lastSubmittedBySession.get(sessionId) || 0
+      }
+    }
     return records
       .map((record) => {
         const hit = titleCache.get(record.id)
@@ -1775,6 +1939,7 @@ export function apply(ctx, config = {}) {
         }
         const repNow = reputationOf(record.id)
         const identity = identityOf(record.id, title)
+        const availability = availabilityOf(record.id)
         return {
           id: record.id,
           contactId: contactIdOf(record.id),
@@ -1803,6 +1968,10 @@ export function apply(ctx, config = {}) {
             (Boolean(profilesNow[record.id] && profilesNow[record.id].summary) ||
               groupMemberIds.has(record.id) ||
               record.id === maintainerId),
+          availability: availability.availability,
+          currentTask: availability.currentTask,
+          openRequestCount: availability.openRequestCount,
+          lastSubmittedAt: availability.lastSubmittedAt,
           isLead: true
         }
       })
@@ -4481,7 +4650,7 @@ export function apply(ctx, config = {}) {
           `- contactId=${session.contactId || contactIdOf(session.id)} · handle=${session.handle || '（无）'} · title=${session.title || shortSid(session.id)}`
         )
         lines.push(
-          `  fullId=${session.id} · live=${session.live ? 'yes' : 'no'} · status=${session.status || (session.live ? 'idle' : 'history')} · 群组=${groupNames.length ? groupNames.join('、') : '（无）'} · worldEligible=${session.worldEligible ? 'yes' : 'no'} · cwd=${session.cwd || '（无）'}`
+          `  fullId=${session.id} · live=${session.live ? 'yes' : 'no'} · status=${session.status || (session.live ? 'idle' : 'history')} · availability=${session.availability || 'idle'}${session.currentTask && session.currentTask.title ? `（${session.currentTask.title}）` : ''} · 群组=${groupNames.length ? groupNames.join('、') : '（无）'} · worldEligible=${session.worldEligible ? 'yes' : 'no'} · cwd=${session.cwd || '（无）'}`
         )
       }
       if (group && group.managerSessionId) {
@@ -4766,6 +4935,7 @@ export function apply(ctx, config = {}) {
           `看板条目：活动 ${all.length} 条（其中我发布的 ${mine.length} 条）· 群组 ${groups.length} 个`,
           `当前会话：contactId=${contactIdOf(info.id) || '?'} · ${info.id || '?'}${info.cwd ? ` · 工作区 ${info.cwd}` : ''}`,
           `通讯录：${sessionsNow.length} 个主会话（contactId 见下，可用 session_directory 查询/过滤；派活用 session_ask 的 to=contactId）`,
+          `空闲看板：idle ${sessionsNow.filter((session) => session.availability !== 'busy').length} 个 · busy ${sessionsNow.filter((session) => session.availability === 'busy').length} 个（有未回答 request 或未完成群任务组长任务即为 busy；回答后自动回到 idle）`,
           `配置：scope=${cfg.scope} · maxShown=${cfg.maxShown} · ttl=${cfg.ttlHours}h · autoCapture=${cfg.autoCapture !== false}`,
           `注册：系统提示词说明=${registration.section ? '是' : '否'} · 运行时上下文=${registration.context ? '是' : '否'} · 看板 API=${registration.api ? '是' : '否'} · 面板 client.js=${fs.existsSync(path.resolve(HERE, '..', 'client.js')) || fs.existsSync(path.join(HERE, 'client.js')) ? '存在' : '缺失'}`,
           `客户端模块：${moduleInfo.available ? `已挂载（${moduleInfo.count} 个，本插件=${moduleInfo.hasSelf ? '已注册' : '未注册'}）` : '服务不可用'}${moduleInfo.available && !moduleInfo.hasSelf && moduleInfo.ids ? `\n  ids：${moduleInfo.ids.join(', ')}` : ''}`,
@@ -4775,7 +4945,8 @@ export function apply(ctx, config = {}) {
             ? live.map((item) => {
                 const session = sessionById.get(item.id)
                 const who = session ? `${session.contactId || contactIdOf(item.id)} · ${session.handle || session.title}` : `${contactIdOf(item.id) || shortSid(item.id)}`
-                return `  - ${who} · ${item.status} · ${item.cwd ? path.basename(item.cwd) : '(无 cwd)'}`
+                const busyTag = session && session.availability === 'busy' ? ` · busy(${truncate(String((session.currentTask && session.currentTask.title) || '任务'), 20)})` : ' · idle'
+                return `  - ${who} · ${item.status}${busyTag} · ${item.cwd ? path.basename(item.cwd) : '(无 cwd)'}`
               })
             : ['  (无)'])
         ].join('\n')
@@ -5080,6 +5251,48 @@ export function apply(ctx, config = {}) {
         decision.sessionId = ''
         decision.reason = `用户明确要求全新；${decision.reason || ''}`
       }
+      // ---------------------------------------------------------------- 空闲看板路由（v2.9.0）
+      // 显式 @ 具体成员：尊重用户选择（忙也派）；其它匹配（路由器/关键词/@所有人）只派 idle。
+      const availabilityById = new Map(sessionsNow.map((session) => [session.id, session.availability || 'idle']))
+      const isExplicitMention = decision.engine === 'mentions' && parsedWorldMentions.ids.length > 0
+      if (decision.route === 'existing' && !isExplicitMention) {
+        const wantedIds = [
+          ...new Set([
+            ...(Array.isArray(decision.sessionIds) ? decision.sessionIds : []),
+            ...(decision.sessionId ? [decision.sessionId] : [])
+          ])
+        ].filter(Boolean)
+        const busyWanted = wantedIds.filter((id) => availabilityById.get(id) === 'busy')
+        const idleWanted = wantedIds.filter((id) => availabilityById.get(id) !== 'busy')
+        if (idleWanted.length && busyWanted.length) {
+          decision.sessionIds = idleWanted
+          decision.sessionId = idleWanted[0]
+          decision.reason = `${decision.reason || ''}；已跳过忙碌成员 ${busyWanted.map((id) => shortSid(id)).join('、')}`
+        } else if (!idleWanted.length && wantedIds.length) {
+          // 匹配成员都在忙：先尝试改派给空闲且申报相关的成员，没有则退回新建会话（触发复核），不硬派忙碌老人。
+          let idleAlternative = null
+          try {
+            const matches = await matchProfileMembers(text)
+            idleAlternative = matches.find((item) => availabilityById.get(item.id) !== 'busy') || null
+          } catch {
+            idleAlternative = null
+          }
+          if (idleAlternative) {
+            decision.sessionIds = [idleAlternative.id]
+            decision.sessionId = idleAlternative.id
+            decision.reason = `${decision.reason || ''}；原匹配成员忙，改派空闲成员 ${shortSid(idleAlternative.id)}`
+          } else {
+            decision = {
+              engine: 'busy-fallback',
+              route: 'new',
+              sessionId: '',
+              sessionIds: [],
+              newWorkspace: false,
+              reason: `${decision.reason || ''}；匹配成员都在忙（${busyWanted.map((id) => shortSid(id)).join('、')}），改新建会话（需复核）`
+            }
+          }
+        }
+      }
       // 自动创建新会话/工作区前，先让用户复核（仅针对方舟自动创建，不拦手动新对话）。
       if (decision.route === 'new') {
         const approvalRef = String((payload && payload.approvalId) || '').trim()
@@ -5154,7 +5367,7 @@ export function apply(ctx, config = {}) {
           .filter(Boolean)
           .map((target) => ({ id: target.id, title: target.title, contactId: target.contactId || contactIdOf(target.id), score: 0 }))
       }
-      // 协同类任务：如果只命中一个会话，再挑 1-2 个申报相关的成员一起拉群。
+      // 协同类任务：如果只命中一个会话，再挑 1-2 个申报相关且空闲的成员一起拉群（忙碌成员不加）。
       if (decision.route === 'existing' && decision.engine !== 'mentions' && assigned.length === 1) {
         const collaborative = /(大家|一起|协同|协作|分工|多人|帮忙|帮手|人手|增援|协助|配合|团队|各自)/.test(text)
         if (collaborative) {
@@ -5165,6 +5378,7 @@ export function apply(ctx, config = {}) {
                 (session) =>
                   session.worldEligible === true &&
                   session.id !== assigned[0].id &&
+                  session.availability !== 'busy' &&
                   profilesNow[session.id]
               )
               .map((session) => ({
@@ -5178,7 +5392,7 @@ export function apply(ctx, config = {}) {
               assigned.push(
                 ...extra.map((item) => ({ id: item.session.id, title: item.session.title, score: item.score }))
               )
-              decision.reason += '；根据协同需求扩展给 ' + extra.length + ' 位相关成员'
+              decision.reason += '；根据协同需求扩展给 ' + extra.length + ' 位空闲相关成员'
             }
           } catch {
             /* ignore */
@@ -5270,15 +5484,18 @@ export function apply(ctx, config = {}) {
       if (assigned.length >= 1) {
         try {
           const memberIds = [...new Set(assigned.map((item) => item.id))]
-          const baseName = ('协作：' + String(text).replace(/\s+/g, ' ')).slice(0, 24)
+          const firstSession = sessionsNow.find((session) => session.id === memberIds[0])
+          // v2.9.0：用可读群名生成器，避免 '协作：' + 半句任务 这种丑名字。
+          const baseName = generateGroupName(text, {
+            workspace: (firstSession && firstSession.cwd) || decision.folderPath || ''
+          })
           const groupsNow = groupStore.read()
           let groupName = baseName
           let suffix = 2
           while (groupsNow.some((group) => group.name === groupName)) {
-            groupName = baseName + ' ' + suffix
+            groupName = `${baseName} ${suffix}`
             suffix += 1
           }
-          const firstSession = sessionsNow.find((session) => session.id === memberIds[0])
           const group = {
             id: 'g-' + Date.now().toString(36) + '-' + randomBytes(3).toString('hex'),
             name: groupName,
@@ -5666,22 +5883,37 @@ export function apply(ctx, config = {}) {
         } catch {
           /* 无申报时用第一个成员当组长 */
         }
-        // 用户可在面板里显式指定组长；指定的人必须在本次 @ 的成员里。
+        // 用户可在面板里显式指定组长；指定的人必须在本次 @ 的成员里（显式选择即使忙也尊重）。
         const requestedCoordinator = typeof payload.coordinatorId === 'string' ? payload.coordinatorId.trim() : ''
-        if (requestedCoordinator && targetIds.includes(requestedCoordinator)) {
+        const coordinatorExplicit = Boolean(requestedCoordinator && targetIds.includes(requestedCoordinator))
+        if (coordinatorExplicit) {
           coordinatorId = requestedCoordinator
           bestScore = Number.POSITIVE_INFINITY
+        }
+        const availabilityOfId = (sessionId) => {
+          const session = sessionById.get(sessionId)
+          return session && session.availability === 'busy' ? 'busy' : 'idle'
+        }
+        // 空闲看板（v2.9.0）：未显式指定时优先挑空闲组长（避免把新任务压给还有 open request 的老人）。
+        if (!coordinatorExplicit) {
+          const idleTarget = targetIds.find((sessionId) => availabilityOfId(sessionId) === 'idle')
+          if (idleTarget) coordinatorId = idleTarget
         }
         // 优先选一个「在线」的组长；都在线则用评分最高者，全离线则保留评分最高者（任务排队）。
         try {
           const liveIds = new Set(liveRootSessions().map((item) => item.id))
           if (!liveIds.has(coordinatorId)) {
-            const liveTarget = targetIds.find((sessionId) => liveIds.has(sessionId))
+            const liveIdleTarget = targetIds.find(
+              (sessionId) => liveIds.has(sessionId) && availabilityOfId(sessionId) === 'idle'
+            )
+            const liveTarget = liveIdleTarget || targetIds.find((sessionId) => liveIds.has(sessionId))
             if (liveTarget) coordinatorId = liveTarget
           }
         } catch {
           /* ignore */
         }
+        const coordinatorBusy = availabilityOfId(coordinatorId) === 'busy'
+        const assigneeBusyIds = targetIds.filter((sessionId) => sessionId !== coordinatorId && availabilityOfId(sessionId) === 'busy')
         const assigneeIds = targetIds.filter((sessionId) => sessionId !== coordinatorId)
         const taskEntry = addEntry(
           {
@@ -5746,6 +5978,12 @@ export function apply(ctx, config = {}) {
                   memberDirectoryText(assigneeSessions)
                 ]
               : []),
+            ...(coordinatorBusy
+              ? [`⚠ 你当前看板仍是 busy（还有未回答的请求/未完成的任务），本任务可能排队；如无法立即开始，请先在群里说明。`]
+              : []),
+            ...(assigneeBusyIds.length
+              ? [`（提示：成员 ${assigneeBusyIds.map((sessionId) => titleOf(sessionId)).join('、')} 当前也在忙，派活可能排队。）`]
+              : []),
             '',
             '你的职责：',
             '1. 先规划分工；成员目前**还没有被唤醒**，只有你用 session_ask mode=task 派活后他们才会收到（派活会自动归属本任务，避免同一任务被重复执行；to 支持 contactId / 短 id / handle / 标题，不限完整 id）；',
@@ -5769,6 +6007,8 @@ export function apply(ctx, config = {}) {
             assignees: assigneeIds.map((sessionId) => ({ id: sessionId, title: titleOf(sessionId), contactId: contactIdOf(sessionId) })),
             status: 'assigned'
           },
+          coordinatorBusy,
+          busyAssignees: assigneeBusyIds.map((sessionId) => ({ id: sessionId, title: titleOf(sessionId) })),
           woken,
           requestIds
         }
@@ -6242,19 +6482,43 @@ export function apply(ctx, config = {}) {
     }
     if (action === 'group.update' || action === 'group.rename') {
       const wanted = String(payload.id || '').trim()
+      const autoName = action === 'group.rename' && payload.auto === true
       const name = typeof payload.name === 'string' ? payload.name.trim().slice(0, 40) : ''
       const hasGoal = typeof payload.goal === 'string'
       const goal = hasGoal ? payload.goal.trim().slice(0, 300) : ''
-      if (action === 'group.rename' && !name) return { ok: false, error: '群名不能为空' }
+      if (action === 'group.rename' && !name && !autoName) {
+        return { ok: false, error: '群名不能为空（也可传 auto=true 按群目标自动生成可读群名）' }
+      }
       if (action === 'group.update' && !name && !hasGoal) return { ok: false, error: '没有要更新的字段' }
-      return mutateGroups((groups) => {
-        const group = groups.find((item) => item.id === wanted || item.id.startsWith(wanted))
+      const groupsNow = groupStore.read()
+      const target = groupsNow.find((item) => item.id === wanted || item.id.startsWith(wanted))
+      if (!target) return { ok: false, error: '找不到群组' }
+      // auto=true（v2.9.0）：按群目标/工作区重新生成可读群名，用于修复历史遗留的半句群名。
+      let nextName = name
+      if (autoName) {
+        const sessionsNow = await buildSessionIndex()
+        const firstMember = sessionsNow.find((session) => session.id === target.sessionIds[0])
+        nextName = generateGroupName(target.goal || target.name || '协作群', {
+          workspace: target.workspace || (firstMember && firstMember.cwd) || ''
+        })
+      }
+      let previousName = ''
+      const result = mutateGroups((groups) => {
+        const group = groups.find((item) => item.id === target.id)
         if (!group) return { ok: false, error: '找不到群组' }
-        if (name) group.name = name
+        previousName = group.name
+        if (nextName) group.name = nextName
         if (hasGoal) group.goal = goal
         group.updatedAt = Date.now()
         return { ok: true, groupId: group.id }
       })
+      if (result.ok) {
+        // 群管理会话的标题由群名派生（buildSessionIndex 每次按最新群名生成），改名后标题自动保持可读。
+        if (target.managerSessionId) titleCache.delete(target.managerSessionId)
+        logger.info(`群组改名：${previousName || target.name} → ${nextName || target.name}（id=${target.id}）`)
+        return { ok: true, groupId: target.id, name: nextName || target.name, previousName: previousName || target.name }
+      }
+      return result
     }
     if (action === 'group.delete') {
       const wanted = String(payload.id || '').trim()

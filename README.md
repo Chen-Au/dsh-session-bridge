@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.8.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.9.0-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 
@@ -81,6 +81,13 @@
 - **统一会话引用解析**：`session_ask` / `session_nudge` 的 `to`、`group_member` 的 `sessions`、面板加/移成员、世界任务正文 `@` 都支持完整 id、无前缀 id、contactId、短 id（6 位压缩前缀）、唯一前后缀、handle、标题；命中多个时**返回候选并明确报错**，不会静默选错；
 - 群任务派活消息自动附带成员通讯录（contactId + handle + 标题），面板群成员列表显示可点击复制的 contactId，组长不必再猜短 ID；
 - **修复**：此前 6 位短 id（如 `4f51e9`）无法用于 `session_ask` 的 `to`（旧逻辑只支持完整 id / startsWith / 标题），只能退回给值班员；现在可直接派活。
+
+### 9. 可读群名与空闲看板（v2.9.0）
+
+- **自动群名可读化**：不再用 `协作：` + 任务前 24 字（会截出半句），改为去口语填充 + 提取项目名/动作类型，生成如「shoot_game · 招募协作」的群名；`group.rename` 支持手动改名，也支持 `auto=true` 按群目标自动修复旧群名，群管理会话标题随群名实时保持可读。
+- **空闲看板（availability）**：每个主会话派生 `idle` / `busy`——有「未回答的 request」或「未完成的群任务（组长）」即 busy，交回结果/回答后自动回 idle；`state.sessions` 新增 `availability`、`currentTask`、`openRequestCount`、`lastSubmittedAt`；独立窗口新增「空闲看板」（idle 在前、busy 显示当前任务与时间、点击跳会话），群成员列表也会显示忙/空闲徽标。
+- **路由避忙**：世界任务的非显式匹配与协同扩展只派 idle 成员；若匹配成员全忙则改新建会话（进入待复核），不会硬派给忙碌老人；显式 `@` 某人仍尊重用户选择。群任务默认优先空闲成员当组长，显式指定忙碌组长会提示可能排队。
+- **测试**：契约测试新增 G 段，覆盖群名生成/丑名自动改/手动改/群管理标题、`open request → busy → answer → idle`、世界路由避忙/全忙复核/显式 @。
 
 ---
 

@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.8.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.9.0-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 **English** | [简体中文](README.md)
@@ -94,6 +94,13 @@ The plugin does not take over the right sidebar. Click **"星桥"** at the botto
 - **Unified session reference resolution**: the `to` argument of `session_ask` / `session_nudge`, the `sessions` argument of `group_member`, panel add/remove, and world-task `@` mentions all accept full ids, ids without the `session-` prefix, contactIds, 6-character short ids, unique prefixes/suffixes, handles, and titles. Ambiguous input returns the candidates and an explicit error instead of silently picking one.
 - Group task dispatch messages now include the member directory (contactId + handle + title), and the group member list shows a click-to-copy contactId, so coordinators no longer have to guess short ids.
 - **Fix**: 6-character short ids (e.g. `4f51e9`) previously failed to resolve in `session_ask` because the old matcher only accepted full ids, `startsWith`, and titles; tasks had to be bounced back to the on-duty session. They now dispatch directly.
+
+### 9. Readable group names and the idle board (v2.9.0)
+
+- **Readable auto-generated group names**: instead of `协作：` + the first 24 characters of the task (which produced half sentences), the plugin strips filler words, extracts a project name and an action keyword, and generates names such as `shoot_game · 招募协作`. `group.rename` supports manual renaming and `auto=true` to regenerate a readable name from the group goal; the group-manager session title follows the group name automatically.
+- **Idle board (availability)**: every root session derives `idle` / `busy` — busy means it has an unanswered request or is the unfinished coordinator of a group task; answering/submitting returns it to idle. `state.sessions` now exposes `availability`, `currentTask`, `openRequestCount`, and `lastSubmittedAt`. The standalone window has a new **idle board** (idle first, busy shows the current task and time, click to jump to the session), and group member lists show a busy/idle badge.
+- **Busy-aware routing**: non-explicit world-task matching and collaborative expansion only pick idle sessions; if every matched session is busy the task falls back to creating a new session (pending review) instead of assigning a busy one. Explicit `@` mentions still respect the user's choice. Group tasks prefer an idle coordinator; explicitly choosing a busy coordinator shows a queueing warning.
+- **Tests**: contract tests add a G section covering group-name generation/auto-rename/manual rename/manager title, `open request → busy → answer → idle`, and idle-aware routing/full-busy fallback/explicit mentions.
 
 ## Install
 
