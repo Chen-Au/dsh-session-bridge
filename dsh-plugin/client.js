@@ -2561,7 +2561,18 @@ window.__ModuleLoader__.load({
       var kindLabel = KIND_LABELS[displayKind] || '经验'
       var requestStatus = ''
       if (rule.kind === 'request') {
-        requestStatus = rule.status === 'answered' ? '已由 ' + shortId(rule.answeredBy) + ' 回复' : rule.status === 'canceled' ? '已撤回' : '待响应'
+        requestStatus =
+          rule.status === 'answered'
+            ? '已由 ' + shortId(rule.answeredBy) + ' 回复'
+            : rule.status === 'queued'
+              ? '排队中' +
+                (asArray(rule.dependsOn).length ? '，依赖 ' + asArray(rule.dependsOn).length + ' 项前置' : '') +
+                (rule.notBefore && rule.notBefore > Date.now() ? '，延时未到' : '')
+              : rule.status === 'failed'
+                ? '未发出：' + (rule.failReason || '排队失败')
+                : rule.status === 'canceled'
+                  ? '已撤回'
+                  : '待响应'
       }
       return h(
         'div',
@@ -2594,7 +2605,7 @@ window.__ModuleLoader__.load({
               { style: { display: 'flex', gap: 4, alignItems: 'center', marginBottom: 2, flexWrap: 'wrap' } },
               rule.urgent ? h(Badge, { tone: 'error' }, '⚡ 加急') : null,
               h(Badge, { tone: KIND_TONE[displayKind] || 'neutral' }, kindLabel),
-              requestStatus !== '' ? h(Badge, { tone: rule.status === 'answered' ? 'success' : rule.status === 'canceled' ? 'neutral' : 'warn' }, requestStatus) : null,
+              requestStatus !== '' ? h(Badge, { tone: rule.status === 'answered' ? 'success' : rule.status === 'queued' ? undefined : rule.status === 'canceled' ? 'neutral' : 'warn' }, requestStatus) : null,
               h(
                 'button',
                 {
@@ -2624,7 +2635,18 @@ window.__ModuleLoader__.load({
                           .join('、')
                       : '（无）') +
                     ' · 状态：' +
-                    ({ assigned: '已分配', delegating: '已派发', collecting: '收集中', done: '已完成' }[rule.taskStatus] || rule.taskStatus || '已分配')
+                    ({ assigned: '已分配', delegating: '已派发', collecting: '收集中', done: '已完成' }[rule.taskStatus] || rule.taskStatus || '已分配') +
+                    (function () {
+                      var steps = asArray(rule.steps)
+                      if (!steps.length) return ''
+                      var done = steps.filter(function (step) {
+                        return step && step.status === 'done'
+                      }).length
+                      var next = steps.filter(function (step) {
+                        return step && step.status !== 'done'
+                      })[0]
+                      return ' · 步骤 ' + done + '/' + steps.length + (next ? '（下一步 ' + next.i + '：' + next.text + '）' : '（全部完成）')
+                    })()
                 )
               : null,
             h('div', { style: { fontWeight: 600, wordBreak: 'break-word' } }, rule.title),

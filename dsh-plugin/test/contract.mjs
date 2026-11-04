@@ -3496,6 +3496,504 @@ await check('群任务 UI：发布任务入口 / 组长选择 / 任务卡可见�
   assert.match(html, /entry\.kind === 'task'/, '群聊渲染应包含任务卡分支')
 })
 
+
+await (async () => {
+  // ---------------------------------------------------------------- M. 串行指令（v2.9.5）
+  console.log('== M. 串行指令：依赖排队 / 延迟 / 持久化 / 循环依赖（v2.9.5）')
+  const serialDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-bridge-serial-'))
+  const S_LEAD = 'session-1111aaaa'
+  const S_ONE = 'session-2222bbbb'
+  const S_TWO = 'session-3333cccc'
+  const serialCaptured = { tools: [], sections: [], contexts: [], listeners: [], routes: [], followups: [] }
+  const serialAgent = (id) => ({
+    id,
+    status: 'idle',
+    session: { id, header: { cwd: CWD, createdAt: 1 } },
+    followup(message) {
+      serialCaptured.followups.push({ sessionId: this.id, message })
+    }
+  })
+  const serialLead = serialAgent(S_LEAD)
+  const serialOne = serialAgent(S_ONE)
+  const serialTwo = serialAgent(S_TWO)
+  const serialAgents = [serialLead, serialOne, serialTwo]
+  const serialTitles = { [S_LEAD]: '串行组长', [S_ONE]: '串行成员一', [S_TWO]: '串行成员二' }
+  const fakeSessionQuery4 = {
+    async listSessions() {
+      return serialAgents.map((agent) => ({ header: agent.session.header, live: true, persisted: true, formatStatus: 'current' }))
+    },
+    async readTitleSnapshots(ids) {
+      return ids.map((id) => ({
+        sessionId: id,
+        status: 'fulfilled',
+        value: { session: { id }, ...(serialTitles[id] ? { title: { title: serialTitles[id] } } : {}) }
+      }))
+    }
+  }
+  const serialCtxFactory = (captured) => ({
+    tools: {
+      register(definition) {
+        captured.tools.push(definition)
+        return () => {}
+      }
+    },
+    systemPrompt: {
+      section(options) {
+        captured.sections.push(options)
+        return () => {}
+      },
+      context(options) {
+        captured.contexts.push(options)
+        return () => {}
+      }
+    },
+    agents: {
+      roots: () => serialAgents,
+      list: () => serialAgents,
+      get: (id) => serialAgents.find((agent) => agent.id === id)
+    },
+    sessions: { list: () => serialAgents.map((agent) => agent.session) },
+    get(name) {
+      if (name === 'sessionQuery') return fakeSessionQuery4
+      if (name === 'webServer') {
+        return {
+          register(route) {
+            captured.routes.push(route)
+            return () => {}
+          }
+        }
+      }
+      return undefined
+    },
+    effect(callback) {
+      const disposer = callback()
+      return typeof disposer === 'function' ? disposer : () => {}
+    },
+    on() {
+      return () => {}
+    },
+    logger: { info() {}, warn() {}, error() {} }
+  })
+  fs.writeFileSync(
+    path.join(serialDir, 'groups.json'),
+    JSON.stringify(
+      {
+        version: 1,
+        groups: [
+          {
+            id: 'g-serial',
+            name: '串行组',
+            workspace: CWD,
+            goal: '串行交付',
+            managerSessionId: S_LEAD,
+            sessionIds: [S_LEAD, S_ONE, S_TWO],
+            createdAt: 0,
+            updatedAt: 0
+          }
+        ]
+      },
+      null,
+      2
+    ),
+    'utf8'
+  )
+  // 组长可唤醒两个成员；成员一也能唤醒成员二（测试「普通成员不能排队」时先过掉唤醒权限这一关）。
+  fs.writeFileSync(
+    path.join(serialDir, 'permissions.json'),
+    JSON.stringify({ grants: { [S_LEAD]: [S_ONE, S_TWO], [S_ONE]: [S_TWO] } }, null, 2),
+    'utf8'
+  )
+  const serialCtx = serialCtxFactory(serialCaptured)
+  plugin.apply(serialCtx, { boardDir: serialDir, injectMode: 'broadcast', autoPrompt: false })
+  const tools4 = new Map(serialCaptured.tools.map((tool) => [tool.name, tool]))
+  const serialBoardFile = path.join(serialDir, 'board.jsonl')
+  const routeHandler4 = (p) => serialCaptured.routes.find((route) => route.path === p)?.handler
+  const callState4 = async () => {
+    const res = fakeRes()
+    await routeHandler4('/api/session-bridge/state')(fakeReq(), res)
+    return { res, json: JSON.parse(res.out.body) }
+  }
+  const callCommand4 = async (command) => {
+    const res = fakeRes()
+    await routeHandler4('/api/session-bridge/command')(
+      fakeReq({
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-session-bridge-action': '1' },
+        body: JSON.stringify(command)
+      }),
+      res
+    )
+    return { res, json: JSON.parse(res.out.body) }
+  }
+  const foldBoard4 = () => {
+    const map = new Map()
+    let raw = ''
+    try {
+      raw = fs.readFileSync(serialBoardFile, 'utf8')
+    } catch {
+      return map
+    }
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue
+      let event
+      try {
+        event = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (event.op === 'add' && event.entry) map.set(event.id, { ...event.entry, id: event.id })
+      else if (event.op === 'task' || event.op === 'retarget') {
+        const entry = map.get(event.id)
+        if (entry) map.set(event.id, { ...entry, ...(event.patch || {}) })
+      } else if (event.op === 'answer') {
+        const entry = map.get(event.id)
+        if (entry) map.set(event.id, { ...entry, status: 'answered', answeredBy: event.by, replyId: event.replyId || null })
+      } else if (event.op === 'remove') map.delete(event.id)
+    }
+    return map
+  }
+  const serialQueueFile = path.join(serialDir, 'pending-asks.json')
+  const readQueue4 = () => {
+    try {
+      const raw = JSON.parse(fs.readFileSync(serialQueueFile, 'utf8'))
+      return Array.isArray(raw && raw.items) ? raw.items : []
+    } catch {
+      return []
+    }
+  }
+  const writeQueue4 = (items) => fs.writeFileSync(serialQueueFile, JSON.stringify({ version: 1, items }, null, 2), 'utf8')
+  const requestIdOf4 = (text) => {
+    const match = String(text).match(/id=(n-[a-z0-9-]+)/)
+    return match ? match[1] : ''
+  }
+  const wakesTo = (sessionId) => serialCaptured.followups.filter((item) => item.sessionId === sessionId)
+  let stepOneRequestId = ''
+  let stepTwoRequestId = ''
+
+  await check('session_ask：dependsOn / delayMs / step 是可选参数且 schema 合法', () => {
+    const ask = tools4.get('session_ask')
+    assert.ok(ask, '缺少 session_ask')
+    const properties = ask.parameters.properties
+    assert.equal(properties.dependsOn.type, 'string')
+    assert.equal(properties.delayMs.type, 'integer')
+    assert.equal(properties.step.type, 'integer')
+    assert.ok(!ask.parameters.required.includes('dependsOn'), 'dependsOn 必须是可选参数')
+    assert.ok(!ask.parameters.required.includes('delayMs'), 'delayMs 必须是可选参数')
+  })
+
+  await check('不传依赖时行为不变：立即发出并唤醒', async () => {
+    serialCaptured.followups.length = 0
+    const out = String(await tools4.get('session_ask').execute({ group: '串行组', text: '步骤 1：先出提纲', to: S_ONE }, { agent: serialLead }))
+    assert.match(out, /发出探测|发出任务分配/)
+    assert.equal(serialCaptured.followups.length, 1, '不传依赖应立即唤醒一次')
+    assert.equal(readQueue4().length, 0, '不传依赖不应产生排队项')
+    stepOneRequestId = requestIdOf4(out)
+    assert.ok(stepOneRequestId, '应能拿到请求 id')
+    assert.equal(foldBoard4().get(stepOneRequestId).status, 'open')
+  })
+
+  await check('依赖未完成：不发出、不唤醒，先排队并出现在 state.pendingAsks', async () => {
+    serialCaptured.followups.length = 0
+    const out = String(
+      await tools4.get('session_ask').execute(
+        { group: '串行组', text: '步骤 2：按提纲写正文', to: S_TWO, dependsOn: stepOneRequestId },
+        { agent: serialLead }
+      )
+    )
+    assert.match(out, /已排队，等待前置完成/)
+    assert.equal(serialCaptured.followups.length, 0, '前置未完成时不应唤醒任何人')
+    const queue = readQueue4()
+    assert.equal(queue.length, 1, '应写入一条排队项')
+    assert.equal(queue[0].status, 'queued')
+    assert.deepEqual(queue[0].dependsOn, [stepOneRequestId])
+    stepTwoRequestId = queue[0].requestId
+    assert.equal(foldBoard4().get(stepTwoRequestId).status, 'queued', '看板里的请求应是排队状态')
+    const state = await callState4()
+    assert.equal(state.json.pendingAsks.length, 1, 'state 应暴露排队项')
+    assert.equal(state.json.pendingAsks[0].requestId, stepTwoRequestId)
+    assert.deepEqual(state.json.pendingAsks[0].dependsOn, [stepOneRequestId])
+  })
+
+  await check('讨论消息不算完成：群聊/普通分享不会推进串行队列', async () => {
+    serialCaptured.followups.length = 0
+    const shareTool = tools4.get('session_share')
+    await shareTool.execute(
+      { title: '群里随口一句', text: '我这边先看看，稍后给结论', kind: 'chat', group: '串行组' },
+      { agent: serialOne }
+    )
+    const run = await callCommand4({ action: 'pending.run' })
+    assert.equal(run.json.ok, true)
+    assert.equal(run.json.report.dispatched.length, 0, '只有聊天消息时不应推进')
+    const queued = readQueue4().find((item) => item.requestId === stepTwoRequestId)
+    assert.equal(queued.status, 'queued')
+    assert.equal(wakesTo(S_TWO).length, 0)
+  })
+
+  await check('前置 answered 后自动发出并唤醒目标（无需手动 tick）', async () => {
+    serialCaptured.followups.length = 0
+    const shareTool = tools4.get('session_share')
+    const out = String(
+      await shareTool.execute(
+        { title: '步骤 1 回执', text: '提纲已完成，共 4 章', kind: 'handoff', group: '串行组', replyTo: stepOneRequestId },
+        { agent: serialOne }
+      )
+    )
+    assert.match(out, /已回复|回复/)
+    const wokeTwo = wakesTo(S_TWO)
+    assert.equal(wokeTwo.length, 1, '前置 answered 后应自动唤醒步骤 2 的目标')
+    assert.match(String(wokeTwo[0].message.content[0].text), /步骤 2：按提纲写正文/)
+    const queued = readQueue4().find((item) => item.requestId === stepTwoRequestId)
+    assert.equal(queued.status, 'sent', '发送后队列项应标记 sent')
+    const entry = foldBoard4().get(stepTwoRequestId)
+    assert.equal(entry.status, 'open', '看板里的请求应转为 open')
+    assert.equal(wakesTo(S_ONE).filter((item) => String(item.message.content[0].text).includes('步骤 1')).length, 0, '不应重复唤醒步骤 1')
+  })
+
+  await check('delayMs 生效：延时未到不发，到点才发', async () => {
+    serialCaptured.followups.length = 0
+    const out = String(
+      await tools4.get('session_ask').execute(
+        { group: '串行组', text: '延时播报：结果出来后再汇总', to: S_TWO, delayMs: 60000 },
+        { agent: serialLead }
+      )
+    )
+    assert.match(out, /已排队/)
+    assert.match(out, /最早发送/)
+    const delayedRequestId = requestIdOf4(out)
+    const run = await callCommand4({ action: 'pending.run' })
+    assert.equal(run.json.report.dispatched.length, 0, '延时未到不应发出')
+    assert.ok(run.json.report.waiting.some((item) => item.requestId === delayedRequestId))
+    assert.equal(wakesTo(S_TWO).length, 0)
+    // 把 notBefore 改到过去，模拟「时间到了」
+    const items = readQueue4()
+    const target = items.find((item) => item.requestId === delayedRequestId)
+    target.notBefore = Date.now() - 1000
+    writeQueue4(items)
+    const run2 = await callCommand4({ action: 'pending.run' })
+    assert.equal(run2.json.report.dispatched.length, 1, '延时到点后应发出')
+    assert.equal(wakesTo(S_TWO).length, 1)
+    assert.match(String(wakesTo(S_TWO)[0].message.content[0].text), /延时播报/)
+  })
+
+  await check('找不到依赖：直接报错，不排队也不唤醒', async () => {
+    serialCaptured.followups.length = 0
+    const before = readQueue4().length
+    const out = String(
+      await tools4.get('session_ask').execute(
+        { group: '串行组', text: '依赖不存在的步骤', to: S_TWO, dependsOn: 'n-doesnotexist' },
+        { agent: serialLead }
+      )
+    )
+    assert.match(out, /找不到前置依赖/)
+    assert.equal(readQueue4().length, before, '找不到依赖时不应写队列')
+    assert.equal(serialCaptured.followups.length, 0)
+  })
+
+  await check('循环依赖：报错并停止，不死等', async () => {
+    const now = Date.now()
+    const cycA = 'n-cyc0001'
+    const cycB = 'n-cyc0002'
+    fs.appendFileSync(
+      serialBoardFile,
+      [
+        {
+          op: 'add',
+          id: cycA,
+          entry: { id: cycA, kind: 'request', scope: 'group', groupId: 'g-serial', workspace: CWD, author: S_LEAD, title: '循环 A', text: 'a', requestTo: [S_ONE], status: 'open', ts: now, expiresAt: 0 },
+          ts: now
+        },
+        {
+          op: 'add',
+          id: cycB,
+          entry: { id: cycB, kind: 'request', scope: 'group', groupId: 'g-serial', workspace: CWD, author: S_LEAD, title: '循环 B', text: 'b', requestTo: [S_TWO], status: 'open', ts: now, expiresAt: 0 },
+          ts: now
+        }
+      ]
+        .map((event) => JSON.stringify(event))
+        .join('\n') + '\n'
+    )
+    const items = readQueue4()
+    items.push({
+      id: 'q-cyc-a',
+      requestId: cycA,
+      groupId: 'g-serial',
+      groupName: '串行组',
+      workspace: CWD,
+      author: S_LEAD,
+      title: '循环 A',
+      text: 'a',
+      askMode: 'probe',
+      targetIds: [S_ONE],
+      taskId: '',
+      taskStep: 0,
+      dependsOn: [cycB],
+      delayMs: 0,
+      notBefore: 0,
+      createdAt: now,
+      status: 'queued'
+    })
+    items.push({
+      id: 'q-cyc-b',
+      requestId: cycB,
+      groupId: 'g-serial',
+      groupName: '串行组',
+      workspace: CWD,
+      author: S_LEAD,
+      title: '循环 B',
+      text: 'b',
+      askMode: 'probe',
+      targetIds: [S_TWO],
+      taskId: '',
+      taskStep: 0,
+      dependsOn: [cycA],
+      delayMs: 0,
+      notBefore: 0,
+      createdAt: now,
+      status: 'queued'
+    })
+    writeQueue4(items)
+    serialCaptured.followups.length = 0
+    const run = await callCommand4({ action: 'pending.run' })
+    const failedIds = run.json.report.failed.map((item) => item.requestId)
+    assert.ok(failedIds.includes(cycA) && failedIds.includes(cycB), '循环依赖的两条都应失败：' + JSON.stringify(run.json.report.failed))
+    assert.ok(run.json.report.failed.every((item) => /循环依赖/.test(item.error)), '失败原因应是循环依赖')
+    assert.equal(foldBoard4().get(cycA).status, 'failed')
+    assert.equal(wakesTo(S_ONE).length + wakesTo(S_TWO).length, 0, '循环依赖不应唤醒成员')
+  })
+
+  await check('权限：普通成员不能排串行指令（组长/维护者可以）', async () => {
+    serialCaptured.followups.length = 0
+    const before = readQueue4().length
+    const out = String(
+      await tools4.get('session_ask').execute(
+        { group: '串行组', text: '成员自己排步骤', to: S_TWO, dependsOn: stepOneRequestId },
+        { agent: serialOne }
+      )
+    )
+    assert.match(out, /只有组长 \/ 维护者/)
+    assert.equal(readQueue4().length, before, '被拒绝时不应写队列')
+    assert.equal(serialCaptured.followups.length, 0)
+  })
+
+  await check('队列持久化：插件重启（重新 apply）后仍能恢复并发出', async () => {
+    serialCaptured.followups.length = 0
+    const depOut = String(
+      await tools4.get('session_ask').execute({ group: '串行组', text: '步骤 3：等外部数据', to: S_ONE }, { agent: serialLead })
+    )
+    const depId = requestIdOf4(depOut)
+    assert.ok(depId)
+    const queueOut = String(
+      await tools4.get('session_ask').execute(
+        { group: '串行组', text: '步骤 4：数据到齐后整理成稿', to: S_TWO, dependsOn: depId },
+        { agent: serialLead }
+      )
+    )
+    assert.match(queueOut, /已排队/)
+    const persisted = readQueue4().filter((item) => item.status === 'queued')
+    assert.ok(persisted.some((item) => item.requestId === requestIdOf4(queueOut)), '排队项应落盘')
+
+    // 模拟插件重启：同一 boardDir 重新 apply（内存状态清空，只能从 JSON 恢复）
+    const reloadCaptured = { tools: [], sections: [], contexts: [], listeners: [], routes: [], followups: [] }
+    plugin.apply(serialCtxFactory(reloadCaptured), { boardDir: serialDir, injectMode: 'broadcast', autoPrompt: false })
+    const routeHandler5 = (p) => reloadCaptured.routes.find((route) => route.path === p)?.handler
+    const callCommand5 = async (command) => {
+      const res = fakeRes()
+      await routeHandler5('/api/session-bridge/command')(
+        fakeReq({
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-session-bridge-action': '1' },
+          body: JSON.stringify(command)
+        }),
+        res
+      )
+      return { res, json: JSON.parse(res.out.body) }
+    }
+    const beforeAnswer = await callCommand5({ action: 'pending.run' })
+    assert.equal(beforeAnswer.json.report.dispatched.length, 0, '前置未回复时重启后也不应发出')
+    // 重启后前置被回复（直接写 answer 事件，等价于成员用 session_share replyTo 回复）
+    fs.appendFileSync(
+      serialBoardFile,
+      JSON.stringify({ op: 'answer', id: depId, by: S_ONE, replyId: 'n-reply-x', ts: Date.now() }) + '\n',
+      'utf8'
+    )
+    serialCaptured.followups.length = 0
+    const afterAnswer = await callCommand5({ action: 'pending.run' })
+    assert.equal(afterAnswer.json.report.dispatched.length, 1, '重启后前置完成应自动发出：' + JSON.stringify(afterAnswer.json.report))
+    assert.ok(wakesTo(S_TWO).some((item) => String(item.message.content[0].text).includes('步骤 4')), '应唤醒步骤 4 的目标')
+  })
+
+  await check('群任务步骤：group.post 记录 steps；step 请求回执后步骤标记 done', async () => {
+    serialCaptured.followups.length = 0
+    const res = await callCommand4({
+      action: 'group.post',
+      payload: { id: 'g-serial', text: '两步任务：先调研再成稿', mentionAll: true, coordinatorId: S_LEAD, steps: ['先做调研', '再写正文'] }
+    })
+    assert.equal(res.json.ok, true, JSON.stringify(res.json))
+    const taskId = res.json.task.id
+    assert.equal(res.json.task.steps.length, 2)
+    assert.deepEqual(
+      res.json.task.steps.map((step) => step.text),
+      ['先做调研', '再写正文']
+    )
+    const leadWake = wakesTo(S_LEAD)[0]
+    assert.ok(leadWake, '应唤醒组长')
+    const leadMessage = String(leadWake.message.content[0].text)
+    assert.match(leadMessage, /先做调研/)
+    assert.match(leadMessage, /dependsOn/)
+    assert.match(leadMessage, /step=1/)
+
+    serialCaptured.followups.length = 0
+    const askOut = String(
+      await tools4.get('session_ask').execute(
+        { group: '串行组', text: '请做调研并给出结论', to: S_ONE, mode: 'task', step: 1 },
+        { agent: serialLead }
+      )
+    )
+    assert.match(askOut, /任务分配/)
+    const stepRequestId = requestIdOf4(askOut)
+    assert.ok(stepRequestId)
+    assert.equal(foldBoard4().get(stepRequestId).taskStep, 1, '请求条目应记录 step')
+    assert.equal(foldBoard4().get(taskId).steps[0].status, 'dispatched', '派发后步骤应为 dispatched')
+    // 成员回执 → 步骤 1 完成（只认 answered）
+    await tools4.get('session_share').execute(
+      { title: '调研回执', text: '调研已完成，结论在此', kind: 'handoff', group: '串行组', replyTo: stepRequestId },
+      { agent: serialOne }
+    )
+    const taskNow = foldBoard4().get(taskId)
+    assert.equal(taskNow.steps[0].status, 'done', 'answered 后步骤应标记完成')
+    assert.equal(taskNow.steps[1].status, 'pending', '未派发的下一步仍是 pending')
+  })
+
+  await check('任务依赖：task 未 done 时排队，组长汇总后自动发出', async () => {
+    serialCaptured.followups.length = 0
+    const posted = await callCommand4({
+      action: 'group.post',
+      payload: { id: 'g-serial', text: '汇总任务：整理两份数据', mentionAll: true, coordinatorId: S_LEAD }
+    })
+    assert.equal(posted.json.ok, true, JSON.stringify(posted.json))
+    const taskId = posted.json.task.id
+    const coordinatorRequestId = posted.json.requestIds[0]
+    assert.ok(taskId && coordinatorRequestId)
+    serialCaptured.followups.length = 0
+    const queuedOut = String(
+      await tools4.get('session_ask').execute(
+        { group: '串行组', text: '等汇总后再做最终核对', to: S_TWO, dependsOn: taskId, mode: 'probe' },
+        { agent: serialLead }
+      )
+    )
+    assert.match(queuedOut, /已排队/)
+    assert.equal(wakesTo(S_TWO).length, 0, '任务未 done 时不应唤醒')
+    // 组长提交唯一汇总 → 任务标记 done → 依赖该任务的串行指令自动发出
+    await tools4.get('session_share').execute(
+      { title: '任务完成', text: '汇总已完成并通过验收', kind: 'handoff', group: '串行组', replyTo: coordinatorRequestId },
+      { agent: serialLead }
+    )
+    assert.equal(foldBoard4().get(taskId).taskStatus, 'done', '组长汇总后任务应为 done')
+    const woke = wakesTo(S_TWO)
+    assert.equal(woke.length, 1, '任务变成 done 后应自动发出并唤醒目标')
+    assert.match(String(woke[0].message.content[0].text), /等汇总后再做最终核对/)
+  })
+})()
 // ---------------------------------------------------------------- 收尾
 fs.rmSync(targetedDir, { recursive: true, force: true })
 fs.rmSync(contactDir, { recursive: true, force: true })

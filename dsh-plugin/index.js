@@ -63,6 +63,11 @@ const VERSION = '2.9.6'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
+/** 串行指令队列（依赖未满足/延迟未到的 session_ask），插件重启后从这里恢复。 */
+const PENDING_FILE = 'pending-asks.json'
+const PENDING_MAX_ITEMS = 100
+/** 排队超过这个时间还没等到前置完成就判过期，避免无限等待。 */
+const PENDING_TTL_MS = 48 * 3600 * 1000
 const REPUTATION_FILE = 'reputation.json'
 const IDENTITY_FILE = 'identities.json'
 const PROFILES_DIR = 'profiles'
@@ -155,6 +160,8 @@ const INSTRUCTIONS = `## 跨会话经验桥（session-bridge，插件自动生�
 **申报材料（session_profile）**：新会话若要参与协作，先调用 \`session_profile action=update\` 提交一句话申报（summary=在做什么/方向；direction、assets=主要资产/文件、needs=需要什么，总≤200 字）。收到「入群申报」请求时立即提交；资产/方向有主要变化时更新（只保留主要介绍，省 token）。不想参与可 \`session_profile action=skip\`。需要了解群内其他会话时用 \`session_profile action=directory group=群名\`，不要要求无条件广播。
 
 **向群内其他会话要文件/进度**：需要别的会话的产出（文件、数据、进度）时，调用 \`session_ask\`（group=群名，to=**必填指定成员且需用户授权**，mode=probe，text=探测正文）。它会把请求写进看板，并**唤醒**在线的目标会话去处理。收到别人的请求时，用 \`session_share\` 的 \`kind=handoff\` + \`group=群名\` + \`replyTo=请求 id\` + \`files=文件\` 回复；请求方会自动收到通知。
+
+**串行（有先后依赖）**：组内步骤必须按顺序做时，不要一次全部并行唤醒。先发步骤 1，拿到它返回的请求 id；步骤 2 调 \`session_ask\` 时带 \`dependsOn=<步骤1的请求id>\`（多个用逗号；也可用群任务 id），必要时加 \`delayMs\`。前置没 answered（任务没 done）时请求只排队、不唤醒；前置完成后自动发出并唤醒目标。排队/失败/取消可在 \`session_board action=status\` 或面板查看；排队超过 48 小时判过期。只有组长/维护者能排（群没设组长时任何成员可排）。
 
 **会话引用（统一解析）**：\`session_ask\`/\`session_nudge\` 的 \`to\`、\`group_member\` 的 \`sessions\`、面板加/移成员、世界任务正文里的 \`@\` 都支持同一种写法：完整 id、不带 \`session-\` 前缀的 id、contactId（8 位）、短 id（6 位压缩前缀）、handle、标题（精确优先，其次包含）。唯一前缀/后缀也可以。**匹配到多个时会报错并列出候选，不会替你猜**；这时改用 contactId 或完整 id 重试即可。
 
@@ -565,6 +572,60 @@ function compactIfNeeded(dir, logger) {
   } catch (error) {
     logger.warn(`看板压缩失败：${error && error.message ? error.message : error}`)
   }
+}
+
+// ------------------------------------------------------------------ 串行指令队列
+/**
+ * 组内任务有先后依赖时，组长可以「先把步骤 2 排进队列」，等步骤 1 回执后自动发出。
+ *
+ * 存储：<boardDir>/pending-asks.json（原子写，整表覆盖）。
+ * 只放「还没真正发出去」的指令；发送成功后标记 status=sent，失败/过期保留一小段时间便于排查。
+ * 注意：这里只负责排队与调度，不改动原有 wake/任务链——不传 dependsOn/delayMs 时 session_ask 行为完全不变。
+ */
+function createPendingStore(dir) {
+  const file = path.join(dir, PENDING_FILE)
+  const read = () => {
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+      const items = raw && Array.isArray(raw.items) ? raw.items : []
+      return items.filter((item) => item && typeof item.id === 'string' && item.id)
+    } catch {
+      return []
+    }
+  }
+  const write = (items) => {
+    ensureDir(dir)
+    const list = (Array.isArray(items) ? items : []).filter((item) => item && typeof item.id === 'string' && item.id)
+    const tmp = `${file}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, updatedAt: Date.now(), items: list }, null, 2), 'utf8')
+    fs.renameSync(tmp, file)
+  }
+  const upsert = (item) => {
+    if (!item || typeof item.id !== 'string' || !item.id) return null
+    const items = read()
+    const index = items.findIndex((existing) => existing.id === item.id)
+    if (index >= 0) items[index] = { ...items[index], ...item, updatedAt: Date.now() }
+    else items.push({ ...item, updatedAt: Date.now() })
+    write(items.slice(-PENDING_MAX_ITEMS))
+    return item
+  }
+  return { file, read, write, upsert }
+}
+
+/** 群任务的串行步骤（轻量：只记录文本与状态，不做 DAG 编辑器）。 */
+function normalizeTaskSteps(value) {
+  const list = Array.isArray(value) ? value : value ? [value] : []
+  return list
+    .map((item, index) => {
+      const text = typeof item === 'string' ? item : item && typeof item.text === 'string' ? item.text : ''
+      return {
+        i: index + 1,
+        text: String(text || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+        status: 'pending'
+      }
+    })
+    .filter((step) => step.text)
+    .slice(0, 10)
 }
 
 // ------------------------------------------------------------------ 群组存储
@@ -1252,6 +1313,7 @@ export function apply(ctx, config = {}) {
   const groupStore = createGroupStore(boardDir)
   const deliveryStore = createDeliveryStore(boardDir)
   const reputationStore = createReputationStore(boardDir)
+  const pendingStore = createPendingStore(boardDir)
 
   // ---------------------------------------------------------------- 积分/信誉
   const reputationOf = (sessionId) =>
@@ -2378,6 +2440,42 @@ export function apply(ctx, config = {}) {
       world: worldEntriesOf(),
       approvals: readApprovals().filter((item) => item && item.status === 'pending'),
       permissions: readPermissionsOf(boardDir).grants,
+      // 串行指令队列（依赖未满足/延迟未到的请求）；UI 用它显示「排队中 / 依赖 X」。
+      pendingAsks: (() => {
+        try {
+          return pendingStore
+            .read()
+            .filter((item) => item.status === 'queued')
+            .map((item) => ({
+              id: item.id,
+              requestId: item.requestId,
+              groupId: item.groupId,
+              groupName: item.groupName,
+              title: item.title,
+              author: item.author,
+              targetIds: item.targetIds || [],
+              dependsOn: item.dependsOn || [],
+              delayMs: item.delayMs || 0,
+              notBefore: item.notBefore || 0,
+              createdAt: item.createdAt || 0,
+              status: item.status
+            }))
+        } catch {
+          return []
+        }
+      })(),
+      pendingStats: (() => {
+        try {
+          const all = pendingStore.read()
+          return {
+            queued: all.filter((item) => item.status === 'queued').length,
+            sent: all.filter((item) => item.status === 'sent').length,
+            failed: all.filter((item) => item.status === 'failed').length
+          }
+        } catch {
+          return { queued: 0, sent: 0, failed: 0 }
+        }
+      })(),
       capabilities: {
         createSession: Boolean(ctx.agents && typeof ctx.agents.create === 'function'),
         wakeSessions: Boolean(createUserMessage),
@@ -2821,10 +2919,22 @@ export function apply(ctx, config = {}) {
         ? {
             taskStatus: input.taskStatus || 'assigned',
             coordinator: input.coordinator || '',
-            assignees: Array.isArray(input.assignees) ? input.assignees : []
+            assignees: Array.isArray(input.assignees) ? input.assignees : [],
+            ...(Array.isArray(input.steps) && input.steps.length
+              ? { steps: input.steps.map((step, index) => ({ ...step, i: toNumber(step && step.i, index + 1) })) }
+              : {})
           }
         : {}),
-      ...(kind === 'request' ? { status: 'open' } : {}),
+      ...(kind === 'request'
+        ? {
+            // 串行指令：先落一条 status=queued 的请求（依赖未满足时不唤醒任何人），
+            // 调度器满足依赖后把它改回 open 再唤醒。
+            status: input.status === 'queued' ? 'queued' : 'open',
+            ...(Array.isArray(input.dependsOn) && input.dependsOn.length ? { dependsOn: input.dependsOn } : {}),
+            ...(toNumber(input.notBefore, 0) > 0 ? { notBefore: toNumber(input.notBefore, 0) } : {}),
+            ...(toNumber(input.taskStep, 0) > 0 ? { taskStep: toNumber(input.taskStep, 0) } : {})
+          }
+        : {}),
       origin: origin || 'tool',
       ts: now,
       expiresAt: ttlHours > 0 ? now + ttlHours * 3600 * 1000 : 0
@@ -3500,6 +3610,544 @@ export function apply(ctx, config = {}) {
   }
 
   const managerNotifyAt = new Map()
+
+  // ---------------------------------------------------------------- 串行指令（依赖 / 延迟）
+  // 用户需求：组内任务有先后依赖时，组长可以「延时发送下一条指令」，即串行而不是全并行。
+  // 做法：session_ask 带 dependsOn / delayMs 时不立即唤醒，先把请求以 status=queued 落进看板，
+  // 并把队列项写进 pending-asks.json；调度器在前置 answered / 任务 done 且过了 delayMs 后自动发出。
+  const DEP_MAX_ITEMS = 5
+  const DEP_TICK_MS = 15000
+  const DEP_MAX_DELAY_MS = 7 * 24 * 3600 * 1000
+
+  const parseDependencyRefs = (value) => {
+    const raw = Array.isArray(value) ? value.join(',') : String(value || '')
+    return [...new Set(raw.split(/[,，;；、\s]+/).map((item) => item.trim()).filter(Boolean))].slice(0, DEP_MAX_ITEMS)
+  }
+
+  const findQueuedRef = (ref, items) => {
+    const wanted = String(ref || '').trim()
+    if (!wanted) return null
+    const list = Array.isArray(items) ? items : pendingStore.read()
+    return (
+      list.find((item) => item.id === wanted) ||
+      list.find((item) => item.requestId === wanted) ||
+      list.find((item) => item.id.startsWith(wanted)) ||
+      list.find((item) => typeof item.requestId === 'string' && item.requestId.startsWith(wanted)) ||
+      null
+    )
+  }
+
+  /**
+   * 依赖是否完成：只认 request=answered（有人用 replyTo 回复）或 task=done。
+   * 讨论/聊天消息不算完成，避免「在群里说一句」就误触发下一步。
+   */
+  const dependencySatisfied = (entry) => {
+    if (!entry) return false
+    if (entry.kind === 'request') return entry.status === 'answered' || Boolean(entry.answeredBy) || Boolean(entry.replyId)
+    if (entry.kind === 'task') return entry.taskStatus === 'done'
+    return false
+  }
+
+  const dependencySummary = (entry) => {
+    if (!entry) return '（已丢失）'
+    const state = dependencySatisfied(entry)
+      ? entry.kind === 'task'
+        ? '任务已完成'
+        : '已回复'
+      : entry.kind === 'task'
+        ? `任务未完成（${entry.taskStatus || 'assigned'}）`
+        : entry.status === 'queued'
+          ? '排队中'
+          : '未回复'
+    return `${entry.id}（${KIND_CN[entry.kind] || entry.kind}「${truncate(entry.title || '', 16)}」${state}）`
+  }
+
+  /** 谁能排串行指令：组长、维护者；群还没设组长时任何成员都能排（保持旧用法可用）。 */
+  const canQueueAsk = (group, sessionId) => {
+    if (!group) return { ok: false, message: '找不到群组。' }
+    if (group.managerSessionId && group.managerSessionId === sessionId) return { ok: true, role: 'manager' }
+    const maintainerId = maintainerStore.get()
+    if (maintainerId && maintainerId === sessionId) return { ok: true, role: 'maintainer' }
+    if (!group.managerSessionId || !group.sessionIds.includes(group.managerSessionId)) {
+      return { ok: true, role: 'no-manager' }
+    }
+    return {
+      ok: false,
+      message: [
+        '只有组长 / 维护者可以排串行指令（dependsOn / delayMs）。',
+        `群「${group.name}」的组长是 ${shortSid(group.managerSessionId)}（contactId=${contactIdOf(group.managerSessionId)}）；请让组长来排，或让用户在面板里改组长。`,
+        '不传 dependsOn / delayMs 时，session_ask 仍是立即发送。'
+      ].join('\n')
+    }
+  }
+
+  /** 探测/任务两种唤醒文案（立即发送与排队后发送共用，避免两套模板漂移）。 */
+  const buildAskMessage = ({ askMode, text, group, requestId, assignmentTask, authorId }) => {
+    if (askMode === 'task') {
+      if (assignmentTask) {
+        return [
+          `【任务分配 · 群任务：${assignmentTask.title}】`,
+          text,
+          '',
+          `请只做你负责的部分；完成后用 session_share（kind=handoff、group=${group.name}、replyTo=${requestId}、files=文件路径）提交给组长，不要直接向用户汇报，也不要重复执行其他成员的任务。`,
+          `（来自会话 ${shortSid(authorId)} · 群组「${group.name}」）`
+        ].join('\n')
+      }
+      return [
+        '【任务分配 · 群内派活】',
+        text,
+        '',
+        `请执行/完成上面的工作；完成后用 session_share（kind=handoff、group=${group.name}、replyTo=${requestId}、files=文件路径）回复，正文写清结果/进度；不要展开无关分析。`,
+        `（来自会话 ${shortSid(authorId)} · 群组「${group.name}」）`
+      ].join('\n')
+    }
+    return [
+      '【群内请求 · 探测（不是任务） · 请直接回答正文】',
+      text,
+      '',
+      '（这是探测/询问：只需针对正文简短回答或给一句结论，不要自行扩大成复核/改稿任务；如果正文其实是明确的修改或交付要求，请按任务执行并回报结果。）',
+      `（来自会话 ${shortSid(authorId)} · 群组「${group.name}」）`
+    ].join('\n')
+  }
+
+  /** 把队列里的一条指令真正发出去：先回写看板状态，再唤醒（尽量少改动原有 wake 链）。 */
+  const dispatchQueuedAsk = (item) => {
+    const group = groupStore.read().find((entry) => entry.id === item.groupId) || null
+    if (!group) return { ok: false, reason: '群组已被删除' }
+    const grants = readPermissionsOf(boardDir).grants[item.author] || []
+    const wantedTargets = Array.isArray(item.targetIds) ? item.targetIds : []
+    const allowed = wantedTargets.filter((id) => group.sessionIds.includes(id) && grants.includes(id))
+    const skipped = wantedTargets.filter((id) => !allowed.includes(id))
+    if (!allowed.length) return { ok: false, reason: '目标成员已不在群或唤醒授权被撤销' }
+    const assignmentTask = item.taskId ? findBoardEntry(item.taskId) : null
+    const message = buildAskMessage({
+      askMode: item.askMode,
+      text: item.text,
+      group,
+      requestId: item.requestId,
+      assignmentTask,
+      authorId: item.author
+    })
+    const now = Date.now()
+    try {
+      appendEvents(boardDir, [
+        { op: 'task', id: item.requestId, patch: { status: 'open', dispatchedAt: now, queuedBefore: true }, ts: now }
+      ])
+    } catch {
+      /* 状态回写失败不影响已经发出的唤醒 */
+    }
+    const woken = []
+    const sleepy = []
+    for (const targetId of allowed) {
+      const outcome = wakeSession(targetId, message, { requestId: item.requestId })
+      if (outcome.ok) woken.push(targetId)
+      else sleepy.push(targetId)
+    }
+    if (item.taskId) {
+      try {
+        appendEvents(boardDir, [{ op: 'task', id: item.taskId, patch: { taskStatus: 'delegating' }, ts: now }])
+      } catch {
+        /* ignore */
+      }
+      const stepNo = toNumber(item.taskStep, 0)
+      if (stepNo > 0) {
+        try {
+          const task = findBoardEntry(item.taskId)
+          if (task && Array.isArray(task.steps) && task.steps[stepNo - 1]) {
+            const steps = task.steps.map((step, index) =>
+              index === stepNo - 1 ? { ...step, status: 'dispatched', requestId: item.requestId, dispatchedAt: now } : step
+            )
+            appendEvents(boardDir, [{ op: 'task', id: item.taskId, patch: { steps }, ts: now }])
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    return { ok: true, woken, sleepy, skipped }
+  }
+
+  /** 串行步骤回写：请求 answered 后把对应任务步骤标记 done（只认 answered，不认讨论消息）。 */
+  const syncCompletedTaskSteps = (active, now) => {
+    const byId = new Map(active.map((entry) => [entry.id, entry]))
+    for (const entry of active) {
+      if (entry.kind !== 'request' || !entry.taskId) continue
+      const stepNo = toNumber(entry.taskStep, 0)
+      if (stepNo <= 0 || !dependencySatisfied(entry)) continue
+      const task = byId.get(entry.taskId)
+      if (!task || !Array.isArray(task.steps)) continue
+      const index = stepNo - 1
+      const step = task.steps[index]
+      if (!step || step.status === 'done') continue
+      const steps = task.steps.map((current, i) =>
+        i === index ? { ...current, status: 'done', requestId: entry.id, doneAt: now } : current
+      )
+      try {
+        appendEvents(boardDir, [{ op: 'task', id: task.id, patch: { steps }, ts: now }])
+      } catch {
+        /* ignore */
+      }
+      task.steps = steps
+    }
+  }
+
+  /**
+   * 队列巡检：找依赖已满足、延迟已到的排队指令 → 发出并唤醒。
+   * 找不到依赖、循环依赖、排队超时都不会死等，一律标记 failed 并通知发起人。
+   */
+  const runPendingQueue = ({ source = 'timer' } = {}) => {
+    const report = { source, checked: 0, dispatched: [], waiting: [], failed: [], errors: [] }
+    let items = []
+    try {
+      items = pendingStore.read()
+    } catch (error) {
+      report.errors.push(`读取队列失败：${error && error.message ? error.message : error}`)
+      return report
+    }
+    if (!items.length) return report
+    const now = Date.now()
+    const active = store.readActive()
+    try {
+      syncCompletedTaskSteps(active, now)
+    } catch (error) {
+      report.errors.push(`步骤回写失败：${error && error.message ? error.message : error}`)
+    }
+    const queuedItems = items.filter((item) => item.status === 'queued')
+    if (!queuedItems.length) {
+      persistPendingQueue(items, now)
+      return report
+    }
+    const byId = new Map(active.map((entry) => [entry.id, entry]))
+    const resolveDependency = (ref) => {
+      const queued = findQueuedRef(ref, items)
+      if (queued) {
+        if (queued.status === 'queued') return { kind: 'queue', queued }
+        if (queued.status === 'sent') {
+          const entry = queued.requestId ? byId.get(queued.requestId) : null
+          return entry ? { kind: 'entry', entry } : null
+        }
+        return { kind: 'queue', queued }
+      }
+      const entry = byId.get(ref) || active.find((row) => typeof row.id === 'string' && row.id.startsWith(ref))
+      return entry ? { kind: 'entry', entry } : null
+    }
+    // 循环依赖：排队项之间互相等待时无法自动前进，必须报错而不是死等。
+    const nodes = new Set(queuedItems.map((item) => item.requestId).filter(Boolean))
+    const edges = new Map()
+    for (const item of queuedItems) {
+      const deps = []
+      for (const ref of item.dependsOn || []) {
+        const resolved = resolveDependency(ref)
+        if (!resolved) continue
+        const nodeId = resolved.kind === 'queue' ? resolved.queued.requestId : resolved.entry.id
+        if (nodeId && nodes.has(nodeId) && nodeId !== item.requestId) deps.push(nodeId)
+      }
+      edges.set(item.requestId, deps)
+    }
+    const cycleNodes = new Set()
+    const colors = new Map()
+    const stack = []
+    const visit = (node) => {
+      const color = colors.get(node) || 0
+      if (color === 2) return
+      if (color === 1) {
+        const start = stack.indexOf(node)
+        for (const hit of stack.slice(start >= 0 ? start : 0)) cycleNodes.add(hit)
+        return
+      }
+      colors.set(node, 1)
+      stack.push(node)
+      for (const next of edges.get(node) || []) visit(next)
+      stack.pop()
+      colors.set(node, 2)
+    }
+    for (const node of edges.keys()) visit(node)
+
+    const markFailed = (item, message) => {
+      item.status = 'failed'
+      item.lastError = message
+      item.updatedAt = now
+      report.failed.push({ id: item.id, requestId: item.requestId, title: item.title, error: message })
+      try {
+        appendEvents(boardDir, [
+          { op: 'task', id: item.requestId, patch: { status: 'failed', failReason: message }, ts: now }
+        ])
+      } catch {
+        /* ignore */
+      }
+      try {
+        wakeSession(
+          item.author,
+          [
+            '【串行指令未发出 · 排队失败】',
+            `请求：${item.title}（id=${item.requestId}）`,
+            `原因：${message}`,
+            '请调整 dependsOn / delayMs 后重新用 session_ask 排队。'
+          ].join('\n'),
+          {}
+        )
+      } catch {
+        /* 通知失败不影响标记 */
+      }
+    }
+
+    for (const item of queuedItems) {
+      report.checked += 1
+      const age = now - toNumber(item.createdAt, now)
+      if (age > PENDING_TTL_MS) {
+        markFailed(item, '排队超过 48 小时仍未等到前置完成（避免无限等待）')
+        continue
+      }
+      if (item.requestId && cycleNodes.has(item.requestId)) {
+        markFailed(item, '循环依赖：与其它排队指令互相等待（检查 dependsOn 是否成环）')
+        continue
+      }
+      let missing = ''
+      const unmet = []
+      for (const ref of item.dependsOn || []) {
+        const resolved = resolveDependency(ref)
+        if (!resolved) {
+          missing = ref
+          break
+        }
+        if (resolved.kind === 'queue') {
+          if (resolved.queued.id === item.id) {
+            missing = `${ref}（依赖指向自己）`
+            break
+          }
+          const state = resolved.queued.status
+          if (state === 'failed' || state === 'expired') {
+            missing = `${ref}（前置排队失败）`
+            break
+          }
+          if (state === 'cancelled') {
+            missing = `${ref}（前置已取消）`
+            break
+          }
+          unmet.push({
+            id: resolved.queued.requestId,
+            kind: 'request',
+            title: resolved.queued.title,
+            status: 'queued'
+          })
+          continue
+        }
+        if (!dependencySatisfied(resolved.entry)) unmet.push(resolved.entry)
+      }
+      if (missing) {
+        markFailed(item, `找不到前置依赖 ${missing}`)
+        continue
+      }
+      if (unmet.length) {
+        report.waiting.push({ id: item.id, requestId: item.requestId, dependsOn: unmet.map((entry) => dependencySummary(entry)) })
+        continue
+      }
+      const notBefore = toNumber(item.notBefore, 0)
+      if (notBefore > now) {
+        report.waiting.push({ id: item.id, requestId: item.requestId, waitMs: notBefore - now })
+        continue
+      }
+      const outcome = dispatchQueuedAsk(item)
+      if (!outcome.ok) {
+        markFailed(item, outcome.reason || '发送失败')
+        continue
+      }
+      item.status = 'sent'
+      item.sentAt = now
+      item.updatedAt = now
+      item.lastWoken = outcome.woken.length
+      item.lastSleepy = outcome.sleepy.length
+      report.dispatched.push({
+        id: item.id,
+        requestId: item.requestId,
+        title: item.title,
+        woken: outcome.woken.length,
+        sleepy: outcome.sleepy.length,
+        skipped: outcome.skipped.length
+      })
+      logger.info(
+        `串行指令已发出：${item.id} → 请求 ${item.requestId}（唤醒 ${outcome.woken.length}，离线 ${outcome.sleepy.length}）`
+      )
+    }
+    persistPendingQueue(items, now, { force: report.dispatched.length > 0 || report.failed.length > 0 })
+    return report
+  }
+
+  /**
+   * 落盘队列（调度结束后统一写一次，避免每条都写）。
+   * force=true 时即使没有清理也写——否则 queued→sent/failed 的状态变化会丢，
+   * 下一轮巡检会把同一条指令再发一次（重复唤醒）。
+   * 清理策略：queued 一直保留；sent 只留 1 小时（已发出就不用再排队）；失败/取消留 7 天便于排查。
+   */
+  const persistPendingQueue = (items, now, options = {}) => {
+    try {
+      const keep = items.filter((item) => {
+        if (item.status === 'queued') return true
+        const age = now - toNumber(item.updatedAt, toNumber(item.createdAt, now))
+        if (item.status === 'sent') return age < 60 * 60 * 1000
+        return age < 7 * 24 * 3600 * 1000
+      })
+      if (options.force || keep.length !== items.length) pendingStore.write(keep.slice(-PENDING_MAX_ITEMS))
+    } catch {
+      /* 清理失败不影响调度 */
+    }
+  }
+
+  /**
+   * 排队：先落 status=queued 的请求条目，再写队列。
+   * 返回给模型的中文说明必须写清「等什么、什么时候发、怎么查」。
+   */
+  const enqueueAskRequest = ({ group, info, text, title, targets, askMode, assignmentTask, dependsOn, delayMs, step }) => {
+    const gate = canQueueAsk(group, info.id)
+    if (!gate.ok) return gate.message
+    const items = pendingStore.read()
+    const resolved = []
+    const unknown = []
+    for (const ref of dependsOn) {
+      const entry = findBoardEntry(ref)
+      if (entry) {
+        if (entry.kind !== 'request' && entry.kind !== 'task') {
+          unknown.push(`${ref}（是 ${KIND_CN[entry.kind] || entry.kind}，不能当依赖）`)
+          continue
+        }
+        resolved.push({ ref, entry })
+        continue
+      }
+      const queued = findQueuedRef(ref, items)
+      if (queued && (queued.status === 'queued' || queued.status === 'sent')) {
+        resolved.push({ ref, queued })
+        continue
+      }
+      if (queued) {
+        unknown.push(`${ref}（前置队列状态 ${queued.status}）`)
+        continue
+      }
+      unknown.push(ref)
+    }
+    if (unknown.length) {
+      return [
+        `找不到前置依赖：${unknown.join('、')}。`,
+        'dependsOn 只能填已存在的请求 id（session_ask 返回的 id）、群任务 id 或排队项 id；',
+        '注意：依赖必须是**已经创建**的条目——先发步骤 1，拿到它的 id，再把 id 写进步骤 2 的 dependsOn。',
+        '（本条没有排队，也没有唤醒任何人。）'
+      ].join('\n')
+    }
+    const now = Date.now()
+    const notBefore = delayMs > 0 ? now + delayMs : 0
+    // 依赖统一落成「请求 id / 任务 id」，即使队列项被清理也能继续判定。
+    const canonicalDeps = resolved.map((item) => (item.entry ? item.entry.id : item.queued.requestId || item.ref))
+    const result = addEntry(
+      {
+        title,
+        text,
+        kind: 'request',
+        groupId: group.id,
+        workspace: info.cwd,
+        author: info.id,
+        requestTo: targets.map((session) => session.id),
+        mentions: targets.map((session) => session.id),
+        status: 'queued',
+        dependsOn: canonicalDeps,
+        notBefore,
+        ...(step > 0 ? { taskStep: step } : {}),
+        ...(assignmentTask ? { taskId: assignmentTask.id, taskRole: 'member' } : {})
+      },
+      'tool'
+    )
+    if (!result.ok) return `发布请求失败：${result.reason}`
+    const requestId = result.entry.id
+    const item = {
+      id: `q-${now.toString(36)}-${randomBytes(3).toString('hex')}`,
+      requestId,
+      groupId: group.id,
+      groupName: group.name,
+      workspace: info.cwd || '',
+      author: info.id,
+      title,
+      text,
+      askMode,
+      targetIds: targets.map((session) => session.id),
+      taskId: assignmentTask ? assignmentTask.id : '',
+      taskStep: step > 0 ? step : 0,
+      dependsOn: canonicalDeps,
+      delayMs: delayMs > 0 ? delayMs : 0,
+      notBefore,
+      createdAt: now,
+      status: 'queued'
+    }
+    try {
+      pendingStore.upsert(item)
+    } catch (error) {
+      // 队列写不进去时把看板条目也标记失败，避免留下一个永远 queued 的孤儿请求。
+      try {
+        appendEvents(boardDir, [
+          { op: 'task', id: requestId, patch: { status: 'failed', failReason: '队列写盘失败' }, ts: Date.now() }
+        ])
+      } catch {
+        /* ignore */
+      }
+      return `排队失败（写盘错误）：${error && error.message ? error.message : error}`
+    }
+    // 依赖已满足且没有延迟时，不额外等一轮巡检：立刻尝试发出。
+    let kick = null
+    try {
+      kick = runPendingQueue({ source: 'enqueue' })
+    } catch {
+      kick = null
+    }
+    const justSent = kick && kick.dispatched.find((entry) => entry.requestId === requestId)
+    if (justSent) {
+      return [
+        `前置依赖已完成，已直接发出：${title}（id=${requestId}）`,
+        `目标成员：${memberInlineText(targets) || '(无)'}`,
+        justSent.woken > 0
+          ? `已唤醒 ${justSent.woken} 个在线会话，它们会立即处理；`
+          : '成员当前都不在线，下次运行会看到这条请求；',
+        justSent.sleepy > 0 ? `${justSent.sleepy} 个成员不在线，靠「下次运行注入」；` : '',
+        `等待交付：对方用 session_share（kind=handoff、replyTo=${requestId}）回复后本会话会被通知。`
+      ]
+        .filter(Boolean)
+        .join('\n')
+    }
+    const lines = [
+      `已排队，等待前置完成：${title}（id=${requestId}，队列 ${item.id}）`,
+      `目标成员：${memberInlineText(targets) || '(无)'}（前置完成后自动唤醒，现在不唤醒）`
+    ]
+    if (resolved.length) {
+      lines.push(`前置依赖（${resolved.length} 项）：`)
+      for (const dep of resolved) {
+        if (dep.entry) lines.push(`- ${dependencySummary(dep.entry)}`)
+        else lines.push(`- ${dep.queued.requestId}（排队中「${truncate(dep.queued.title || '', 16)}」）`)
+      }
+    }
+    if (delayMs > 0) lines.push(`最早发送：约 ${Math.max(1, Math.round(delayMs / 1000))} 秒后（延迟未到也不会发）`)
+    lines.push(`调度：后台每 ${Math.round(DEP_TICK_MS / 1000)} 秒检查一次；前置状态变成 answered / 任务 done 后自动发出。`)
+    lines.push('查看：session_board action=list 或面板「经验桥」→ 群聊，该请求显示「排队中」；排队超过 48 小时会判过期并通知你。')
+    return lines.join('\n')
+  }
+
+  // 队列巡检定时器（unref，不阻止进程退出；插件卸载时清掉）
+  const pendingTimer = setInterval(() => {
+    try {
+      runPendingQueue({ source: 'timer' })
+    } catch (error) {
+      logger.warn(`串行指令巡检失败：${error && error.message ? error.message : error}`)
+    }
+  }, DEP_TICK_MS)
+  if (pendingTimer && typeof pendingTimer.unref === 'function') pendingTimer.unref()
+  try {
+    ctx.effect(() => () => clearInterval(pendingTimer), 'session-bridge: pending-ask timer')
+  } catch {
+    /* ignore */
+  }
+  // 插件重启后恢复队列：等一会儿再跑一次（此时 agents/board 都已就绪）。
+  setTimeout(() => {
+    try {
+      runPendingQueue({ source: 'boot' })
+    } catch {
+      /* ignore */
+    }
+  }, 4000).unref?.()
 
   // ---------------------------------------------------------------- 申报材料（profile）
   const renderProfileSummary = (sessionId) => {
@@ -5174,6 +5822,12 @@ export function apply(ctx, config = {}) {
           appendEvents(boardDir, [
             { op: 'answer', id: request.id, by: info.id, replyId: result.entry.id, ts: Date.now() }
           ])
+          // 前置刚被answered：立刻推进串行队列（不必等 15 秒巡检）。
+          try {
+            runPendingQueue({ source: 'answer' })
+          } catch {
+            /* 调度失败不影响回复本身 */
+          }
           if (firstAnswer && request.taskRole === 'member') {
             scoreSession(info.id, 8, { success: true })
             try {
@@ -5276,6 +5930,14 @@ export function apply(ctx, config = {}) {
                 ts: Date.now()
               }
             ])
+            // 任务刚变成 done：立刻推进以该任务为前置的串行指令。
+            if (isCoordinator) {
+              try {
+                runPendingQueue({ source: 'task-done' })
+              } catch {
+                /* ignore */
+              }
+            }
             if (isCoordinator) {
               replyNote += ' 群任务已标记为完成。'
               // 复核后「需要修改」：交给群管理自动指派给群员，用户不用手动派活。
@@ -5434,7 +6096,8 @@ export function apply(ctx, config = {}) {
       '默认 mode=probe（只问正文，不叮嘱回复格式）；只有真正派活时传 mode=task（才会附 replyTo/files 交付说明）。' +
       '当用户说「问一下…会话/…群：第 3 章初稿在哪/进度如何/把文件发我/数据发我」时调用。' +
       'to 支持 contactId（8 位，如 4f51e99f）、短 id（6 位）、无 session- 前缀的完整 id、handle、标题；不确定用 session_directory 查通讯录。' +
-      '收到请求的一方用 session_share（kind=handoff、group=群名、replyTo=请求 id、files=文件）回复，请求方会被自动通知。',
+      '收到请求的一方用 session_share（kind=handoff、group=群名、replyTo=请求 id、files=文件）回复，请求方会被自动通知。' +
+      '任务有先后依赖（串行）时传 dependsOn=前置请求/任务 id（可多个）与可选 delayMs：前置未完成不会唤醒目标，先排队，完成后自动发出。',
     parameters: {
       type: 'object',
       properties: {
@@ -5450,7 +6113,23 @@ export function apply(ctx, config = {}) {
           enum: ['probe', 'task'],
           description: 'probe（默认，探测/要进度：只问正文，不叮嘱回复格式）/ task（真正派活：才附 replyTo/files 交付说明）'
         },
-        title: { type: 'string', description: '可选，短标题（默认从 text 生成）' }
+        title: { type: 'string', description: '可选，短标题（默认从 text 生成）' },
+        dependsOn: {
+          type: 'string',
+          description:
+            '可选，串行依赖：前置 request id / 群任务 id（多个用逗号分隔，最多 5 个）。前置还没 answered（任务没 done）时本条不发出、不唤醒，先排队；前置完成后自动发出。'
+        },
+        delayMs: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 604800000,
+          description: '可选，最小延迟（毫秒）：到点且依赖满足才发出；只延时也会排队。不传 dependsOn / delayMs 时仍立即发送。'
+        },
+        step: {
+          type: 'integer',
+          minimum: 1,
+          description: '可选，群任务的第几个步骤（配合 group.post 的 steps）；该请求 answered 后步骤自动标记完成。'
+        }
       },
       required: ['group', 'text']
     },
@@ -5646,6 +6325,24 @@ export function apply(ctx, config = {}) {
       const title =
         String((args && args.title) || '').trim().slice(0, 60) ||
         (bugfixDelivery ? `BUG 报告：${truncate(text, 18)}` : `群内请求：${truncate(text, 18)}`)
+      // 串行编排：带 dependsOn / delayMs 时先排队（不唤醒），由后台调度器在前置完成后发出。
+      const depRefs = parseDependencyRefs(args && args.dependsOn)
+      const delayMs = Math.max(0, Math.min(DEP_MAX_DELAY_MS, toNumber(args && args.delayMs, 0)))
+      const stepNo = Math.max(0, Math.min(10, toNumber(args && args.step, 0)))
+      if (depRefs.length || delayMs > 0) {
+        return enqueueAskRequest({
+          group,
+          info,
+          text,
+          title,
+          targets,
+          askMode,
+          assignmentTask,
+          dependsOn: depRefs,
+          delayMs,
+          step: assignmentTask ? stepNo : 0
+        })
+      }
       const result = addEntry(
         {
           title,
@@ -5656,8 +6353,9 @@ export function apply(ctx, config = {}) {
           author: info.id,
           requestTo: targets.map((session) => session.id),
           mentions: targets.map((session) => session.id),
-          ...(bugfixDelivery ? { tags: '@bug' } : {}),
-          ...(assignmentTask ? { taskId: assignmentTask.id, taskRole: 'member' } : {})
+              ...(bugfixDelivery ? { tags: '@bug' } : {}),
+              ...(assignmentTask ? { taskId: assignmentTask.id, taskRole: 'member' } : {}),
+              ...(assignmentTask && stepNo > 0 ? { taskStep: stepNo } : {})
         },
         'tool'
       )
@@ -5670,6 +6368,19 @@ export function apply(ctx, config = {}) {
           ])
         } catch {
           /* 状态更新失败不影响派活 */
+        }
+        if (stepNo > 0) {
+          try {
+            const taskNow = findBoardEntry(assignmentTask.id)
+            if (taskNow && Array.isArray(taskNow.steps) && taskNow.steps[stepNo - 1]) {
+              const steps = taskNow.steps.map((step, index) =>
+                index === stepNo - 1 ? { ...step, status: 'dispatched', requestId, dispatchedAt: Date.now() } : step
+              )
+              appendEvents(boardDir, [{ op: 'task', id: assignmentTask.id, patch: { steps }, ts: Date.now() }])
+            }
+          } catch {
+            /* 步骤回写失败不影响派活 */
+          }
         }
       }
       // 探测（提问/要进度）和任务分配用不同模板：
@@ -7772,6 +8483,36 @@ export function apply(ctx, config = {}) {
       writePermissionsOf(boardDir, data)
       return { ok: true, sessionId, grants: data.grants[sessionId] }
     }
+    if (action === 'pending.run') {
+      // 面板/自测用：立即巡检一次串行队列（不等 15 秒定时器）。
+      const report = runPendingQueue({ source: 'panel' })
+      return { ok: true, report }
+    }
+    if (action === 'pending.cancel') {
+      // 取消一条排队中的串行指令（还没发出去的才能取消）。
+      const wanted = String(payload.id || payload.requestId || '').trim()
+      if (!wanted) return { ok: false, error: '缺少 id' }
+      const items = pendingStore.read()
+      const target =
+        items.find((item) => item.id === wanted) ||
+        items.find((item) => item.requestId === wanted) ||
+        items.find((item) => item.id.startsWith(wanted)) ||
+        items.find((item) => typeof item.requestId === 'string' && item.requestId.startsWith(wanted))
+      if (!target) return { ok: false, error: '找不到排队项' }
+      if (target.status !== 'queued') return { ok: false, error: `排队项状态是 ${target.status}，不能取消` }
+      target.status = 'cancelled'
+      target.updatedAt = Date.now()
+      pendingStore.write(items)
+      try {
+        appendEvents(boardDir, [
+          { op: 'task', id: target.requestId, patch: { status: 'cancelled', failReason: '用户/面板取消' }, ts: Date.now() }
+        ])
+      } catch {
+        /* ignore */
+      }
+      logger.info(`串行指令已取消：${target.id}（请求 ${target.requestId}）`)
+      return { ok: true, id: target.id, requestId: target.requestId }
+    }
     if (action === 'group.post') {
       // 面板群聊里发消息 / @成员发布工作：聊天记录 + 被 @ 的成员定向唤醒（离线成员下次运行被注入）。
       const groupRef = String(payload.id || '').trim()
@@ -7812,6 +8553,10 @@ export function apply(ctx, config = {}) {
       const titleById = new Map(sessions.map((session) => [session.id, session.title]))
       const sessionById = new Map(sessions.map((session) => [session.id, session]))
       const titleOf = (sessionId) => titleById.get(sessionId) || shortSid(sessionId)
+      // 组任务的串行步骤（轻量记录）：步骤有先后依赖时，组长用 session_ask 的 dependsOn + step 排队。
+      const taskSteps = normalizeTaskSteps(payload.steps)
+      const stepLines = taskSteps.map((step) => `${step.i}. ${step.text}`)
+
       // v2.9.1 权限分级：维护者 protected/service —— 不得被 group.post 指派为组长/成员。
       // 例外：修bug群里的 BUG 报告按「bug 投递」处理（不是任务）；普通群只报错/跳过并提示。
       const maintainerIdNow = maintainerStore.get()
@@ -7982,6 +8727,7 @@ export function apply(ctx, config = {}) {
             taskStatus: 'assigned',
             coordinator: coordinatorId,
             assignees: assigneeIds,
+            steps: taskSteps,
             skipDedupe: true
           },
           'panel'
@@ -8039,6 +8785,13 @@ export function apply(ctx, config = {}) {
                 ...(assigneeBusyIds.length
                   ? [`（提示：成员 ${assigneeBusyIds.map((sessionId) => titleOf(sessionId)).join('、')} 当前也在忙，派活可能排队。）`]
                   : []),
+                ...(stepLines.length
+                  ? [
+                      `本次任务的步骤（有先后依赖时**串行**，不要一次全发）：`,
+                      ...stepLines,
+                      '串行做法：先发步骤 1（session_ask mode=task、step=1）；拿到它返回的 id 后，步骤 2 用 dependsOn=<步骤1的 id> + step=2 排队——前置没回复就不会唤醒人，回复后自动发出。'
+                    ]
+                  : []),
                 '',
                 '你的职责：',
                 '1. 先规划分工；成员目前**还没有被唤醒**，只有你用 session_ask mode=task 派活后他们才会收到（派活会自动归属本任务，避免同一任务被重复执行；to 支持 contactId / 短 id / handle / 标题，不限完整 id）；',
@@ -8070,7 +8823,8 @@ export function apply(ctx, config = {}) {
             id: taskId,
             coordinator: { id: coordinatorId, title: titleOf(coordinatorId), contactId: contactIdOf(coordinatorId) },
             assignees: assigneeIds.map((sessionId) => ({ id: sessionId, title: titleOf(sessionId), contactId: contactIdOf(sessionId) })),
-            status: 'assigned'
+            status: 'assigned',
+            steps: taskSteps
           },
           coordinatorBusy,
           busyAssignees: assigneeBusyIds.map((sessionId) => ({ id: sessionId, title: titleOf(sessionId) })),
@@ -8296,6 +9050,11 @@ export function apply(ctx, config = {}) {
       if (!entry.ok) return { ok: false, error: entry.reason || '发布失败' }
       if (request) {
         appendEvents(boardDir, [{ op: 'answer', id: request.id, by: author, replyId: entry.entry.id, ts: Date.now() }])
+        try {
+          runPendingQueue({ source: 'answer' })
+        } catch {
+          /* ignore */
+        }
         if (request.author && request.author !== 'panel' && request.author !== author) {
           wakeSession(request.author, ['【群内请求已收到回复 · 来自维护者】', '请求：' + request.title, '回复：' + entry.entry.title + '：' + truncate(text, 300)].join('\n'), { requestId: request.id })
         }
