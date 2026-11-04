@@ -123,7 +123,7 @@ $DefaultConfig = [ordered]@{
     sectionOrder    = 650
     contextOrder    = 300
 }
-$ExpectedTools = @('session_share', 'session_board', 'session_ask', 'session_profile', 'session_nudge', 'group_rule', 'session_like', 'session_discuss', 'session_identity', 'group_skill', 'group_member', 'session_directory', 'session_retract', 'session_interrupt')
+$ExpectedTools = @('session_share', 'session_board', 'session_ask', 'session_profile', 'session_nudge', 'group_rule', 'session_like', 'session_discuss', 'session_identity', 'group_skill', 'group_member', 'session_directory', 'session_retract', 'session_interrupt', 'group_recruit', 'session_urgent')
 
 $ModeCount = 0
 foreach ($modeSwitch in @($Install, $Uninstall, $Verify, $Restore)) {

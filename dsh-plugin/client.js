@@ -236,6 +236,16 @@ window.__ModuleLoader__.load({
           }),
         hiddenFromChat: src.hiddenFromChat === true,
         curated: src.curated === true,
+        // ⚡ 加急插话（v2.9.3）：UI 据此显示加急徽章/红色气泡。
+        urgent: src.urgent === true,
+        urgentBy: asString(src.urgentBy),
+        urgentTo: asArray(src.urgentTo)
+          .map(function (sessionId) {
+            return asString(sessionId)
+          })
+          .filter(function (sessionId) {
+            return sessionId !== ''
+          }),
         taskId: asString(src.taskId),
         taskRole: asString(src.taskRole),
         taskStatus: asString(src.taskStatus),
@@ -2440,6 +2450,16 @@ window.__ModuleLoader__.load({
         borderRadius: 6,
         fontSize: 11
       },
+      bubbleUrgent: {
+        border: '0.5px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 55%, transparent)',
+        background: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, var(--dsw-alias-bg-layer-2))'
+      },
+      urgentNotice: {
+        padding: '3px 2px 2px',
+        fontSize: 10.5,
+        color: 'var(--dsw-alias-state-warn-primary)',
+        wordBreak: 'break-word'
+      },
       inputBar: {
         display: 'flex',
         gap: 6,
@@ -2563,10 +2583,16 @@ window.__ModuleLoader__.load({
           ),
           h(
             'div',
-            { style: self ? chatStyles.bubbleSelf : chatStyles.bubbleOther },
+            {
+              style: mergeStyle(
+                self ? chatStyles.bubbleSelf : chatStyles.bubbleOther,
+                rule.urgent ? chatStyles.bubbleUrgent : null
+              )
+            },
             h(
               'div',
               { style: { display: 'flex', gap: 4, alignItems: 'center', marginBottom: 2, flexWrap: 'wrap' } },
+              rule.urgent ? h(Badge, { tone: 'error' }, '⚡ 加急') : null,
               h(Badge, { tone: KIND_TONE[displayKind] || 'neutral' }, kindLabel),
               requestStatus !== '' ? h(Badge, { tone: rule.status === 'answered' ? 'success' : rule.status === 'canceled' ? 'neutral' : 'warn' }, requestStatus) : null,
               h(
@@ -2660,6 +2686,13 @@ window.__ModuleLoader__.load({
       var coordinatorState = React.useState('')
       var coordinatorId = coordinatorState[0]
       var setCoordinatorId = coordinatorState[1]
+      // ⚡ 加急模式（v2.9.3）：开启后发送走 session.urgent，而不是普通群消息。
+      var urgentState = React.useState(false)
+      var urgent = urgentState[0]
+      var setUrgent = urgentState[1]
+      var noticeState = React.useState('')
+      var notice = noticeState[0]
+      var setNotice = noticeState[1]
       var members = asArray(group.sessionIds).map(function (sessionId) {
         return index.sessionById[sessionId] || { id: sessionId, title: shortId(sessionId) }
       })
@@ -2724,6 +2757,53 @@ window.__ModuleLoader__.load({
           })
           if (hit) mentionIds.push(sessionId)
         })
+        if (urgent) {
+          // ⚡ 加急：逐个 @ 目标发送 session.urgent；宿主会处理 idle 唤醒 / running 打断或降级。
+          if (mentionIds.length === 0) {
+            setNotice('⚠ 加急需要先点 @ 选一位群成员（最多 3 位），再发送')
+            return
+          }
+          var urgentTargets = mentionIds.slice(0, 3)
+          setNotice('⚡ 加急发送中…')
+          var urgentJobs = urgentTargets.map(function (sessionId) {
+            return postCommandRaw('session.urgent', { to: sessionId, text: text, group: group.id }).then(
+              function (payload) {
+                return { sessionId: sessionId, payload: payload }
+              },
+              function (failure) {
+                return { sessionId: sessionId, failure: failure }
+              }
+            )
+          })
+          Promise.all(urgentJobs).then(function (results) {
+            var okParts = []
+            var badParts = []
+            results.forEach(function (item) {
+              var session = index.sessionById[item.sessionId]
+              var label = session ? asString(session.title) : shortId(item.sessionId)
+              if (item.payload && item.payload.ok !== false) {
+                var how = item.payload.interrupted
+                  ? '已打断并插话'
+                  : item.payload.degraded
+                    ? '已插话（宿主不支持打断）'
+                    : '已唤醒'
+                okParts.push(label + '：' + how)
+              } else {
+                badParts.push(label + '：' + errorMessage(item.failure || (item.payload && item.payload.error)))
+              }
+            })
+            setNotice(
+              (okParts.length ? '⚡ 加急已发送：' + okParts.join('；') : '') +
+                (badParts.length ? (okParts.length ? '；' : '') + '加急失败：' + badParts.join('；') : '')
+            )
+            if (okParts.length) {
+              setDraft('')
+              setMentions([])
+            }
+            if (typeof props.onRefresh === 'function') props.onRefresh()
+          })
+          return
+        }
         var action = mentionAll || mentionIds.length > 0 ? 'group.post' : 'rule.create'
         var payload =
           action === 'group.post'
@@ -2822,8 +2902,9 @@ window.__ModuleLoader__.load({
           h(RawInput, {
             multiline: true,
             value: draft,
-            placeholder:
-              mentions.length > 0
+            placeholder: urgent
+              ? '⚡ 加急：先点 @ 选目标成员，再写要立刻处理的内容…'
+              : mentions.length > 0
                 ? '@' +
                   mentions
                     .map(function (item) {
@@ -2842,6 +2923,25 @@ window.__ModuleLoader__.load({
           h(
             Btn,
             {
+              variant: urgent ? 'danger' : 'ghost',
+              disabled: props.busy,
+              title: urgent
+                ? '加急模式已开启：发送会立即唤醒/插话被 @ 的成员（60 秒内同一成员限 1 条）'
+                : '开启加急：先 @ 目标成员再发送，立即唤醒；running 会先尝试打断',
+              onClick: function () {
+                setUrgent(!urgent)
+                setNotice(
+                  urgent
+                    ? ''
+                    : '⚡ 加急模式：先 @ 目标成员再发送；目标 running 会先尝试打断，宿主不支持时会明确降级为插话'
+                )
+              }
+            },
+            urgent ? '⚡ 加急 ON' : '⚡ 加急'
+          ),
+          h(
+            Btn,
+            {
               variant: 'ghost',
               disabled: props.busy || draft.trim() === '',
               title: '把输入框内容作为讨论主题，唤醒群成员聊两句（不是任务）',
@@ -2857,6 +2957,20 @@ window.__ModuleLoader__.load({
           ),
           h(Btn, { variant: 'primary', disabled: props.busy || draft.trim() === '', onClick: send }, '发送')
         ),
+        notice !== ''
+          ? h(
+              'div',
+              {
+                style: mergeStyle(
+                  chatStyles.urgentNotice,
+                  notice.indexOf('失败') >= 0 || notice.indexOf('⚠') >= 0
+                    ? { color: 'var(--dsw-alias-state-error-primary)' }
+                    : null
+                )
+              },
+              notice
+            )
+          : null,
         h(
           'div',
           { style: mergeStyle(styles.rowMuted, { padding: '2px 0 4px', textAlign: 'center', fontSize: 10.5 }) },
@@ -3081,6 +3195,7 @@ window.__ModuleLoader__.load({
           index: index,
           run: props.run,
           busy: props.busy,
+          onRefresh: props.onRefresh,
           onBack: function () {
             setSelectedId('')
           }
@@ -3528,10 +3643,16 @@ window.__ModuleLoader__.load({
           ),
           h(
             'div',
-            { style: self ? chatStyles.bubbleSelf : chatStyles.bubbleOther },
+            {
+              style: mergeStyle(
+                self ? chatStyles.bubbleSelf : chatStyles.bubbleOther,
+                rule.urgent ? chatStyles.bubbleUrgent : null
+              )
+            },
             h(
               'div',
               { style: { display: 'flex', gap: 4, alignItems: 'center', marginBottom: 2, flexWrap: 'wrap' } },
+              rule.urgent ? h(Badge, { tone: 'error' }, '⚡ 加急') : null,
               h(Badge, { tone: KIND_TONE[displayKindOf(rule)] || 'neutral' }, kindLabel),
               h(
                 'button',
@@ -4035,7 +4156,7 @@ window.__ModuleLoader__.load({
           )
         )
       } else if (tab === 'groups') {
-        body = h(GroupsSection, { state: state, index: index, run: run, busy: busy })
+        body = h(GroupsSection, { state: state, index: index, run: run, busy: busy, onRefresh: refresh })
       } else {
         body = h(WorldSection, { state: state, index: index, run: run, busy: busy, onRefresh: refresh })
       }

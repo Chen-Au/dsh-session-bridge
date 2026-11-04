@@ -14,10 +14,12 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const CWD = process.cwd()
 const boardDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-bridge-test-'))
 const receiptPath = path.join(boardDir, '.plugin-loaded.json')
+const PLUGIN_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 // ---------------------------------------------------------------- 桩宿主
 const captured = { tools: [], sections: [], contexts: [], listeners: [], harnessLogs: [], routes: [], followups: [] }
@@ -196,7 +198,7 @@ function assertJsonSchema(node, where) {
 }
 
 await check('恰好注册 session_share / session_board / session_ask', () => {
-  assert.deepEqual([...toolByName.keys()].sort(), ['group_member', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_interrupt', 'session_like', 'session_nudge', 'session_profile', 'session_retract', 'session_share'])
+  assert.deepEqual([...toolByName.keys()].sort(), ['group_member', 'group_recruit', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_interrupt', 'session_like', 'session_nudge', 'session_profile', 'session_retract', 'session_share', 'session_urgent'])
   assert.equal(captured.harnessLogs.filter(([level]) => level === 'error').length, 0, '注册阶段不应有 error 级日志')
 })
 
@@ -348,7 +350,7 @@ await check('查重生效（相同内容不重复发布）', async () => {
 await check('session_board status 报告版本与注册结果', async () => {
   const result = String(await board.execute({ action: 'status' }, { agent: rootAgent }))
   assert.match(result, /session-bridge v2\.9\.6/)
-  assert.match(result, /工具：session_share, session_ask, session_nudge, session_retract, session_interrupt, group_rule, session_like, session_discuss, session_identity, group_member, session_directory, group_skill, session_profile, session_board/)
+  assert.match(result, /工具：session_share, session_ask, session_nudge, session_retract, session_interrupt, group_rule, session_like, session_discuss, session_identity, group_member, session_directory, group_skill, session_profile, session_board, group_recruit, session_urgent/)
   assert.match(result, /通讯录：3 个主会话/)
   assert.match(result, /空闲看板：idle \d+ 个 · busy \d+ 个/)
   assert.match(result, /权限分级：维护者=未注册/)
@@ -1108,7 +1110,7 @@ await check('面板命令：删除规矩与群组', async () => {
 await check('插件启动凭证写入正确（工具/注册/版本/API）', () => {
   const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))
   assert.equal(receipt.version, '2.9.6')
-  assert.deepEqual(receipt.tools.slice().sort(), ['group_member', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_interrupt', 'session_like', 'session_nudge', 'session_profile', 'session_retract', 'session_share'])
+  assert.deepEqual(receipt.tools.slice().sort(), ['group_member', 'group_recruit', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_interrupt', 'session_like', 'session_nudge', 'session_profile', 'session_retract', 'session_share', 'session_urgent'])
   assert.deepEqual(receipt.failedTools, [])
   assert.equal(receipt.registration.section, true)
   assert.equal(receipt.registration.context, true)
@@ -2963,6 +2965,408 @@ await check('打断权限：普通成员不能打断他人 / 群管理只能打�
 })
 
 
+
+await (async () => {
+  // ---------------------------------------------------------------- K. 组长招募 + 加急插话（v2.9.3）
+  // 需求：组长可请求世界路由招募/派新人（优先 idle、自动入组、新建走复核、尊重 protected）；
+  // 加急消息 session.urgent（权限、idle/running 插话、无打断能力降级、限频、UI ⚡）。
+  console.log('== K. 组长 ↔ 世界路由招募 + 加急插话（v2.9.3）')
+  const recruitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-bridge-recruit-'))
+  const G = {
+    leader: 'session-9000lead',
+    idleMember: 'session-9100idle',
+    runner: 'session-9200run',
+    runner2: 'session-9300run2',
+    maintainer: 'session-9400maint',
+    outsider: 'session-9500outsider'
+  }
+  const gAgentById = (id) => gAgents.find((agent) => agent.id === id)
+  const gAgent = (id, status) => ({
+    id,
+    status,
+    session: { id, header: { cwd: CWD, createdAt: 1 } }
+  })
+  const gAgents = [
+    gAgent(G.leader, 'idle'),
+    gAgent(G.idleMember, 'idle'),
+    gAgent(G.runner, 'running'),
+    gAgent(G.runner2, 'running'),
+    gAgent(G.maintainer, 'idle'),
+    gAgent(G.outsider, 'idle')
+  ]
+  // runner 提供打断能力（模拟 task-4 的 agent.interrupt）；runner2 没有 → 测降级。
+  const gRunner = gAgentById(G.runner)
+  gRunner.interrupt = function interrupt() {
+    gCaptured.interrupts.push(this.id)
+    this.status = 'idle'
+  }
+  for (const agent of gAgents) {
+    agent.followup = function followup(message) {
+      gCaptured.followups.push({ sessionId: this.id, message })
+    }
+  }
+  const gTitles = {
+    [G.leader]: '组长-远山',
+    [G.idleMember]: '画图员-小北',
+    [G.runner]: '跑图-小南',
+    [G.runner2]: '跑图-小西',
+    [G.maintainer]: '星桥值班员',
+    [G.outsider]: '路过的-小白'
+  }
+  const fakeSessionQuery4 = {
+    async listSessions() {
+      return gAgents.map((agent) => ({
+        header: agent.session.header,
+        live: true,
+        persisted: true,
+        formatStatus: 'current'
+      }))
+    },
+    async readTitleSnapshots(ids) {
+      return ids.map((id) => ({
+        sessionId: id,
+        status: 'fulfilled',
+        value: { session: { id }, ...(gTitles[id] ? { title: { title: gTitles[id] } } : {}) }
+      }))
+    }
+  }
+  const fakeWebServer4 = {
+    register(route) {
+      gCaptured.routes.push(route)
+      return () => {}
+    }
+  }
+  // 预置：群「招募组」（组长=leader）、维护者、以及 idleMember 的申报（worldEligible）。
+  fs.writeFileSync(
+    path.join(recruitDir, 'groups.json'),
+    JSON.stringify(
+      {
+        version: 1,
+        groups: [
+          {
+            id: 'g-recruit',
+            name: '招募组',
+            workspace: CWD,
+            goal: '测试组长招募',
+            managerSessionId: G.leader,
+            sessionIds: [G.leader],
+            createdAt: 0,
+            updatedAt: 0
+          }
+        ]
+      },
+      null,
+      2
+    ),
+    'utf8'
+  )
+  fs.writeFileSync(path.join(recruitDir, 'maintainer.json'), JSON.stringify({ sessionId: G.maintainer }, null, 2), 'utf8')
+  fs.mkdirSync(path.join(recruitDir, 'profiles'), { recursive: true })
+  fs.writeFileSync(
+    path.join(recruitDir, 'profiles', G.idleMember + '.json'),
+    JSON.stringify(
+      {
+        sessionId: G.idleMember,
+        summary: '擅长把数据画成出版级图表',
+        direction: '画图 / 数据可视化',
+        assets: ['matplotlib'],
+        needs: '',
+        declined: false,
+        updatedAt: 1
+      },
+      null,
+      2
+    ),
+    'utf8'
+  )
+  const gCaptured = { tools: [], routes: [], followups: [], interrupts: [], logs: [], createdAgents: [] }
+  const ctx4 = {
+    tools: {
+      register(definition) {
+        gCaptured.tools.push(definition)
+        return () => {}
+      }
+    },
+    systemPrompt: {
+      section() {
+        return () => {}
+      },
+      context() {
+        return () => {}
+      }
+    },
+    agents: {
+      roots: () => gAgents,
+      list: () => gAgents,
+      get: (id) => gAgentById(id),
+      async create(options) {
+        const id = options && options.sessionId ? options.sessionId : 'session-created-' + Date.now().toString(36)
+        const agent = gAgent(id, 'idle')
+        agent.followup = function followup(message) {
+          gCaptured.followups.push({ sessionId: this.id, message })
+        }
+        gAgents.push(agent)
+        gCaptured.createdAgents.push(id)
+        return { agent, session: agent.session }
+      }
+    },
+    sessions: { list: () => gAgents.map((agent) => agent.session) },
+    get(name) {
+      if (name === 'sessionQuery') return fakeSessionQuery4
+      if (name === 'webServer') return fakeWebServer4
+      return undefined
+    },
+    effect(callback) {
+      const disposer = callback()
+      return typeof disposer === 'function' ? disposer : () => {}
+    },
+    on() {
+      return () => {}
+    },
+    logger: {
+      info() {},
+      warn(message) {
+        gCaptured.logs.push(['warn', String(message)])
+      },
+      error(message) {
+        gCaptured.logs.push(['error', String(message)])
+      }
+    }
+  }
+  plugin.apply(ctx4, { boardDir: recruitDir, injectMode: 'broadcast', autoPrompt: false, askOnCreate: false })
+  const toolByName4 = new Map(gCaptured.tools.map((tool) => [tool.name, tool]))
+  const routeHandler4 = (routePath) => gCaptured.routes.find((route) => route.path === routePath)?.handler
+  const callState4 = async () => {
+    const res = fakeRes()
+    await routeHandler4('/api/session-bridge/state')(fakeReq(), res)
+    return { res, json: JSON.parse(res.out.body) }
+  }
+  const callCommand4 = async (command) => {
+    const res = fakeRes()
+    await routeHandler4('/api/session-bridge/command')(
+      fakeReq({
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-session-bridge-action': '1' },
+        body: JSON.stringify(command)
+      }),
+      res
+    )
+    return { res, json: JSON.parse(res.out.body) }
+  }
+
+  await check('state.sessions 提供 availability/protected 字段（保护维护者）', async () => {
+    const state = await callState4()
+    const leader = state.json.sessions.find((session) => session.id === G.leader)
+    const maintainer = state.json.sessions.find((session) => session.id === G.maintainer)
+    const running = state.json.sessions.find((session) => session.id === G.runner2)
+    assert.equal(leader.availability, 'idle')
+    assert.equal(maintainer.protected, true, '维护者应标记 protected')
+    assert.equal(running.availability, 'busy', 'running 会话应为 busy')
+    assert.equal(state.json.config.urgentIntervalMs, 60000)
+  })
+
+  await check('group.recruit：普通成员无权请求招募', async () => {
+    const recruitTool = toolByName4.get('group_recruit')
+    assert.ok(recruitTool, '缺少 group_recruit 工具')
+    const out = String(
+      await recruitTool.execute({ group: '招募组', text: '需要一位画图成员' }, { agent: gAgentById(G.outsider) })
+    )
+    assert.match(out, /只有本群群管理|组长|维护者/, '普通成员应被拒绝：' + out)
+  })
+
+  await check('group.recruit：组长招到 idle 现有成员 → 自动入组 + 建任务 + 审计 + 唤醒', async () => {
+    const recruitTool = toolByName4.get('group_recruit')
+    gCaptured.followups.length = 0
+    const out = String(
+      await recruitTool.execute(
+        { group: '招募组', text: '需要一位画图成员，负责把图表重绘', count: 1, mode: 'auto', skills: ['画图'] },
+        { agent: gAgentById(G.leader) }
+      )
+    )
+    assert.match(out, /招募成功/, out)
+    assert.match(out, /画图员-小北/, '应选中 idle 现有成员：' + out)
+    const state = await callState4()
+    const group = state.json.groups.find((item) => item.id === 'g-recruit')
+    assert.ok(group.sessionIds.includes(G.idleMember), '新成员应自动加入群组')
+    const task = state.json.rules.find((entry) => entry.kind === 'task' && entry.groupId === 'g-recruit')
+    assert.ok(task, '应创建招募任务')
+    assert.equal(task.coordinator, G.leader, '组长应沿用发起人')
+    assert.ok(task.assignees.includes(G.idleMember), '任务应指派给新成员')
+    const audit = state.json.rules.find(
+      (entry) => entry.kind === 'chat' && entry.groupId === 'g-recruit' && String(entry.title).indexOf('招募') >= 0
+    )
+    assert.ok(audit, '应写入招募审计（群聊）')
+    assert.ok(String(audit.text).includes('新增成员'), '审计应说明路由结果')
+    assert.ok(
+      gCaptured.followups.some(
+        (item) => item.sessionId === G.idleMember && String(item.message.content[0].text).includes('招募入组')
+      ),
+      '应唤醒新成员'
+    )
+  })
+
+  await check('group.recruit：空闲成员不足/无匹配 → 进入新会话复核（不偷偷建会话）', async () => {
+    const recruitTool = toolByName4.get('group_recruit')
+    // 把剩余的普通候选都变忙：只剩维护者空闲（必须被排除）。
+    gAgentById(G.outsider).status = 'running'
+    const out = String(
+      await recruitTool.execute({ group: '招募组', text: '再招一位新成员做数据', count: 1, mode: 'auto' }, { agent: gAgentById(G.leader) })
+    )
+    assert.match(out, /待复核/, out)
+    const state = await callState4()
+    const approval = (state.json.approvals || []).find(
+      (item) => item.source === 'group.recruit' && item.groupId === 'g-recruit'
+    )
+    assert.ok(approval, '应写入待复核记录')
+    assert.equal(approval.memberCount, 1)
+    const group = state.json.groups.find((item) => item.id === 'g-recruit')
+    assert.ok(!group.sessionIds.includes(G.maintainer), '维护者不得被招募')
+    assert.ok(!group.sessionIds.includes(G.runner), '运行中成员不得被招募')
+    assert.equal(gCaptured.createdAgents.length, 0, '复核通过前不得创建会话')
+  })
+
+  await check('group.recruit：复核通过后新建会话并自动入组（面板命令）', async () => {
+    const stateBefore = await callState4()
+    const approval = (stateBefore.json.approvals || []).find((item) => item.source === 'group.recruit')
+    assert.ok(approval, '缺少待复核记录')
+    const approved = await callCommand4({
+      action: 'group.recruit',
+      payload: {
+        group: '招募组',
+        text: '再招一位新成员做数据',
+        count: 1,
+        mode: 'auto',
+        approved: true,
+        approvalId: approval.id
+      }
+    })
+    assert.equal(approved.json.ok, true, JSON.stringify(approved.json))
+    assert.equal(approved.json.pendingApproval, undefined, '复核通过后不应再返回待复核')
+    assert.equal((approved.json.added || []).length, 1)
+    assert.equal(approved.json.added[0].source, 'new')
+    assert.ok(gCaptured.createdAgents.length >= 1, '应新建会话')
+    const group = approved.json.state.groups.find((item) => item.id === 'g-recruit')
+    assert.ok(group.sessionIds.includes(approved.json.added[0].id), '新会话应自动入组')
+  })
+
+  await check('group.recruit：mode=existing 且无空闲时给可读错误', async () => {
+    const result = await callCommand4({
+      action: 'group.recruit',
+      payload: { group: '招募组', text: '再来一位', count: 1, mode: 'existing' }
+    })
+    assert.equal(result.json.ok, false)
+    assert.match(String(result.json.error), /没有空闲/, JSON.stringify(result.json))
+  })
+
+  await check('session.urgent：idle 目标立即唤醒并标注【加急】', async () => {
+    gCaptured.followups.length = 0
+    const result = await callCommand4({
+      action: 'session.urgent',
+      payload: { to: G.idleMember, text: '请立刻把图2改成 600dpi' }
+    })
+    assert.equal(result.json.ok, true, JSON.stringify(result.json))
+    assert.equal(result.json.interrupted, false)
+    assert.equal(result.json.degraded, false)
+    assert.equal(result.json.target.id, G.idleMember)
+    const state = await callState4()
+    const urgentEntry = (state.json.world || []).find(
+      (entry) => entry.urgent === true && String(entry.text).includes('600dpi')
+    )
+    assert.ok(urgentEntry, '世界消息应带 urgent 标记')
+    assert.ok(urgentEntry.urgentTo.includes(G.idleMember))
+    const followup = gCaptured.followups.find((item) => item.sessionId === G.idleMember)
+    assert.ok(followup, '应唤醒目标会话')
+    const message = String(followup.message.content[0].text)
+    assert.ok(message.includes('【加急') && message.includes('600dpi'), '加急正文应送达：' + message)
+  })
+
+  await check('session.urgent：60 秒限频（同一发送者→同一目标）', async () => {
+    const before = gCaptured.followups.filter((item) => item.sessionId === G.idleMember).length
+    const limited = await callCommand4({
+      action: 'session.urgent',
+      payload: { to: G.idleMember, text: '再催一次' }
+    })
+    assert.equal(limited.json.ok, false, JSON.stringify(limited.json))
+    assert.match(String(limited.json.error), /频繁/, String(limited.json.error))
+    assert.ok(limited.json.retryAfterMs > 0, '应返回重试等待时间')
+    const after = gCaptured.followups.filter((item) => item.sessionId === G.idleMember).length
+    assert.equal(after, before, '限频期间不得再次唤醒')
+  })
+
+  await check('session.urgent：running + 有打断能力 → 先打断再插话', async () => {
+    gCaptured.followups.length = 0
+    gCaptured.interrupts.length = 0
+    const result = await callCommand4({
+      action: 'session.urgent',
+      payload: { to: G.runner, text: '立刻停下当前任务，先交付图表' }
+    })
+    assert.equal(result.json.ok, true, JSON.stringify(result.json))
+    assert.equal(result.json.interrupted, true, '应报告已打断')
+    assert.equal(result.json.degraded, false)
+    assert.deepEqual(gCaptured.interrupts, [G.runner], '应调用宿主打断能力')
+    assert.ok(
+      gCaptured.followups.some(
+        (item) => item.sessionId === G.runner && String(item.message.content[0].text).includes('立刻停下当前任务')
+      ),
+      '打断后应立即注入加急消息'
+    )
+  })
+
+  await check('session.urgent：running 无打断能力 → 明确降级为插话（不假装已打断）', async () => {
+    gCaptured.followups.length = 0
+    const result = await callCommand4({
+      action: 'session.urgent',
+      payload: { to: G.runner2, text: '这条需要插话提醒' }
+    })
+    assert.equal(result.json.ok, true, JSON.stringify(result.json))
+    assert.equal(result.json.interrupted, false, '无能力时不得声称已打断')
+    assert.equal(result.json.degraded, true, '应明确降级')
+    assert.match(String(result.json.degradedReason), /不支持直接打断|退化/, String(result.json.degradedReason))
+    assert.ok(
+      gCaptured.followups.some(
+        (item) => item.sessionId === G.runner2 && String(item.message.content[0].text).includes('这条需要插话提醒')
+      ),
+      '降级后仍应插话送达'
+    )
+  })
+
+  await check('session.urgent：权限矩阵（普通成员拒绝 / 群管理本组可用 / 维护者可用）', async () => {
+    const urgentTool = toolByName4.get('session_urgent')
+    assert.ok(urgentTool, '缺少 session_urgent 工具')
+    gAgentById(G.outsider).status = 'idle'
+    const deniedMember = String(
+      await urgentTool.execute({ to: G.leader, text: '普通成员越权加急' }, { agent: gAgentById(G.outsider) })
+    )
+    assert.match(deniedMember, /普通成员不能对他人加急|群管理/, '普通成员应被拒绝：' + deniedMember)
+    const deniedOutsider = String(
+      await urgentTool.execute({ to: G.outsider, text: '组长对组外加急' }, { agent: gAgentById(G.leader) })
+    )
+    assert.match(deniedOutsider, /不能对他人加急|群管理/, '群管理不能对组外加急：' + deniedOutsider)
+    const managerOk = String(
+      await urgentTool.execute(
+        { group: '招募组', to: G.idleMember, text: '组长加急：请先交图' },
+        { agent: gAgentById(G.leader) }
+      )
+    )
+    assert.match(managerOk, /加急已送达/, '本组群管理加急应成功：' + managerOk)
+    const maintainerOk = String(
+      await urgentTool.execute({ to: G.outsider, text: '维护者加急：请回报状态' }, { agent: gAgentById(G.maintainer) })
+    )
+    assert.match(maintainerOk, /加急已送达/, '维护者加急应成功：' + maintainerOk)
+  })
+
+  await check('UI 静态：群聊 ⚡ 加急入口 + urgent 标记（app.html / client.js）', async () => {
+    const appHtml = fs.readFileSync(path.join(PLUGIN_DIR, 'app.html'), 'utf8')
+    const clientJs = fs.readFileSync(path.join(PLUGIN_DIR, 'client.js'), 'utf8')
+    for (const needle of ['groupUrgent', 'session.urgent', '⚡ 加急', 'urgentMode']) {
+      assert.ok(appHtml.includes(needle), 'app.html 缺少 ' + needle)
+    }
+    for (const needle of ['session.urgent', '⚡ 加急', 'urgent', 'bubbleUrgent']) {
+      assert.ok(clientJs.includes(needle), 'client.js 缺少 ' + needle)
+    }
+    assert.ok(appHtml.includes('badge-urgent') || appHtml.includes('chip urgent'), 'app.html 应有加急标记样式')
+  })
+})()
 // ---------------------------------------------------------------- 收尾
 fs.rmSync(targetedDir, { recursive: true, force: true })
 fs.rmSync(contactDir, { recursive: true, force: true })
