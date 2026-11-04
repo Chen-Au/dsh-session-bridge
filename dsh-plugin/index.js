@@ -58,7 +58,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.1.1'
+const VERSION = '2.1.2'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -1308,8 +1308,9 @@ export function apply(ctx, config = {}) {
   const startTeaParty = async (group, options = {}) => {
     const date = localDateKey(Date.now())
     if (!options.force && activityStore.hasTea(date, group.id)) return { skipped: true, reason: '今天已经开过茶话会' }
+    const maintainerId = maintainerStore.get()
     const sessions = (await buildSessionIndex()).filter(
-      (session) => group.sessionIds.includes(session.id) && !session.closed
+      (session) => group.sessionIds.includes(session.id) && !session.closed && session.id !== maintainerId
     )
     if (sessions.length < 2) return { skipped: true, reason: '群成员不足' }
     const topic = TEA_TOPICS[(new Date().getDate() + group.id.length) % TEA_TOPICS.length]
@@ -1405,7 +1406,7 @@ export function apply(ctx, config = {}) {
       /* ignore */
     }
     const candidates = sessions
-      .filter((session) => session.id !== group.managerSessionId)
+      .filter((session) => session.id !== group.managerSessionId && session.id !== maintainerStore.get())
       .sort((a, b) => (chatCount.get(a.id) || 0) - (chatCount.get(b.id) || 0))
     const target = candidates[0] || sessions[0]
     activityStore.markSpark(group.id)
@@ -3775,7 +3776,10 @@ export function apply(ctx, config = {}) {
       const want = String((args && args.to) || '').trim()
       const sessions = await buildSessionIndex()
       const byId = new Map(sessions.map((session) => [session.id, session]))
-      let targets = group.sessionIds.filter((id) => id !== info.id).map((id) => byId.get(id)).filter(Boolean)
+      let targets = group.sessionIds
+        .filter((id) => id !== info.id && id !== maintainerStore.get())
+        .map((id) => byId.get(id))
+        .filter(Boolean)
       if (want) {
         const refs = want.split(/[,，\s]+/).filter(Boolean)
         targets = targets.filter((session) => refs.some((ref) => session.id.startsWith(ref) || String(session.title || '').includes(ref)))
@@ -4583,6 +4587,7 @@ export function apply(ctx, config = {}) {
         ? [...group.sessionIds]
         : requested.filter((sessionId) => group.sessionIds.includes(sessionId))
       targetIds = [...new Set(targetIds)]
+      if (mentionAll) targetIds = targetIds.filter((sessionId) => sessionId !== maintainerStore.get())
       const titleById = new Map(sessions.map((session) => [session.id, session.title]))
       const titleOf = (sessionId) => titleById.get(sessionId) || shortSid(sessionId)
 
@@ -4871,6 +4876,18 @@ export function apply(ctx, config = {}) {
       })
       maintainerStore.set(sessionId, { handle, avatar })
       try {
+        mutateGroups((list) => {
+          for (const group of list) {
+            if (!group.sessionIds.includes(sessionId)) group.sessionIds.push(sessionId)
+            group.updatedAt = Date.now()
+          }
+          return { ok: true }
+        })
+        logger.info('维护者已加入所有群组：' + handle)
+      } catch {
+        /* ignore */
+      }
+      try {
         const permissions = readPermissionsOf(boardDir)
         const grants = new Set(permissions.grants[sessionId] || [])
         for (const session of sessions) if (session.id !== sessionId) grants.add(session.id)
@@ -4952,7 +4969,10 @@ export function apply(ctx, config = {}) {
       if (!topic) return { ok: false, error: '讨论主题不能为空' }
       const sessions = await buildSessionIndex()
       const byId = new Map(sessions.map((session) => [session.id, session]))
-      let targets = group.sessionIds.map((id) => byId.get(id)).filter(Boolean)
+      let targets = group.sessionIds
+        .filter((id) => id !== maintainerStore.get())
+        .map((id) => byId.get(id))
+        .filter(Boolean)
       const requested = Array.isArray(payload.mentionSessionIds)
         ? payload.mentionSessionIds.filter((item) => typeof item === 'string' && item)
         : []
@@ -5633,6 +5653,19 @@ export function apply(ctx, config = {}) {
         const agent = existed || (await ensureSessionLive(maintainerId))
         if (!agent) issues.push('维护者会话离线且恢复失败')
         else if (!existed) fixes.push('恢复维护者会话上线')
+        try {
+          mutateGroups((list) => {
+            for (const group of list) {
+              if (!group.sessionIds.includes(maintainerId)) {
+                group.sessionIds.push(maintainerId)
+                group.updatedAt = Date.now()
+              }
+            }
+            return { ok: true }
+          })
+        } catch {
+          /* ignore */
+        }
         try {
           const sessions = await buildSessionIndex()
           const permissions = readPermissionsOf(boardDir)
