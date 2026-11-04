@@ -347,7 +347,7 @@ await check('查重生效（相同内容不重复发布）', async () => {
 
 await check('session_board status 报告版本与注册结果', async () => {
   const result = String(await board.execute({ action: 'status' }, { agent: rootAgent }))
-  assert.match(result, /session-bridge v2\.9\.1/)
+  assert.match(result, /session-bridge v2\.9\.6/)
   assert.match(result, /工具：session_share, session_ask, session_nudge, group_rule, session_like, session_discuss, session_identity, group_member, session_directory, group_skill, session_profile, session_board/)
   assert.match(result, /通讯录：3 个主会话/)
   assert.match(result, /空闲看板：idle \d+ 个 · busy \d+ 个/)
@@ -359,7 +359,7 @@ await check('session_board status 报告版本与注册结果', async () => {
 
 await check('子会话可只读查看经验板（list / status）', async () => {
   const status = String(await board.execute({ action: 'status' }, { agent: subAgent }))
-  assert.match(status, /session-bridge v2\.9\.1/)
+  assert.match(status, /session-bridge v2\.9\.6/)
   const listed = String(await board.execute({ action: 'list' }, { agent: subAgent }))
   assert.match(listed, /跨会话经验板/)
 })
@@ -456,7 +456,7 @@ await check('GET state 返回规则/群组/会话/送达结构', async () => {
   const { res, json } = await callState()
   assert.equal(res.out.status, 200)
   assert.equal(json.ok, true)
-  assert.equal(json.version, '2.9.1')
+  assert.equal(json.version, '2.9.6')
   assert.ok(Array.isArray(json.rules) && json.rules.length >= 1)
   assert.ok(Array.isArray(json.groups))
   assert.ok(Array.isArray(json.sessions) && json.sessions.length >= 2)
@@ -1107,7 +1107,7 @@ await check('面板命令：删除规矩与群组', async () => {
 
 await check('插件启动凭证写入正确（工具/注册/版本/API）', () => {
   const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))
-  assert.equal(receipt.version, '2.9.1')
+  assert.equal(receipt.version, '2.9.6')
   assert.deepEqual(receipt.tools.slice().sort(), ['group_member', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_like', 'session_nudge', 'session_profile', 'session_share'])
   assert.deepEqual(receipt.failedTools, [])
   assert.equal(receipt.registration.section, true)
@@ -2389,10 +2389,185 @@ await check('维护者保留群观察位，成员列表显示保护角色', asyn
   assert.match(listText, /角色=(成员|组长（临时）)/)
 })
 
+// ---------------------------------------------------------------- I. 健康巡检告警窗口 / 恢复跳过 / 标题空值（v2.9.6）
+console.log('== I. 健康巡检告警窗口、恢复跳过与标题空值（v2.9.6）')
+const healthDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-bridge-health-'))
+const healthLogs = []
+const healthRoutes = []
+const healthTools = []
+const healthRenameCalls = []
+const ghostId = 'session-gggg0007'
+const ghostSession = { id: ghostId, header: header({ createdAt: Date.now() }) }
+const healthWebServer = {
+  register(route) {
+    healthRoutes.push(route)
+    return () => {}
+  }
+}
+const healthTitles = {
+  rename(session, title) {
+    // 模拟真实宿主：读到 undefined.id 时抛异常（旧代码的 warn 来源）。
+    if (!session || typeof session.id !== 'string') {
+      throw new Error("Cannot read properties of undefined (reading 'id')")
+    }
+    healthRenameCalls.push({ sessionId: session.id, title })
+    return { title }
+  }
+}
+const healthCtx = {
+  tools: {
+    register(definition) {
+      healthTools.push(definition)
+      return () => {}
+    }
+  },
+  systemPrompt: { section: () => () => {}, context: () => () => {} },
+  agents: {
+    roots: () => [rootAgent],
+    list: () => [rootAgent],
+    get: (id) => (id === rootAgent.id ? rootAgent : undefined),
+    create: async () => ({ agent: {} }),
+    resume: async () => {
+      throw new Error(`session "${ghostId}" is already owned by an active write handle`)
+    }
+  },
+  sessions: { list: () => [rootAgent.session, ghostSession] },
+  get(name) {
+    if (name === 'webServer') return healthWebServer
+    if (name === 'sessionTitle') return healthTitles
+    return undefined
+  },
+  effect(callback) {
+    const disposer = callback()
+    return typeof disposer === 'function' ? disposer : () => {}
+  },
+  on() {
+    return () => {}
+  },
+  logger: {
+    info: (message) => healthLogs.push(['info', String(message)]),
+    warn: (message) => healthLogs.push(['warn', String(message)]),
+    error: (message) => healthLogs.push(['error', String(message)])
+  }
+}
+plugin.apply(healthCtx, { boardDir: healthDir, injectMode: 'broadcast', autoPrompt: false })
+
+const callHealthCommand = async (command) => {
+  const handler = healthRoutes.find((route) => route.path === '/api/session-bridge/command')?.handler
+  assert.ok(handler, '健康巡检实例缺少 command 路由')
+  const res = fakeRes()
+  await handler(
+    fakeReq({
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-session-bridge-action': '1' },
+      body: JSON.stringify(command)
+    }),
+    res
+  )
+  return { res, json: JSON.parse(res.out.body) }
+}
+const writeHealthLog = (entries) => {
+  const text = entries
+    .map(({ hoursAgo, level, message }) => `${new Date(Date.now() - hoursAgo * 3600 * 1000).toISOString()} [${level}] ${message}`)
+    .join('\n')
+  fs.writeFileSync(path.join(healthDir, 'session-bridge.log'), text + '\n', 'utf8')
+}
+// 插件日志写 boardDir/session-bridge.log（不走 ctx.logger）；断言时按行增量读取。
+const healthLogLines = () => {
+  const file = path.join(healthDir, 'session-bridge.log')
+  if (!fs.existsSync(file)) return []
+  return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean)
+}
+const hasHealthLog = (lines, level, pattern) =>
+  lines.some((line) => line.includes('[' + level + ']') && pattern.test(line))
+const oldNoise = Array.from({ length: 40 }, (_, index) => ({
+  hoursAgo: 72,
+  level: 'warn',
+  message: '历史噪音 ' + index
+}))
+
+await check('健康巡检：日志警告只统计最近 24h（历史 warn 不再误报）', async () => {
+  writeHealthLog([
+    ...oldNoise,
+    { hoursAgo: 2, level: 'warn', message: '近期噪音 A' },
+    { hoursAgo: 1, level: 'warn', message: '近期噪音 B' },
+    { hoursAgo: 1, level: 'error', message: '近期错误 C' }
+  ])
+  const { json } = await callHealthCommand({ action: 'health.check' })
+  assert.equal(json.ok, true, JSON.stringify(json))
+  assert.ok(
+    !json.report.issues.some((issue) => String(issue).includes('近期日志警告偏多')),
+    '最近 24h 只有 3 条，不应报「日志警告偏多」：' + JSON.stringify(json.report.issues)
+  )
+})
+
+await check('健康巡检：最近 24h 超过阈值才告警，消息带时间窗口', async () => {
+  writeHealthLog([
+    ...oldNoise,
+    ...Array.from({ length: 12 }, (_, index) => ({
+      hoursAgo: 1,
+      level: 'warn',
+      message: '近期噪音 ' + index
+    }))
+  ])
+  const { json } = await callHealthCommand({ action: 'health.check' })
+  assert.equal(json.ok, true, JSON.stringify(json))
+  const issue = json.report.issues.find((item) => String(item).includes('近期日志警告偏多'))
+  assert.ok(issue, '最近 24h 12 条应触发告警：' + JSON.stringify(json.report.issues))
+  assert.match(String(issue), /12 条 \/ 最近 24h/)
+})
+
+await check('会话恢复：已活跃会话跳过 resume 并记 info（不再 warn already owned）', async () => {
+  const mark = healthLogLines().length
+  const { json } = await callHealthCommand({
+    action: 'session.revive',
+    payload: { sessionId: ghostId, title: '不应触发改名' }
+  })
+  assert.equal(json.ok, true, JSON.stringify(json))
+  assert.equal(json.skipped, true, '已活跃会话应返回 skipped')
+  assert.equal(json.resumed, false)
+  const fresh = healthLogLines().slice(mark)
+  assert.ok(hasHealthLog(fresh, 'info', /已活跃，跳过恢复/), '应记录 info 跳过日志：' + JSON.stringify(fresh))
+  assert.ok(!hasHealthLog(fresh, 'warn', /恢复会话/), '不应再把已活跃会话记成 warn：' + JSON.stringify(fresh))
+  assert.equal(healthRenameCalls.length, 0, '跳过恢复时不应改名')
+})
+
+await check('会话恢复：already owned 竞态按预期路径跳过，不当错误', async () => {
+  const mark = healthLogLines().length
+  const raceId = 'session-wwww0008'
+  healthCtx.agents.resume = async () => {
+    throw new Error(`session "${raceId}" is already owned by an active write handle`)
+  }
+  const { json } = await callHealthCommand({ action: 'session.revive', payload: { sessionId: raceId } })
+  assert.equal(json.ok, true, JSON.stringify(json))
+  assert.equal(json.skipped, true)
+  const fresh = healthLogLines().slice(mark)
+  assert.ok(hasHealthLog(fresh, 'info', /already owned/), 'already owned 应记 info：' + JSON.stringify(fresh))
+  assert.ok(!hasHealthLog(fresh, 'warn', /./), '不应产生 warn：' + JSON.stringify(fresh))
+})
+
+await check('新会话标题：宿主返回无 session 的 handle 时跳过并记 info（空值保护）', async () => {
+  const created = await callHealthCommand({
+    action: 'group.create',
+    payload: { name: '标题空值测试组', workspace: healthDir, sessionIds: [rootAgent.id] }
+  })
+  assert.equal(created.json.ok, true, JSON.stringify(created.json))
+  const groupId = created.json.groupId
+  const mark = healthLogLines().length
+  const titleMark = healthRenameCalls.length
+  const { json } = await callHealthCommand({ action: 'group.manager', payload: { id: groupId, create: true } })
+  assert.equal(json.ok, true, JSON.stringify(json))
+  const fresh = healthLogLines().slice(mark)
+  assert.equal(healthRenameCalls.length, titleMark, '没有 session.id 时不应调用 rename')
+  assert.ok(hasHealthLog(fresh, 'info', /设置标题跳过/), '应记录 info 跳过日志：' + JSON.stringify(fresh))
+  assert.ok(!hasHealthLog(fresh, 'warn', /设置标题失败/), '空值路径不应 warn：' + JSON.stringify(fresh))
+})
+
 // ---------------------------------------------------------------- 收尾
 fs.rmSync(targetedDir, { recursive: true, force: true })
 fs.rmSync(contactDir, { recursive: true, force: true })
 fs.rmSync(permDir, { recursive: true, force: true })
+fs.rmSync(healthDir, { recursive: true, force: true })
 fs.rmSync(groupDir, { recursive: true, force: true })
 fs.rmSync(boardDir, { recursive: true, force: true })
 console.log('')
