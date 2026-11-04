@@ -82,13 +82,21 @@
 - 群任务派活消息自动附带成员通讯录（contactId + handle + 标题），面板群成员列表显示可点击复制的 contactId，组长不必再猜短 ID；
 - **修复**：此前 6 位短 id（如 `4f51e9`）无法用于 `session_ask` 的 `to`（旧逻辑只支持完整 id / startsWith / 标题），只能退回给值班员；现在可直接派活。
 
-### 9. 权限分级与修bug群（v2.9.1）
+### 9. 可读群名与空闲看板（v2.9.0）
+
+- **自动群名可读化**：不再用 `协作：` + 任务前 24 字（会截出半句），改为去口语填充 + 提取项目名/动作类型，生成如「shoot_game · 招募协作」的群名；`group.rename` 支持手动改名，也支持 `auto=true` 按群目标自动修复旧群名，群管理会话标题随群名实时保持可读。
+- **空闲看板（availability）**：每个主会话派生 `idle` / `busy`——有「未回答的 request」或「未完成的群任务（组长）」即 busy，交回结果/回答后自动回 idle；`state.sessions` 新增 `availability`、`currentTask`、`openRequestCount`、`lastSubmittedAt`；独立窗口新增「空闲看板」（idle 在前、busy 显示当前任务与时间、点击跳会话），群成员列表也会显示忙/空闲徽标。
+- **路由避忙**：世界任务的非显式匹配与协同扩展只派 idle 成员；若匹配成员全忙则改新建会话（进入待复核），不会硬派给忙碌老人；显式 `@` 某人仍尊重用户选择。群任务默认优先空闲成员当组长，显式指定忙碌组长会提示可能排队。
+- **测试**：契约测试新增 G 段，覆盖群名生成/丑名自动改/手动改/群管理标题、`open request → busy → answer → idle`、世界路由避忙/全忙复核/显式 @。
+
+### 10. 权限分级与修bug群（v2.9.1）
 
 - **保护级别**：`user（用户/面板）> maintainer（维护者）> group-manager（群管理）> coordinator（组长）> member（成员）`。维护者（`maintainer.set` 注册的会话，如「星桥值班员」）默认 **protected/service**：不接普通世界任务自动路由、不被 `group.post` 指派为组长/成员、不能被 `session_ask` / `session_nudge` 当普通任务目标；派活请求会返回明确错误 + 替代路径，不会静默唤醒；
+- **与空闲看板叠加**：世界任务自动路由/协同扩展只派「idle **且** 非 protected」的会话（维护者永远不进入自动路由，即使空闲）；用户显式 `@` 维护者仍按例外处理。
 - **可见性**：`state` / 看板 / 通讯录（`session_directory`）标出 `protected` / `service` / 角色，群成员列表显示角色；维护者可继续留在群里**观察**，但不再接该群的普通任务；
 - **用户显式 @ 例外**：用户在世界任务/群聊正文里显式 @ 维护者时按例外处理并给出提示，且不会让维护者成为自动建群的组长/成员；
-- **修bug群**：`bugfix.ensure` 命令 / 右侧栏「🛡️ 建修bug群」按钮 / `session_board action=bugfix` 一键创建或复用「星桥 · 修bug」群——维护者为群管理、普通成员自动入群；`bugfix.report`（面板「🛡️ 报BUG」按钮）与 `session_share kind=bug` 会把 bug 报告投递到该群并通知维护者；`bugfix.list` 可查看开放/已修复的 bug 列表（复用看板 request 状态）；
-- **契约测试**：新增 G 组覆盖「自动路由排除维护者、group.post 指派维护者报错/跳过、session_ask 与 session_nudge 拒绝、用户显式 @ 例外、修bug群创建/复用与 bug 投递、成员列表角色标记」。
+- **修bug群**：`bugfix.ensure` 命令 / 右侧栏「🛡️ 建修bug群」按钮 / `session_board action=bugfix` 一键创建或复用「星桥 · 修bug」群（自动命名复用 v2.9.0 的 `generateGroupName` 规则）——维护者为群管理、普通成员自动入群；`bugfix.report`（面板「🛡️ 报BUG」按钮）与 `session_share kind=bug` 会把 bug 报告投递到该群并通知维护者；`bugfix.list` 可查看开放/已修复的 bug 列表（复用看板 request 状态）；
+- **契约测试**：新增 H 段覆盖「自动路由排除维护者、group.post 指派维护者报错/跳过、session_ask 与 session_nudge 拒绝、用户显式 @ 例外、修bug群创建/复用与 bug 投递、成员列表角色标记」，并与 G 段的 idle/busy 用例叠加回归。
 
 ---
 

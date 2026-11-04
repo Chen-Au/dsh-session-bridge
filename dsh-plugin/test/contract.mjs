@@ -350,6 +350,8 @@ await check('session_board status 报告版本与注册结果', async () => {
   assert.match(result, /session-bridge v2\.9\.1/)
   assert.match(result, /工具：session_share, session_ask, session_nudge, group_rule, session_like, session_discuss, session_identity, group_member, session_directory, group_skill, session_profile, session_board/)
   assert.match(result, /通讯录：3 个主会话/)
+  assert.match(result, /空闲看板：idle \d+ 个 · busy \d+ 个/)
+  assert.match(result, /权限分级：维护者=未注册/)
   assert.match(result, /contactId=aaaa0001/)
   assert.match(result, /看板 API=是/)
   assert.ok(!/失败=(session_share|session_board)/.test(result), '不应有注册失败的工具')
@@ -446,6 +448,8 @@ await check('注册了看板 HTTP 路由与独立浮窗页', async () => {
   await routeHandler('/session-bridge/app')({ method: 'GET' }, appRes)
   assert.equal(appRes.code, 200)
   assert.match(appRes.body, /NEBULA/)
+  assert.match(appRes.body, /空闲看板/)
+  assert.match(appRes.body, /idleBoard/)
 })
 
 await check('GET state 返回规则/群组/会话/送达结构', async () => {
@@ -865,6 +869,48 @@ await check('群任务：只唤醒组长；组长派活时成员才被唤醒一�
   )
   assert.match(autoProbeAsk, /发出探测/)
   assert.ok(!String(captured.followups[0].message.content[0].text).includes('replyTo='))
+})
+
+await check('空闲看板：open request → busy，回答后回 idle（v2.9.0）', async () => {
+  const stateNow = await callState()
+  const rootRow = stateNow.json.sessions.find((session) => session.id === rootAgent.id)
+  const otherRow = stateNow.json.sessions.find((session) => session.id === otherAgent.id)
+  assert.ok(rootRow, 'state.sessions 应有 rootAgent')
+  assert.equal(typeof rootRow.availability, 'string', 'state.sessions 应带 availability 字段')
+  assert.equal(rootRow.availability, 'busy', '还有未回答的群管理 request，rootAgent 应为 busy')
+  assert.ok(rootRow.openRequestCount >= 1, 'busy 时应记录 openRequestCount')
+  assert.ok(rootRow.currentTask && rootRow.currentTask.title, 'busy 时应记录 currentTask')
+  assert.equal(otherRow.availability, 'busy', 'otherAgent 也有未回答请求')
+  // 回答（answer）所有发给 rootAgent 的 open request → 应该回到 idle。
+  const openRequests = stateNow.json.rules.filter(
+    (item) =>
+      item.kind === 'request' &&
+      item.status !== 'answered' &&
+      !item.answeredBy &&
+      Array.isArray(item.requestTo) &&
+      item.requestTo.includes(rootAgent.id)
+  )
+  assert.ok(openRequests.length >= 1, '应能找到发给 rootAgent 的 open request')
+  for (const request of openRequests) {
+    const replied = String(
+      await share.execute(
+        {
+          title: '收尾：' + request.title,
+          text: '已按请求处理完毕，本会话回到空闲',
+          kind: 'handoff',
+          group: '论文组',
+          replyTo: request.id
+        },
+        { agent: rootAgent }
+      )
+    )
+    assert.match(replied, /已回复请求/)
+  }
+  const afterState = await callState()
+  const rootAfter = afterState.json.sessions.find((session) => session.id === rootAgent.id)
+  assert.equal(rootAfter.availability, 'idle', 'answer 后应回到 idle')
+  assert.equal(rootAfter.openRequestCount, 0)
+  assert.ok(rootAfter.lastSubmittedAt > 0, '应记录 lastSubmittedAt')
 })
 
 await check('积分与社交：任务积分、点赞、群讨论', async () => {
@@ -1654,11 +1700,318 @@ await check('群任务派活消息带成员通讯录（避免组长再猜短 id�
   assert.match(message, /session_ask 的 to=contactId/)
 })
 
-// ---------------------------------------------------------------- G. 权限分级与修bug群（v2.9.1）
+
+// ---------------------------------------------------------------- G. 群名生成 + 空闲看板与路由避忙（v2.9.0）
+console.log('== G. 群名生成/重命名 + 空闲看板 + 世界路由避忙（v2.9.0）')
+const groupDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-bridge-idle-'))
+const G_ROOT = 'session-9a9a0000'
+const G_DEV = 'session-9b9b1111-1111-4111-8111-111111111111'
+const G_IDLE = 'session-9c9c2222-2222-4222-8222-222222222222'
+const groupCaptured = { tools: [], routes: [], followups: [] }
+const groupAgent = (id, cwd) => ({
+  id,
+  status: 'idle',
+  session: { id, header: { cwd, createdAt: 1 } },
+  followup(message) {
+    groupCaptured.followups.push({ sessionId: this.id, message })
+  }
+})
+const gRoot = groupAgent(G_ROOT, 'X:\\shoot_game')
+const gDev = groupAgent(G_DEV, 'X:\\shoot_game')
+const gIdle = groupAgent(G_IDLE, CWD)
+const groupAgents = [gRoot, gDev, gIdle]
+const groupTitles = { [G_ROOT]: '调度中心', [G_DEV]: 'shoot_game 开发', [G_IDLE]: '报告与审阅' }
+const fakeSessionQueryG = {
+  async listSessions() {
+    return groupAgents.map((agent) => ({ header: agent.session.header, live: true, persisted: true, formatStatus: 'current' }))
+  },
+  async readTitleSnapshots(ids) {
+    return ids.map((id) => ({
+      sessionId: id,
+      status: 'fulfilled',
+      value: { session: { id }, ...(groupTitles[id] ? { title: { title: groupTitles[id] } } : {}) }
+    }))
+  }
+}
+fs.mkdirSync(path.join(groupDir, 'profiles'), { recursive: true })
+fs.writeFileSync(
+  path.join(groupDir, 'identities.json'),
+  JSON.stringify(
+    {
+      sessions: {
+        [G_ROOT]: { sessionId: G_ROOT, handle: '调度', avatar: '🛰️' },
+        [G_DEV]: { sessionId: G_DEV, handle: '小工', avatar: '🦊' },
+        [G_IDLE]: { sessionId: G_IDLE, handle: '小闲', avatar: '🐼' }
+      }
+    },
+    null,
+    2
+  ),
+  'utf8'
+)
+fs.writeFileSync(
+  path.join(groupDir, 'profiles', G_DEV + '.json'),
+  JSON.stringify({ sessionId: G_DEV, summary: '性能优化 招募协作 开发 压测', direction: 'shoot_game/性能', assets: ['x.js'], needs: '', declined: false }, null, 2),
+  'utf8'
+)
+fs.writeFileSync(
+  path.join(groupDir, 'profiles', G_IDLE + '.json'),
+  JSON.stringify({ sessionId: G_IDLE, summary: '性能优化 审阅 写作 报告', direction: '论文/审阅', assets: ['report.md'], needs: '', declined: false }, null, 2),
+  'utf8'
+)
+fs.writeFileSync(
+  path.join(groupDir, 'reputation.json'),
+  JSON.stringify(
+    {
+      sessions: {
+        [G_DEV]: { sessionId: G_DEV, points: 50, successes: 3, failures: 0, closed: false, lastAt: 0 },
+        [G_IDLE]: { sessionId: G_IDLE, points: 0, successes: 0, failures: 0, closed: false, lastAt: 0 },
+        [G_ROOT]: { sessionId: G_ROOT, points: 10, successes: 1, failures: 0, closed: false, lastAt: 0 }
+      },
+      likes: {}
+    },
+    null,
+    2
+  ),
+  'utf8'
+)
+fs.writeFileSync(
+  path.join(groupDir, 'permissions.json'),
+  JSON.stringify({ grants: { [G_ROOT]: [G_DEV, G_IDLE] } }, null, 2),
+  'utf8'
+)
+const UGLY_GROUP_NAME = '协作：现在招募几位成员去给shootgame做三'
+fs.writeFileSync(
+  path.join(groupDir, 'groups.json'),
+  JSON.stringify(
+    {
+      version: 1,
+      groups: [
+        {
+          id: 'g-ugly',
+          name: UGLY_GROUP_NAME,
+          workspace: 'X:\\shoot_game',
+          goal: '现在招募几位成员去给shootgame做三',
+          managerSessionId: G_ROOT,
+          sessionIds: [G_ROOT, G_DEV, G_IDLE],
+          createdAt: 0,
+          updatedAt: 0
+        }
+      ]
+    },
+    null,
+    2
+  ),
+  'utf8'
+)
+const fakeWebServerG = {
+  register(route) {
+    groupCaptured.routes.push(route)
+    return () => {}
+  }
+}
+const ctxG = {
+  tools: {
+    register(definition) {
+      groupCaptured.tools.push(definition)
+      return () => {}
+    }
+  },
+  systemPrompt: { section: () => () => {}, context: () => () => {} },
+  agents: {
+    roots: () => groupAgents,
+    list: () => groupAgents,
+    get: (id) => groupAgents.find((agent) => agent.id === id)
+  },
+  sessions: { list: () => groupAgents.map((agent) => agent.session) },
+  get(name) {
+    if (name === 'sessionQuery') return fakeSessionQueryG
+    if (name === 'webServer') return fakeWebServerG
+    return undefined
+  },
+  effect(callback) {
+    const disposer = callback()
+    return typeof disposer === 'function' ? disposer : () => {}
+  },
+  on() {
+    return () => {}
+  },
+  logger: { info() {}, warn() {}, error() {} }
+}
+plugin.apply(ctxG, { boardDir: groupDir, injectMode: 'broadcast', autoPrompt: false })
+const toolByNameG = new Map(groupCaptured.tools.map((tool) => [tool.name, tool]))
+const routeHandlerG = (path) => groupCaptured.routes.find((route) => route.path === path)?.handler
+const callStateG = async () => {
+  const res = fakeRes()
+  await routeHandlerG('/api/session-bridge/state')(fakeReq(), res)
+  return { res, json: JSON.parse(res.out.body) }
+}
+const callCommandG = async (command) => {
+  const res = fakeRes()
+  await routeHandlerG('/api/session-bridge/command')(
+    fakeReq({
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-session-bridge-action': '1' },
+      body: JSON.stringify(command)
+    }),
+    res
+  )
+  return { res, json: JSON.parse(res.out.body) }
+}
+
+await check('空闲看板：open request → busy；answer 后回 idle（v2.9.0）', async () => {
+  let state = await callStateG()
+  let devRow = state.json.sessions.find((session) => session.id === G_DEV)
+  let idleRow = state.json.sessions.find((session) => session.id === G_IDLE)
+  assert.ok(devRow && idleRow)
+  assert.equal(devRow.availability, 'idle')
+  assert.equal(devRow.openRequestCount, 0)
+  assert.equal(idleRow.availability, 'idle')
+  assert.equal(devRow.currentTask, null)
+  // 发给 dev 的 open request → busy
+  groupCaptured.followups.length = 0
+  const asked = String(
+    await toolByNameG.get('session_ask').execute({ group: 'g-ugly', text: '你现在进度如何？', to: '9b9b11' }, { agent: gRoot })
+  )
+  assert.match(asked, /已向群组/)
+  state = await callStateG()
+  devRow = state.json.sessions.find((session) => session.id === G_DEV)
+  assert.equal(devRow.availability, 'busy', '有未回答 request 的会话应为 busy')
+  assert.ok(devRow.currentTask && devRow.currentTask.title, 'busy 时应记录 currentTask')
+  assert.ok(devRow.openRequestCount >= 1)
+  const openRequest = state.json.rules.find(
+    (item) => item.kind === 'request' && Array.isArray(item.requestTo) && item.requestTo.includes(G_DEV) && item.status !== 'answered'
+  )
+  assert.ok(openRequest, '应有一条发给 dev 的 open request')
+  // answer → idle
+  const replied = String(
+    await toolByNameG.get('session_share').execute(
+      { title: '进度回复', text: '已完成一半，稍后交付', kind: 'handoff', group: 'g-ugly', replyTo: openRequest.id },
+      { agent: gDev }
+    )
+  )
+  assert.match(replied, /已回复请求/)
+  state = await callStateG()
+  devRow = state.json.sessions.find((session) => session.id === G_DEV)
+  assert.equal(devRow.availability, 'idle', 'answer 后应回到 idle')
+  assert.equal(devRow.openRequestCount, 0)
+  assert.ok(devRow.lastSubmittedAt > 0, '应记录 lastSubmittedAt')
+})
+
+await check('群名生成与重命名：丑样例自动改名 + 手动改名 + 群管理标题可读', async () => {
+  const renamed = await callCommandG({ action: 'group.rename', payload: { id: 'g-ugly', auto: true } })
+  assert.equal(renamed.json.ok, true, JSON.stringify(renamed.json))
+  const groupRow = renamed.json.state.groups.find((group) => group.id === 'g-ugly')
+  assert.ok(groupRow, '应能找到群组')
+  assert.equal(renamed.json.previousName, UGLY_GROUP_NAME, '应返回旧群名')
+  assert.match(groupRow.name, /shoot_game/, '自动群名应包含项目名 shoot_game：' + groupRow.name)
+  assert.match(groupRow.name, /招募/, '自动群名应包含动作类型：' + groupRow.name)
+  assert.ok(!groupRow.name.includes('协作：'), '不应再有「协作：+半句」：' + groupRow.name)
+  assert.ok(groupRow.name.length <= 24, '群名不应过长：' + groupRow.name)
+  // 群管理标题随群名派生，保持可读
+  const managerRow = renamed.json.state.sessions.find((session) => session.id === G_ROOT)
+  assert.equal(managerRow.title, '群管理：' + groupRow.name)
+  // 手动改名
+  const manual = await callCommandG({ action: 'group.rename', payload: { id: 'g-ugly', name: '性能联调组' } })
+  assert.equal(manual.json.ok, true, JSON.stringify(manual.json))
+  assert.equal(manual.json.state.groups.find((group) => group.id === 'g-ugly').name, '性能联调组')
+  const empty = await callCommandG({ action: 'group.rename', payload: { id: 'g-ugly', name: '' } })
+  assert.equal(empty.json.ok, false, '空群名应被拒绝')
+})
+
+await check('自动建群使用可读群名（不再「协作：+半句任务」）', async () => {
+  groupCaptured.followups.length = 0
+  const res = await callCommandG({
+    action: 'world.post',
+    payload: { text: '@9b9b11 现在招募几位成员去给shootgame做三，大家一起协作' }
+  })
+  assert.equal(res.json.ok, true, JSON.stringify(res.json))
+  assert.ok(res.json.createdGroup && res.json.createdGroup.name, '世界任务应自动建群')
+  assert.match(res.json.createdGroup.name, /shoot_game/, '自动群名应包含项目名：' + res.json.createdGroup.name)
+  assert.match(res.json.createdGroup.name, /招募/, '自动群名应含动作类型：' + res.json.createdGroup.name)
+  assert.ok(!res.json.createdGroup.name.includes('协作：'), '不应使用旧的半句群名：' + res.json.createdGroup.name)
+  // 自动群任务的 coordinator 是 dev → dev 进入 busy
+  const state = await callStateG()
+  assert.equal(state.json.sessions.find((session) => session.id === G_DEV).availability, 'busy', '自动群任务组长应为 busy')
+})
+
+await check('group.post：默认优先空闲成员当组长；显式指定忙碌会提示', async () => {
+  const before = await callStateG()
+  assert.equal(before.json.sessions.find((session) => session.id === G_DEV).availability, 'busy')
+  assert.equal(before.json.sessions.find((session) => session.id === G_IDLE).availability, 'idle')
+  groupCaptured.followups.length = 0
+  const res = await callCommandG({
+    action: 'group.post',
+    payload: { id: 'g-ugly', text: '性能优化 审阅 协作 报告整理', mentionSessionIds: [G_DEV, G_IDLE] }
+  })
+  assert.equal(res.json.ok, true, JSON.stringify(res.json))
+  assert.ok(res.json.task, '多人任务应返回 task')
+  assert.equal(res.json.task.coordinator.id, G_IDLE, '默认应优先选空闲成员当组长')
+  assert.equal(res.json.coordinatorBusy, false)
+  // 显式指定忙碌的 dev：尊重选择 + 提示可能排队
+  groupCaptured.followups.length = 0
+  const busyRes = await callCommandG({
+    action: 'group.post',
+    payload: { id: 'g-ugly', text: '性能优化 二次审阅', mentionSessionIds: [G_DEV, G_IDLE], coordinatorId: G_DEV }
+  })
+  assert.equal(busyRes.json.ok, true, JSON.stringify(busyRes.json))
+  assert.equal(busyRes.json.task.coordinator.id, G_DEV, '显式指定的组长应生效（即使忙）')
+  assert.equal(busyRes.json.coordinatorBusy, true, '应报告组长当前忙')
+  const devMessage = groupCaptured.followups.find((item) => item.sessionId === G_DEV)
+  assert.ok(devMessage, '应唤醒显式指定的组长')
+  assert.match(String(devMessage.message.content[0].text), /busy|排队/)
+})
+
+await check('世界路由避忙：非显式匹配只派 idle；全忙走新建复核；显式 @ 尊重用户', async () => {
+  // dev busy（自动群任务组长）+ idle 空闲（上一步被选为组长会变 busy？group.post 任务只唤醒组长，coordinator 也 busy）
+  let state = await callStateG()
+  const idleNow = state.json.sessions.find((session) => session.id === G_IDLE)
+  assert.equal(idleNow.availability, 'busy', '上一步被指派为组长的成员应为 busy')
+  // 让 dev 也 busy 之前先确认：两个候选都 busy 时，非显式匹配应改新建（复核）
+  groupCaptured.followups.length = 0
+  const busyText = '性能优化 审阅 协作 报告整理 第三轮'
+  const pending = await callCommandG({ action: 'world.post', payload: { text: busyText } })
+  assert.equal(pending.json.ok, true, JSON.stringify(pending.json))
+  assert.equal(pending.json.pendingApproval, true, '全忙时应走新建会话（进入复核）')
+  assert.equal(groupCaptured.followups.length, 0, '全忙改新建时不应唤醒忙碌成员')
+  // 显式 @ 忙碌成员：尊重用户选择
+  groupCaptured.followups.length = 0
+  const explicit = await callCommandG({ action: 'world.post', payload: { text: '@9b9b11 性能压测 开发 检查' } })
+  assert.equal(explicit.json.ok, true, JSON.stringify(explicit.json))
+  assert.equal(explicit.json.router.engine, 'mentions')
+  assert.ok(explicit.json.assigned.some((item) => item.id === G_DEV), '显式 @ 应派给忙碌的指定成员')
+  assert.ok(groupCaptured.followups.some((item) => item.sessionId === G_DEV), '显式 @ 应唤醒该成员')
+})
+
+await check('世界路由：有 idle 匹配时跳过忙碌成员（改派空闲）', async () => {
+  // 重置：让 dev busy、idle 空闲（回答 idle 的 open request；coordinator 请求被 answer 后任务也会完成）
+  let state = await callStateG()
+  const idleOpen = state.json.rules.filter(
+    (item) => item.kind === 'request' && Array.isArray(item.requestTo) && item.requestTo.includes(G_IDLE) && item.status !== 'answered'
+  )
+  for (const request of idleOpen) {
+    await toolByNameG.get('session_share').execute(
+      { title: '空闲成员收尾', text: '已处理完毕', kind: 'handoff', group: request.groupId || 'g-ugly', replyTo: request.id },
+      { agent: gIdle }
+    )
+  }
+  state = await callStateG()
+  assert.equal(state.json.sessions.find((session) => session.id === G_IDLE).availability, 'idle', 'idle 成员应回到空闲')
+  assert.equal(state.json.sessions.find((session) => session.id === G_DEV).availability, 'busy', 'dev 仍应忙碌')
+  // 非显式匹配：dev 分数/积分更高会先命中，但它是 busy → 应改派空闲的 idle
+  groupCaptured.followups.length = 0
+  const rerouted = await callCommandG({ action: 'world.post', payload: { text: '性能优化 审阅 协作 报告整理 第四轮' } })
+  assert.equal(rerouted.json.ok, true, JSON.stringify(rerouted.json))
+  assert.ok(Array.isArray(rerouted.json.assigned) && rerouted.json.assigned.length >= 1, '应派给空闲成员')
+  assert.ok(rerouted.json.assigned.every((item) => item.id !== G_DEV), '忙碌的 dev 不应被派活')
+  assert.ok(rerouted.json.assigned.some((item) => item.id === G_IDLE), '应改派给空闲成员')
+})
+
+// ---------------------------------------------------------------- H. 权限分级与修bug群（v2.9.1）
 // 用户反馈：群组长把普通实现任务派给维护者「星桥值班员」，维护者被普通任务占用、修 bug 被阻塞。
 // 期望：maintainer 默认 protected/service；普通世界路由 / group.post / session_ask / session_nudge
 // 都不派普通任务；用户显式 @ 是例外且要给提示；维护者可一键创建/复用「星桥 · 修bug」群收 bug 报告。
-console.log('== G. 权限分级与修bug群（v2.9.1）')
+console.log('== H. 权限分级与修bug群（v2.9.1）')
 const permDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-bridge-perms-'))
 const MAINTAINER = 'session-9a9a9a9a-0000-4000-8000-cccccccccccc'
 const NORMAL_A = 'session-1a1a1a1a-0000-4000-8000-aaaaaaaaaaaa'
@@ -2032,12 +2385,15 @@ await check('维护者保留群观察位，成员列表显示保护角色', asyn
   const listText = String(await memberTool.execute({ action: 'list', group: '论文组' }, { agent: normalAgentA }))
   assert.match(listText, /角色=维护者（保护\/服务，仅观察，不接普通任务）/)
   assert.match(listText, /角色=群管理/)
-  assert.match(listText, /角色=成员/)
+  // 普通成员显示「成员」；若它刚好是未完成任务的组长则显示「组长（临时）」，两种都算普通角色展示。
+  assert.match(listText, /角色=(成员|组长（临时）)/)
 })
 
+// ---------------------------------------------------------------- 收尾
 fs.rmSync(targetedDir, { recursive: true, force: true })
 fs.rmSync(contactDir, { recursive: true, force: true })
 fs.rmSync(permDir, { recursive: true, force: true })
+fs.rmSync(groupDir, { recursive: true, force: true })
 fs.rmSync(boardDir, { recursive: true, force: true })
 console.log('')
 if (failures.length) {
