@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.9.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.9.2-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 **English** | [简体中文](README.md)
@@ -110,6 +110,17 @@ The plugin does not take over the right sidebar. Click **"星桥"** at the botto
 - **Explicit user @ exception**: when the user explicitly @-mentions the maintainer in a world task or group message, the request is honoured as an exception with a visible notice — and the maintainer is never made coordinator/member of an auto-created group.
 - **Bug-fix group**: `bugfix.ensure` (also the "🛡️ 建修bug群" panel button and `session_board action=bugfix`) creates or reuses the "星桥 · 修bug" group in one click (naming reuses the v2.9.0 `generateGroupName` rules) — the maintainer is the group manager and ordinary sessions join automatically. `bugfix.report` (the "🛡️ 报BUG" button) and `session_share kind=bug` deliver bug reports into that group and notify the maintainer; `bugfix.list` shows open/fixed reports (reusing board request status).
 - **Contract tests**: a new H section covers automatic-routing exclusion, `group.post` refusing/skipping the maintainer, `session_ask`/`session_nudge` refusals, the explicit-@ exception, bug-fix group create/reuse plus bug delivery, and member-list role tags; it runs together with the G section's idle/busy regression.
+
+### 11. Direct retract and interrupt (v2.9.2)
+
+- **One-click retract for messages and tasks**: group/world messages show a "撤回" (retract) button on hover; task cards and pending-review cards also have one. No second confirmation is required — a toast reports the result and the panel refreshes.
+- Retraction works by board entry id (command `entry.retract`, alias `message.retract`): it appends a `remove` event and drops the matching delivery records.
+- **Associated cleanup when retracting tasks/requests**: unfinished related requests are marked `canceled`, the task gets `taskStatus=canceled`, pending approvals tied to it are marked `canceled` and their hidden cards are removed. A late "task complete" reply to a retracted task **no longer settles points**, so completion rewards are not paid out by mistake.
+- **Retract permission matrix**: panel user / maintainer — everything; group manager — only entries of their own group; author — only their own unprocessed entries (at least group chat); ordinary members cannot retract other people's tasks.
+- **One-click interrupt for a running session**: member cards and group member rows show a "⏹ 打断" button for running sessions. The command is `agent.interrupt` (accepts sessionId / contactId / short id / title). It aborts only the current turn — the session is not deleted, history is kept, and queued input is preserved.
+- **Runtime capability probing**: the plugin probes the host agent for `cancel` / `interrupt` / `abort` / `stop` (current DSH exposes `agent.cancel({kind:'user'}, {keepInbox:true})`). When the host provides none of them, the plugin returns an explicit "host does not support direct interrupt" error with alternatives (`session_nudge`, wait for the turn to finish, or the host's own stop button) and **never fakes success**.
+- **Interrupt permission matrix**: panel user / maintainer — everything; group manager — only running members of their own group; ordinary members — only themselves; a maintainer session cannot be interrupted by a group manager.
+- New model tools `session_retract` / `session_interrupt`; panel buttons go through the local HTTP commands (`entry.retract` / `agent.interrupt`). `state.capabilities.interrupt` reports the detected host capability to the UI.
 
 ## Install
 

@@ -196,11 +196,11 @@ function assertJsonSchema(node, where) {
 }
 
 await check('恰好注册 session_share / session_board / session_ask', () => {
-  assert.deepEqual([...toolByName.keys()].sort(), ['group_member', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_like', 'session_nudge', 'session_profile', 'session_share'])
+  assert.deepEqual([...toolByName.keys()].sort(), ['group_member', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_interrupt', 'session_like', 'session_nudge', 'session_profile', 'session_retract', 'session_share'])
   assert.equal(captured.harnessLogs.filter(([level]) => level === 'error').length, 0, '注册阶段不应有 error 级日志')
 })
 
-for (const name of ['session_share', 'session_board', 'session_ask', 'session_profile', 'session_nudge', 'group_rule', 'session_like', 'session_discuss', 'session_identity', 'group_skill', 'group_member']) {
+for (const name of ['session_share', 'session_board', 'session_ask', 'session_profile', 'session_nudge', 'group_rule', 'session_like', 'session_discuss', 'session_identity', 'group_skill', 'group_member', 'session_retract', 'session_interrupt']) {
   check(`${name}.parameters 是对象根 JSON Schema`, () => {
     const tool = toolByName.get(name)
     assert.ok(tool, `缺少工具 ${name}`)
@@ -347,8 +347,8 @@ await check('查重生效（相同内容不重复发布）', async () => {
 
 await check('session_board status 报告版本与注册结果', async () => {
   const result = String(await board.execute({ action: 'status' }, { agent: rootAgent }))
-  assert.match(result, /session-bridge v2\.9\.1/)
-  assert.match(result, /工具：session_share, session_ask, session_nudge, group_rule, session_like, session_discuss, session_identity, group_member, session_directory, group_skill, session_profile, session_board/)
+  assert.match(result, /session-bridge v2\.9\.2/)
+  assert.match(result, /工具：session_share, session_ask, session_nudge, session_retract, session_interrupt, group_rule, session_like, session_discuss, session_identity, group_member, session_directory, group_skill, session_profile, session_board/)
   assert.match(result, /通讯录：3 个主会话/)
   assert.match(result, /空闲看板：idle \d+ 个 · busy \d+ 个/)
   assert.match(result, /权限分级：维护者=未注册/)
@@ -359,7 +359,7 @@ await check('session_board status 报告版本与注册结果', async () => {
 
 await check('子会话可只读查看经验板（list / status）', async () => {
   const status = String(await board.execute({ action: 'status' }, { agent: subAgent }))
-  assert.match(status, /session-bridge v2\.9\.1/)
+  assert.match(status, /session-bridge v2\.9\.2/)
   const listed = String(await board.execute({ action: 'list' }, { agent: subAgent }))
   assert.match(listed, /跨会话经验板/)
 })
@@ -456,7 +456,7 @@ await check('GET state 返回规则/群组/会话/送达结构', async () => {
   const { res, json } = await callState()
   assert.equal(res.out.status, 200)
   assert.equal(json.ok, true)
-  assert.equal(json.version, '2.9.1')
+  assert.equal(json.version, '2.9.2')
   assert.ok(Array.isArray(json.rules) && json.rules.length >= 1)
   assert.ok(Array.isArray(json.groups))
   assert.ok(Array.isArray(json.sessions) && json.sessions.length >= 2)
@@ -1107,8 +1107,8 @@ await check('面板命令：删除规矩与群组', async () => {
 
 await check('插件启动凭证写入正确（工具/注册/版本/API）', () => {
   const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))
-  assert.equal(receipt.version, '2.9.1')
-  assert.deepEqual(receipt.tools.slice().sort(), ['group_member', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_like', 'session_nudge', 'session_profile', 'session_share'])
+  assert.equal(receipt.version, '2.9.2')
+  assert.deepEqual(receipt.tools.slice().sort(), ['group_member', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_interrupt', 'session_like', 'session_nudge', 'session_profile', 'session_retract', 'session_share'])
   assert.deepEqual(receipt.failedTools, [])
   assert.equal(receipt.registration.section, true)
   assert.equal(receipt.registration.context, true)
@@ -2389,11 +2389,412 @@ await check('维护者保留群观察位，成员列表显示保护角色', asyn
   assert.match(listText, /角色=(成员|组长（临时）)/)
 })
 
+// ---------------------------------------------------------------- I. 撤回 / 打断（v2.9.2）
+// 用户诉求：一键撤回消息/任务、一键打断运行会话；权限矩阵正确、宿主不支持时明确降级（不假装成功）。
+console.log('== I. 撤回与打断（v2.9.2）')
+const retractDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-bridge-retract-'))
+const R_A = 'session-1111aaaa' // 普通成员 / 他群群管理
+const R_B = 'session-2222bbbb' // 本群群管理
+const R_C = 'session-3333cccc' // 维护者
+const R_RUN = 'session-4444dddd' // 运行中，宿主提供 cancel
+const R_NOCAP = 'session-5555eeee' // 运行中，宿主没有打断能力（模拟旧版 DSH）
+const retractCaptured = { tools: [], sections: [], contexts: [], listeners: [], routes: [], followups: [], interrupts: [] }
+const makeRetractAgent = (id, status) => ({
+  id,
+  status,
+  session: { id, header: { cwd: CWD, createdAt: 1 } },
+  followup(message) {
+    retractCaptured.followups.push({ sessionId: this.id, message })
+  },
+  cancel(cause, options) {
+    retractCaptured.interrupts.push({ sessionId: this.id, cause, options })
+    this.status = 'idle'
+  }
+})
+const retractA = makeRetractAgent(R_A, 'idle')
+const retractB = makeRetractAgent(R_B, 'idle')
+const retractC = makeRetractAgent(R_C, 'idle')
+const retractRun = makeRetractAgent(R_RUN, 'running')
+// 旧版宿主：Agent 只有 followup，没有 cancel/interrupt/abort/stop —— 必须明确降级。
+const retractNoCap = {
+  id: R_NOCAP,
+  status: 'running',
+  session: { id: R_NOCAP, header: { cwd: CWD, createdAt: 1 } },
+  followup(message) {
+    retractCaptured.followups.push({ sessionId: this.id, message })
+  }
+}
+const retractAgents = [retractA, retractB, retractC, retractRun, retractNoCap]
+const retractTitles = {
+  [R_A]: '甲（普通成员）',
+  [R_B]: '乙（群管理）',
+  [R_C]: '丙（维护者）',
+  [R_RUN]: '丁（运行中）',
+  [R_NOCAP]: '戊（旧宿主）'
+}
+const fakeSessionQuery4 = {
+  async listSessions() {
+    return retractAgents.map((agent) => ({ header: agent.session.header, live: true, persisted: true, formatStatus: 'current' }))
+  },
+  async readTitleSnapshots(ids) {
+    return ids.map((id) => ({
+      sessionId: id,
+      status: 'fulfilled',
+      value: { session: { id }, ...(retractTitles[id] ? { title: { title: retractTitles[id] } } : {}) }
+    }))
+  }
+}
+fs.writeFileSync(
+  path.join(retractDir, 'identities.json'),
+  JSON.stringify(
+    {
+      sessions: {
+        [R_A]: { sessionId: R_A, handle: '甲', avatar: '🦊' },
+        [R_B]: { sessionId: R_B, handle: '乙', avatar: '🐼' },
+        [R_C]: { sessionId: R_C, handle: '丙', avatar: '🛰️' },
+        [R_RUN]: { sessionId: R_RUN, handle: '丁', avatar: '🐯' },
+        [R_NOCAP]: { sessionId: R_NOCAP, handle: '戊', avatar: '🐸' }
+      }
+    },
+    null,
+    2
+  ),
+  'utf8'
+)
+fs.writeFileSync(path.join(retractDir, 'maintainer.json'), JSON.stringify({ sessionId: R_C, updatedAt: 1 }, null, 2), 'utf8')
+const fakeWebServer4 = {
+  register(route) {
+    retractCaptured.routes.push(route)
+    return () => {}
+  }
+}
+const ctx4 = {
+  tools: {
+    register(definition) {
+      retractCaptured.tools.push(definition)
+      return () => {}
+    }
+  },
+  systemPrompt: {
+    section(options) {
+      retractCaptured.sections.push(options)
+      return () => {}
+    },
+    context(options) {
+      retractCaptured.contexts.push(options)
+      return () => {}
+    }
+  },
+  agents: {
+    roots: () => retractAgents,
+    list: () => retractAgents,
+    get: (id) => retractAgents.find((agent) => agent.id === id)
+  },
+  sessions: { list: () => retractAgents.map((agent) => agent.session) },
+  get(name) {
+    if (name === 'sessionQuery') return fakeSessionQuery4
+    if (name === 'webServer') return fakeWebServer4
+    return undefined
+  },
+  effect(callback) {
+    const disposer = callback()
+    return typeof disposer === 'function' ? disposer : () => {}
+  },
+  on() {
+    return () => {}
+  },
+  logger: { info() {}, warn() {}, error() {} }
+}
+plugin.apply(ctx4, { boardDir: retractDir, injectMode: 'targeted', autoPrompt: false })
+const toolByName4 = new Map(retractCaptured.tools.map((tool) => [tool.name, tool]))
+const routeHandler4 = (path) => retractCaptured.routes.find((route) => route.path === path)?.handler
+const callState4 = async () => {
+  const res = fakeRes()
+  await routeHandler4('/api/session-bridge/state')(fakeReq(), res)
+  return { res, json: JSON.parse(res.out.body) }
+}
+const callCommand4 = async (command) => {
+  const res = fakeRes()
+  await routeHandler4('/api/session-bridge/command')(
+    fakeReq({
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-session-bridge-action': '1' },
+      body: JSON.stringify(command)
+    }),
+    res
+  )
+  return { res, json: JSON.parse(res.out.body) }
+}
+let retractGroupId = ''
+let otherGroupId = ''
+
+await check('v2.9.2：state 暴露撤回/打断能力（探测到宿主 cancel）', async () => {
+  const { json } = await callState4()
+  assert.equal(json.version, '2.9.2')
+  assert.equal(json.capabilities.retract, true)
+  assert.equal(json.capabilities.interrupt, 'cancel', '应探测到宿主的 agent.cancel 能力')
+  assert.ok(toolByName4.get('session_retract'), '缺少 session_retract 工具')
+  assert.ok(toolByName4.get('session_interrupt'), '缺少 session_interrupt 工具')
+})
+
+await check('UI 静态检查：NEBULA 浮窗与侧栏都有「撤回」「打断」入口', async () => {
+  const appHtml = fs.readFileSync(new URL('../app.html', import.meta.url), 'utf8')
+  assert.match(appHtml, /data-retract/, 'NEBULA 应有撤回按钮')
+  assert.match(appHtml, /data-interrupt/, 'NEBULA 群成员行应有打断按钮')
+  assert.match(appHtml, /function retractEntry/, 'NEBULA 应有撤回处理函数')
+  assert.match(appHtml, /function interruptSession/, 'NEBULA 应有打断处理函数')
+  assert.match(appHtml, /entry\.retract/)
+  assert.match(appHtml, /agent\.interrupt/)
+  const clientJs = fs.readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  assert.match(clientJs, /entry\.retract/, '侧栏应有撤回入口')
+  assert.match(clientJs, /agent\.interrupt/, '侧栏应有打断入口')
+  assert.match(clientJs, /'撤回'/)
+  assert.match(clientJs, /'打断'/)
+})
+
+await check('准备群组：本群群管理 B / 他群群管理 A / 维护者 C', async () => {
+  const created = await callCommand4({
+    action: 'group.create',
+    payload: { name: '撤回组', workspace: CWD, sessionIds: [R_A, R_B, R_C, R_RUN] }
+  })
+  assert.equal(created.json.ok, true, JSON.stringify(created.json))
+  retractGroupId = created.json.state.groups.find((group) => group.name === '撤回组').id
+  const manager = await callCommand4({ action: 'group.manager', payload: { id: retractGroupId, managerId: R_B } })
+  assert.equal(manager.json.ok, true, JSON.stringify(manager.json))
+  const other = await callCommand4({
+    action: 'group.create',
+    payload: { name: '他群', workspace: CWD, sessionIds: [R_A, R_C, R_NOCAP] }
+  })
+  assert.equal(other.json.ok, true, JSON.stringify(other.json))
+  otherGroupId = other.json.state.groups.find((group) => group.name === '他群').id
+  const otherManager = await callCommand4({ action: 'group.manager', payload: { id: otherGroupId, managerId: R_A } })
+  assert.equal(otherManager.json.ok, true, JSON.stringify(otherManager.json))
+  const state = await callState4()
+  assert.equal(state.json.groups.find((group) => group.id === retractGroupId).managerSessionId, R_B)
+  assert.equal(state.json.groups.find((group) => group.id === otherGroupId).managerSessionId, R_A)
+  assert.equal(state.json.maintainer.sessionId, R_C)
+})
+
+await check('撤回世界消息：append remove + 关联未完成请求标 canceled', async () => {
+  retractCaptured.followups.length = 0
+  const posted = await callCommand4({ action: 'world.post', payload: { text: '@2222bbbb 补一份性能报告' } })
+  assert.equal(posted.json.ok, true, JSON.stringify(posted.json))
+  const stateAfter = await callState4()
+  const worldMsg = stateAfter.json.world.find((entry) => String(entry.text).includes('补一份性能报告'))
+  assert.ok(worldMsg, '应生成世界消息')
+  const request = stateAfter.json.rules.find(
+    (entry) =>
+      entry.kind === 'request' &&
+      Array.isArray(entry.requestTo) &&
+      entry.requestTo.includes(R_B) &&
+      String(entry.text).includes('补一份性能报告')
+  )
+  assert.ok(request, '应生成给 B 的未完成请求')
+  const retracted = await callCommand4({ action: 'entry.retract', payload: { id: worldMsg.id, reason: '发错了' } })
+  assert.equal(retracted.json.ok, true, JSON.stringify(retracted.json))
+  assert.equal(retracted.json.kind, 'command')
+  assert.ok(retracted.json.canceledRequests.includes(request.id), '关联请求应被取消')
+  const after = await callState4()
+  assert.ok(!after.json.world.some((entry) => entry.id === worldMsg.id), '世界消息应消失')
+  const requestNow = after.json.rules.find((entry) => entry.id === request.id)
+  assert.ok(requestNow, '关联请求保留审计记录')
+  assert.equal(requestNow.status, 'canceled')
+  // message.retract 是 entry.retract 的等价别名
+  const alias = await callCommand4({ action: 'message.retract', payload: { id: 'no-such-entry-xyz' } })
+  assert.equal(alias.json.ok, false)
+  assert.match(String(alias.json.error), /找不到/)
+})
+
+await check('撤回群任务：taskStatus=canceled + 关联请求 canceled + 不误发完成奖励', async () => {
+  retractCaptured.followups.length = 0
+  const posted = await callCommand4({
+    action: 'group.post',
+    payload: {
+      id: retractGroupId,
+      text: '一起整理性能报告并给出结论',
+      mentionSessionIds: [R_A, R_RUN],
+      coordinatorId: R_A
+    }
+  })
+  assert.equal(posted.json.ok, true, JSON.stringify(posted.json))
+  const taskId = posted.json.task.id
+  const requestId = posted.json.requestIds[0]
+  assert.ok(taskId && requestId)
+  const before = await callState4()
+  assert.equal(before.json.rules.find((entry) => entry.id === taskId).taskStatus, 'assigned')
+  const retracted = await callCommand4({ action: 'entry.retract', payload: { id: taskId, reason: '任务发错了' } })
+  assert.equal(retracted.json.ok, true, JSON.stringify(retracted.json))
+  assert.ok(retracted.json.canceledRequests.includes(requestId), '应取消关联请求')
+  const after = await callState4()
+  assert.ok(!after.json.rules.some((entry) => entry.id === taskId), '任务应从看板移除')
+  const requestAfter = after.json.rules.find((entry) => entry.id === requestId)
+  assert.ok(requestAfter, '关联请求保留审计记录')
+  assert.equal(requestAfter.status, 'canceled')
+  // 组长迟到的「任务完成」回复：不得结算积分、不得标记任务完成
+  const pointsBefore = (after.json.reputation.find((item) => item.sessionId === R_A) || { points: 0 }).points
+  const shareTool4 = toolByName4.get('session_share')
+  const reply = String(
+    await shareTool4.execute(
+      { title: '任务完成', text: '【任务完成】报告已整理', kind: 'handoff', replyTo: requestId },
+      { agent: retractA }
+    )
+  )
+  assert.match(reply, /已撤回|不结算/, reply)
+  const finalState = await callState4()
+  const pointsAfter = (finalState.json.reputation.find((item) => item.sessionId === R_A) || { points: 0 }).points
+  assert.equal(pointsAfter, pointsBefore, '撤回后不得误发完成奖励')
+  assert.ok(!finalState.json.rules.some((entry) => entry.kind === 'task' && entry.id === taskId), '任务不应被回复重新标记完成')
+})
+
+await check('撤回待复核记录：approval 标 canceled + 隐藏卡片移除', async () => {
+  const text = 'zzzz-retract-approval-' + Date.now() + ' 独立新任务'
+  const posted = await callCommand4({ action: 'world.post', payload: { text } })
+  assert.equal(posted.json.ok, true, JSON.stringify(posted.json))
+  assert.equal(posted.json.pendingApproval, true, '自动建会话前应进入待复核')
+  const approvalId = posted.json.approval.id
+  const before = await callState4()
+  assert.ok(before.json.approvals.some((item) => item.id === approvalId))
+  assert.ok(before.json.rules.some((entry) => String(entry.title || '').startsWith('待复核')), '应有隐藏待复核卡片')
+  const retracted = await callCommand4({ action: 'entry.retract', payload: { id: approvalId } })
+  assert.equal(retracted.json.ok, true, JSON.stringify(retracted.json))
+  assert.equal(retracted.json.kind, 'approval')
+  const after = await callState4()
+  assert.ok(!after.json.approvals.some((item) => item.id === approvalId), '待复核记录应消失')
+  assert.ok(!after.json.rules.some((entry) => String(entry.title || '').startsWith('待复核')), '隐藏待复核卡片应移除')
+})
+
+await check('撤回权限矩阵：作者 / 群管理（本群） / 维护者 / 普通成员', async () => {
+  const shareTool4 = toolByName4.get('session_share')
+  const retractTool = toolByName4.get('session_retract')
+  // ① 作者撤回自己未处理的群聊
+  const shared = String(
+    await shareTool4.execute({ title: '甲的群聊', text: '这条是甲发的，准备撤回', kind: 'chat', group: '撤回组' }, { agent: retractA })
+  )
+  assert.match(shared, /群组「撤回组」/)
+  let state = await callState4()
+  const ownChat = state.json.rules.find((entry) => entry.title === '甲的群聊' && entry.author === R_A)
+  assert.ok(ownChat)
+  let out = String(await retractTool.execute({ id: ownChat.id }, { agent: retractA }))
+  assert.match(out, /已撤回/)
+  state = await callState4()
+  assert.ok(!state.json.rules.some((entry) => entry.id === ownChat.id), '作者应能撤回自己未处理的群聊')
+  // ② 普通成员不能撤回他人的任务
+  const posted = await callCommand4({
+    action: 'group.post',
+    payload: {
+      id: retractGroupId,
+      text: '普通成员不能撤回的群任务',
+      mentionSessionIds: [R_A, R_RUN],
+      coordinatorId: R_A
+    }
+  })
+  assert.equal(posted.json.ok, true, JSON.stringify(posted.json))
+  const taskId = posted.json.task.id
+  out = String(await retractTool.execute({ id: taskId }, { agent: retractA }))
+  assert.match(out, /没有权限撤回/)
+  // ③ 本群群管理可以撤回本群任务
+  out = String(await retractTool.execute({ id: taskId }, { agent: retractB }))
+  assert.match(out, /已撤回/)
+  // ④ 他群任务：本群群管理无权，维护者全量可以
+  const otherPosted = await callCommand4({
+    action: 'group.post',
+    payload: {
+      id: otherGroupId,
+      text: '他群任务（B 无权撤回）',
+      mentionSessionIds: [R_A, R_NOCAP],
+      coordinatorId: R_A
+    }
+  })
+  assert.equal(otherPosted.json.ok, true, JSON.stringify(otherPosted.json))
+  const otherTaskId = otherPosted.json.task.id
+  out = String(await retractTool.execute({ id: otherTaskId }, { agent: retractB }))
+  assert.match(out, /没有权限撤回/)
+  out = String(await retractTool.execute({ id: otherTaskId }, { agent: retractC }))
+  assert.match(out, /已撤回/)
+})
+
+await check('打断：panel 对 running 会话调用宿主 cancel(keepInbox) 成功', async () => {
+  retractCaptured.interrupts.length = 0
+  retractRun.status = 'running'
+  const res = await callCommand4({ action: 'agent.interrupt', payload: { sessionId: R_RUN, reason: '用户点了打断' } })
+  assert.equal(res.json.ok, true, JSON.stringify(res.json))
+  assert.equal(res.json.method, 'cancel')
+  assert.equal(res.json.verified, true)
+  assert.equal(retractCaptured.interrupts.length, 1)
+  assert.equal(retractCaptured.interrupts[0].sessionId, R_RUN)
+  assert.equal(retractCaptured.interrupts[0].options.keepInbox, true, '必须保留排队输入/历史')
+  assert.equal(retractCaptured.interrupts[0].cause.kind, 'user')
+})
+
+await check('打断：idle 会话明确返回 not-running', async () => {
+  const res = await callCommand4({ action: 'agent.interrupt', payload: { sessionId: R_A } })
+  assert.equal(res.json.ok, false)
+  assert.equal(res.json.code, 'not-running')
+})
+
+await check('打断：宿主没有 cancel/interrupt/abort/stop 时明确降级（不假装成功）', async () => {
+  retractNoCap.status = 'running'
+  const res = await callCommand4({ action: 'agent.interrupt', payload: { sessionId: R_NOCAP } })
+  assert.equal(res.json.ok, false)
+  assert.equal(res.json.code, 'unsupported')
+  assert.match(String(res.json.error), /宿主不支持直接打断/)
+  assert.ok(
+    Array.isArray(res.json.alternatives) && res.json.alternatives.some((item) => /session_nudge/.test(item)),
+    '应给出 session_nudge 等替代方案'
+  )
+})
+
+await check('打断：contactId 也能解析到目标会话', async () => {
+  retractCaptured.interrupts.length = 0
+  retractRun.status = 'running'
+  const res = await callCommand4({ action: 'agent.interrupt', payload: { sessionId: '4444dddd' } })
+  assert.equal(res.json.ok, true, JSON.stringify(res.json))
+  assert.equal(res.json.sessionId, R_RUN)
+  assert.equal(retractCaptured.interrupts.length, 1)
+})
+
+await check('打断权限：普通成员不能打断他人 / 群管理只能打断本群 / 维护者全量', async () => {
+  const tool = toolByName4.get('session_interrupt')
+  // ① 普通成员 A 打断本群运行中的 RUN → 拒绝
+  retractRun.status = 'running'
+  retractCaptured.interrupts.length = 0
+  let out = String(await tool.execute({ sessionId: R_RUN }, { agent: retractA }))
+  assert.match(out, /没有打断权限/)
+  assert.equal(retractCaptured.interrupts.length, 0, '无权限时不得调用宿主打断')
+  // ② 本群群管理 B 打断本群 RUN → 成功
+  out = String(await tool.execute({ sessionId: R_RUN }, { agent: retractB }))
+  assert.match(out, /已打断/)
+  assert.equal(retractCaptured.interrupts.length, 1)
+  // ③ 群管理 B 打断他群成员 NOCAP → 拒绝（不是能力问题，是权限问题）
+  retractNoCap.status = 'running'
+  out = String(await tool.execute({ sessionId: R_NOCAP }, { agent: retractB }))
+  assert.match(out, /没有打断权限/)
+  // ④ 维护者 C 打断他群成员 NOCAP → 权限通过，但宿主没能力 → 明确降级
+  out = String(await tool.execute({ sessionId: R_NOCAP }, { agent: retractC }))
+  assert.match(out, /宿主不支持直接打断/)
+  // ⑤ 群管理不能打断维护者
+  retractC.status = 'running'
+  retractCaptured.interrupts.length = 0
+  out = String(await tool.execute({ sessionId: R_C }, { agent: retractB }))
+  assert.match(out, /维护者会话不能被群管理/)
+  assert.equal(retractCaptured.interrupts.length, 0)
+  retractC.status = 'idle'
+  // ⑥ 普通成员可以打断自己
+  retractA.status = 'running'
+  retractCaptured.interrupts.length = 0
+  out = String(await tool.execute({ sessionId: R_A }, { agent: retractA }))
+  assert.match(out, /已打断/)
+  assert.equal(retractCaptured.interrupts.length, 1)
+  retractA.status = 'idle'
+})
+
+
 // ---------------------------------------------------------------- 收尾
 fs.rmSync(targetedDir, { recursive: true, force: true })
 fs.rmSync(contactDir, { recursive: true, force: true })
 fs.rmSync(permDir, { recursive: true, force: true })
 fs.rmSync(groupDir, { recursive: true, force: true })
+fs.rmSync(retractDir, { recursive: true, force: true })
 fs.rmSync(boardDir, { recursive: true, force: true })
 console.log('')
 if (failures.length) {

@@ -131,6 +131,15 @@
   }
   .chip.kind { color: var(--accent-2); border-color: rgba(79,216,255,.25); }
   .chip.file { color: var(--mint); border-color: rgba(95,242,200,.22); }
+  .chip.retract { color: var(--danger); border-color: rgba(255,107,129,.3); cursor: pointer; }
+  .chip.retract:hover { background: rgba(255,107,129,.14); border-color: rgba(255,107,129,.5); }
+  .msg-retract {
+    border: 1px solid rgba(255,107,129,.28); background: rgba(255,107,129,.08); color: var(--danger);
+    border-radius: 999px; padding: 0 7px; font-size: 9.5px; line-height: 17px; cursor: pointer;
+    opacity: 0; transition: opacity .15s; margin-left: 6px;
+  }
+  .bubble:hover .msg-retract, .msg-retract:focus { opacity: 1; }
+  .task-meta { color: var(--muted); font-size: 10.5px; margin: 3px 0 1px; }
   .composer {
     border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel);
     padding: 10px; display: flex; flex-direction: column; gap: 8px;
@@ -498,6 +507,7 @@
   ]
   var currentTheme = { name: 'nebula', custom: null }
   var KIND = { note:'经验', handoff:'交接', lesson:'教训', decision:'约定', request:'请求', command:'命令', task:'任务', chat:'交流' }
+  var TASK_STATUS = { assigned: '已分配', delegating: '已派发', collecting: '收集中', done: '已完成', canceled: '已撤回' }
   var state = { rules: [], groups: [], sessions: [], world: [], reputation: [], config: {}, profiles: {}, deliveries: {} }
   var sessionById = {}
   var currentGroupId = ''
@@ -857,7 +867,7 @@
       html += '<div>权限：继承 DSH 当前文件/工具策略；' + esc(item.permissionNote || '') + '</div>'
       html += '<div>理由：' + esc(item.reason || '') + '</div>'
       html += '</div>'
-      html += '<div class="chips"><button class="btn primary" data-approval="' + esc(item.id) + '">通过并执行</button><button class="btn" data-reject="' + esc(item.id) + '">驳回</button></div>'
+      html += '<div class="chips"><button class="btn primary" data-approval="' + esc(item.id) + '">通过并执行</button><button class="btn" data-reject="' + esc(item.id) + '">驳回</button><button class="btn danger" data-retract="' + esc(item.id) + '" title="撤回这条待复核记录（不会创建会话/工作区）">撤回</button></div>'
       html += '</div></div></div>'
     })
     ;(state.world || []).slice().reverse().forEach(function (entry) {
@@ -868,6 +878,7 @@
       html += '<div class="title">' + esc(entry.title) + '</div>'
       html += '<div class="text clamp">' + esc(entry.text || '') + '</div>'
       var chips = '<div class="chips"><span class="chip kind">' + esc(KIND[entry.kind] || entry.kind) + '</span>'
+      chips += '<button class="chip retract" data-retract="' + esc(entry.id) + '" title="撤回这条消息（任务会同时取消未完成请求与待复核）">撤回</button>'
       ;(entry.mentions || []).forEach(function (id) {
         var idn = identityOf(id)
         chips += '<span class="chip jump" data-jump="' + esc(id) + '" data-title="' + esc((sessionById[id] && sessionById[id].title) || idn.handle) + '">@' + esc(idn.handle) + '</span>'
@@ -916,7 +927,7 @@
   function groupEntries(group) {
     if (!group) return []
     return (state.rules || []).filter(function (entry) {
-      return entry.groupId === group.id && entry.hiddenFromChat !== true && entry.kind !== 'task'
+      return entry.groupId === group.id && entry.hiddenFromChat !== true
     }).sort(function (a, b) { return (a.ts || 0) - (b.ts || 0) })
   }
   function renderGroups() {
@@ -962,8 +973,19 @@
             var marked = identityOf(id)
             return '<button class="chip jump" data-jump="' + esc(id) + '" data-title="' + esc((sessionById[id] && sessionById[id].title) || marked.handle) + '">@' + esc(marked.handle) + '</button>'
           }).join('')
+          var taskMeta = ''
+          if (entry.kind === 'task') {
+            var coordinatorName = entry.coordinator
+              ? ((sessionById[entry.coordinator] && sessionById[entry.coordinator].title) || identityOf(entry.coordinator).handle)
+              : '（未指定）'
+            var assigneeNames = (entry.assignees || []).map(function (id) {
+              return (sessionById[id] && sessionById[id].title) || identityOf(id).handle
+            }).join('、') || '（无）'
+            taskMeta = '<div class="task-meta">🧑‍✈️ 组长：' + esc(coordinatorName) + ' · 成员：' + esc(assigneeNames) + ' · 状态：' + esc(TASK_STATUS[entry.taskStatus] || entry.taskStatus || '已分配') + '</div>'
+          }
           return '<div class="bubble' + (mine ? ' mine' : '') + '"><div class="avatar clickable" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + avatarHtml(who.avatar) + '</div>' +
-            '<div class="body"><div class="head"><b class="jump" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + esc(who.handle) + '</b><small>' + esc(kind) + ' · ' + when(entry.ts) + '</small></div>' +
+            '<div class="body"><div class="head"><b class="jump" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + esc(who.handle) + '</b><small>' + esc(kind) + ' · ' + when(entry.ts) + '</small><button class="msg-retract" data-retract="' + esc(entry.id) + '" title="撤回这条消息/任务">撤回</button></div>' +
+            taskMeta +
             '<div class="msg' + (collapsible ? ' collapsible' : '') + '" data-expandable="' + (collapsible ? '1' : '0') + '" title="' + (collapsible ? '点击展开/收起' : '') + '">' + esc(chatBody) + '</div>' +
             ((fileChips || mentionMarks) ? '<div class="chips">' + mentionMarks + fileChips + '</div>' : '') + '</div></div>'
         }).join('')
@@ -987,7 +1009,8 @@
         '<div class="avatar clickable" data-jump="' + esc(id) + '" data-title="' + esc(session.title || who.handle) + '">' + avatarHtml(who.avatar) + '</div>' +
         '<div class="who"><b>' + esc(who.handle) + (manager ? ' <span class="badge-manager">群管理</span>' : '') + (isProtected ? ' <span class="badge-manager">维护者·观察</span>' : '') + ' <span class="avail-badge ' + (busy ? 'busy' : 'idle') + '" title="' + esc(busyTitle) + '">' + (busy ? '忙' : '空闲') + '</span></b>' +
         '<small><code class="contactid" data-copy="' + esc(cid) + '" title="点击复制 contactId（可直接用作 session_ask 的 to）">' + esc(cid) + '</code> · ' + meta + '</small></div>' +
-        '<div class="actions"><button class="btn small mint" data-like="' + esc(id) + '">👍</button>' +
+        '<div class="actions">' + (session.status === 'running' ? '<button class="btn small danger" data-interrupt="' + esc(id) + '" title="打断这一轮（不删会话、不丢历史）">⏹ 打断</button>' : '') +
+        '<button class="btn small mint" data-like="' + esc(id) + '">👍</button>' +
         '<button class="btn small" data-card="' + esc(id) + '">⋯</button></div></div>'
         }).join('')
   }
@@ -1094,6 +1117,46 @@
     command('group.like', { id: group.id, sessionId: sessionId, reason: '星桥上点了个赞' }).then(function (result) {
       if (!result || result.ok === false) { toast('点赞失败：' + (result && result.error || '未知错误'), true); return }
       toast('已点赞 +2 积分')
+      refresh()
+    })
+  }
+  /** 撤回一条消息/任务/请求/待复核记录（面板用户全量权限）：不需要二次确认，但要显示撤回结果。 */
+  function retractEntry(entryId, button) {
+    if (!entryId) return
+    if (button) button.disabled = true
+    command('entry.retract', { id: entryId }).then(function (result) {
+      if (!result || result.ok === false) {
+        if (button) button.disabled = false
+        toast('撤回失败：' + (result && result.error || '未知错误'), true)
+        refresh()
+        return
+      }
+      toast(result.message || '已撤回')
+      refresh()
+    }).catch(function (error) {
+      if (button) button.disabled = false
+      toast('撤回失败：' + (error && error.message ? error.message : error), true)
+      refresh()
+    })
+  }
+  /** 打断一个正在运行的会话（不删会话、不丢历史）；宿主不支持时显示明确原因与替代方案。 */
+  function interruptSession(sessionId, button) {
+    if (!sessionId) return
+    if (button) button.disabled = true
+    command('agent.interrupt', { sessionId: sessionId }).then(function (result) {
+      if (!result || result.ok === false) {
+        if (button) button.disabled = false
+        var reason = result && result.error ? result.error : '未知错误'
+        var tips = result && result.alternatives && result.alternatives.length ? '（替代：' + result.alternatives.join('；') + '）' : ''
+        toast('打断失败：' + reason + tips, true)
+        refresh()
+        return
+      }
+      toast(result.message || '已打断')
+      refresh()
+    }).catch(function (error) {
+      if (button) button.disabled = false
+      toast('打断失败：' + (error && error.message ? error.message : error), true)
       refresh()
     })
   }
@@ -1407,6 +1470,8 @@
       if (chip) insertMention(chip.getAttribute('data-mention'))
     })
     $('groupChat').addEventListener('click', function (event) {
+      var retract = event.target.closest('[data-retract]')
+      if (retract) { retractEntry(retract.getAttribute('data-retract'), retract); return }
       var file = event.target.closest('[data-file]')
       if (file) { previewFile(file.getAttribute('data-file')); return }
       var expandable = event.target.closest('[data-expandable="1"]')
@@ -1415,6 +1480,8 @@
       if (jump) jumpToSession(jump.getAttribute('data-jump'), jump.getAttribute('data-title'))
     })
     $('worldFeed').addEventListener('click', function (event) {
+      var retract = event.target.closest('[data-retract]')
+      if (retract) { retractEntry(retract.getAttribute('data-retract'), retract); return }
       var approve = event.target.closest('[data-approval]')
       if (approve) {
         var approvalId = approve.getAttribute('data-approval')
@@ -1457,6 +1524,8 @@
       if (jump) jumpToSession(jump.getAttribute('data-jump'), jump.getAttribute('data-title'))
     })
     $('memberList').addEventListener('click', function (event) {
+      var interrupt = event.target.closest('[data-interrupt]')
+      if (interrupt) { interruptSession(interrupt.getAttribute('data-interrupt'), interrupt); return }
       var copy = event.target.closest('[data-copy]')
       if (copy) { copyText(copy.getAttribute('data-copy')); return }
       var like = event.target.closest('[data-like]')
