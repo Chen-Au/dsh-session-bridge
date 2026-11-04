@@ -1376,7 +1376,9 @@ window.__ModuleLoader__.load({
               { style: mergeStyle(styles.rowMuted, { marginTop: 4 }) },
               rule.status === 'answered'
                 ? '请求已由会话 ' + shortId(rule.answeredBy) + ' 回复'
-                : '请求待响应（目标会话在线时会被唤醒；离线时下次运行看到）'
+                : rule.status === 'canceled'
+                  ? '请求已撤回（不再结算奖励）'
+                  : '请求待响应（目标会话在线时会被唤醒；离线时下次运行看到）'
             )
           : null,
         h(
@@ -1403,6 +1405,20 @@ window.__ModuleLoader__.load({
             }
           }),
           h('span', { style: styles.spacer }),
+          rule.kind === 'task' || rule.kind === 'request'
+            ? h(
+                Btn,
+                {
+                  variant: 'danger',
+                  disabled: busy,
+                  title: '撤回这条任务/请求（同时取消关联未完成请求与待复核，不结算奖励）',
+                  onClick: function () {
+                    run('entry.retract', { id: rule.id }, '已撤回「' + asString(rule.title).slice(0, 20) + '」')
+                  }
+                },
+                '撤回'
+              )
+            : null,
           h(
             Btn,
             {
@@ -1812,6 +1828,20 @@ window.__ModuleLoader__.load({
             { style: mergeStyle(styles.rowMuted, { flex: 'none' }) },
             running ? '运行中' : live ? '在线' : '离线'
           ),
+          running
+            ? h(
+                Btn,
+                {
+                  variant: 'danger',
+                  disabled: props.busy,
+                  title: '打断这一轮（不删会话、不丢历史；宿主不支持时会明确提示）',
+                  onClick: function () {
+                    props.run('agent.interrupt', { sessionId: session.id }, '已打断「' + asString(session.title).slice(0, 20) + '」')
+                  }
+                },
+                '打断'
+              )
+            : null,
           h(
             Btn,
             {
@@ -2341,6 +2371,19 @@ window.__ModuleLoader__.load({
         fontSize: 12
       },
       chatRoot: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, flex: 1 },
+      retractBtn: {
+        marginLeft: 'auto',
+        border: '0.5px solid rgba(229,72,77,.45)',
+        background: 'transparent',
+        color: '#e5484d',
+        borderRadius: 999,
+        padding: '0 6px',
+        fontSize: 10,
+        lineHeight: '16px',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        flex: 'none'
+      },
       chatHead: {
         display: 'flex',
         alignItems: 'center',
@@ -2490,6 +2533,7 @@ window.__ModuleLoader__.load({
     function ChatBubble(props) {
       var rule = props.rule
       var index = props.index
+      var run = props.run
       var self = rule.author === 'panel' || rule.origin === 'panel'
       var session = index.sessionById[rule.author]
       var name = self ? '我（看板）' : session ? session.title : shortId(rule.author)
@@ -2497,7 +2541,7 @@ window.__ModuleLoader__.load({
       var kindLabel = KIND_LABELS[displayKind] || '经验'
       var requestStatus = ''
       if (rule.kind === 'request') {
-        requestStatus = rule.status === 'answered' ? '已由 ' + shortId(rule.answeredBy) + ' 回复' : '待响应'
+        requestStatus = rule.status === 'answered' ? '已由 ' + shortId(rule.answeredBy) + ' 回复' : rule.status === 'canceled' ? '已撤回' : '待响应'
       }
       return h(
         'div',
@@ -2524,7 +2568,20 @@ window.__ModuleLoader__.load({
               'div',
               { style: { display: 'flex', gap: 4, alignItems: 'center', marginBottom: 2, flexWrap: 'wrap' } },
               h(Badge, { tone: KIND_TONE[displayKind] || 'neutral' }, kindLabel),
-              requestStatus !== '' ? h(Badge, { tone: rule.status === 'answered' ? 'success' : 'warn' }, requestStatus) : null
+              requestStatus !== '' ? h(Badge, { tone: rule.status === 'answered' ? 'success' : rule.status === 'canceled' ? 'neutral' : 'warn' }, requestStatus) : null,
+              h(
+                'button',
+                {
+                  type: 'button',
+                  title: '撤回这条消息/任务（任务会同时取消关联请求与待复核）',
+                  onClick: function (event) {
+                    if (event && event.stopPropagation) event.stopPropagation()
+                    if (run) run('entry.retract', { id: rule.id }, '已撤回「' + asString(rule.title).slice(0, 20) + '」')
+                  },
+                  style: chatStyles.retractBtn
+                },
+                '撤回'
+              )
             ),
             rule.kind === 'task'
               ? h(
@@ -2707,7 +2764,7 @@ window.__ModuleLoader__.load({
             ? h(EmptyHint, null, '群里还没有消息。可以在下面发一条，或在会话里发交接/请求。')
             : seq.map(function (item) {
                 if (item.type === 'day') return h('div', { key: item.key, style: chatStyles.day }, chatDayLabel(item.day))
-                return h(ChatBubble, { key: item.key, rule: item.rule, index: index })
+                return h(ChatBubble, { key: item.key, rule: item.rule, index: index, run: props.run })
               })
         ),
         h(
@@ -3221,7 +3278,21 @@ window.__ModuleLoader__.load({
               if (groupId === '') return
               run('group.add', { id: groupId, sessionIds: [session.id] })
             }
-          })
+          }),
+          running
+            ? h(
+                Btn,
+                {
+                  variant: 'danger',
+                  disabled: busy,
+                  title: '打断这一轮（不删会话、不丢历史；宿主不支持时会明确提示）',
+                  onClick: function () {
+                    run('agent.interrupt', { sessionId: session.id }, '已打断「' + asString(session.title).slice(0, 20) + '」')
+                  }
+                },
+                '打断'
+              )
+            : null
         )
       )
     }
@@ -3432,6 +3503,7 @@ window.__ModuleLoader__.load({
     function WorldBubble(props) {
       var rule = props.rule
       var index = props.index
+      var run = props.run
       var self = rule.author === 'panel' || rule.origin === 'panel'
       var session = index.sessionById[rule.author]
       var name = self ? '我（用户）' : session ? session.title : shortId(rule.author)
@@ -3460,7 +3532,20 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { style: { display: 'flex', gap: 4, alignItems: 'center', marginBottom: 2, flexWrap: 'wrap' } },
-              h(Badge, { tone: KIND_TONE[displayKindOf(rule)] || 'neutral' }, kindLabel)
+              h(Badge, { tone: KIND_TONE[displayKindOf(rule)] || 'neutral' }, kindLabel),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  title: '撤回这条世界消息（任务会同时取消关联请求与待复核）',
+                  onClick: function (event) {
+                    if (event && event.stopPropagation) event.stopPropagation()
+                    if (run) run('entry.retract', { id: rule.id }, '已撤回「' + asString(rule.title).slice(0, 20) + '」')
+                  },
+                  style: chatStyles.retractBtn
+                },
+                '撤回'
+              )
             ),
             h('div', { style: { fontWeight: 600, wordBreak: 'break-word' } }, rule.title),
             rule.text !== ''
@@ -3736,7 +3821,7 @@ window.__ModuleLoader__.load({
                 rules.length === 0
                   ? h(EmptyHint, null, '世界里还没有任务。把要做的事写在下面发出来：有对应申报的成员就派给他，没有就自动新建会话。')
                   : rules.map(function (rule) {
-                      return h(WorldBubble, { key: rule.id, rule: rule, index: index })
+                      return h(WorldBubble, { key: rule.id, rule: rule, index: index, run: props.run })
                     }),
                 pending.map(function (item) {
                   return h(
@@ -3833,6 +3918,20 @@ window.__ModuleLoader__.load({
       var refreshedState = React.useState(0)
       var refreshedAt = refreshedState[0]
       var setRefreshedAt = refreshedState[1]
+      // 操作成功后的轻量 toast（撤回/打断等），2.6 秒自动消失。
+      var noticeState = React.useState('')
+      var notice = noticeState[0]
+      var setNotice = noticeState[1]
+      var noticeTimerRef = React.useRef(null)
+      var showNotice = React.useCallback(function (text) {
+        var message = asString(text).trim()
+        if (!message) return
+        setNotice(message)
+        if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current)
+        noticeTimerRef.current = setTimeout(function () {
+          if (mountedRef.current) setNotice('')
+        }, 2600)
+      }, [])
       var mountedRef = React.useRef(true)
       var seqRef = React.useRef(0)
 
@@ -3866,13 +3965,14 @@ window.__ModuleLoader__.load({
           return function () {
             mountedRef.current = false
             clearInterval(timer)
+            if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current)
           }
         },
         [refresh]
       )
 
       var run = React.useCallback(
-        function (action, payload) {
+        function (action, payload, successText) {
           setBusy(true)
           setError(null)
           return sendCommand(action, payload).then(
@@ -3885,6 +3985,7 @@ window.__ModuleLoader__.load({
                 refresh()
               }
               setBusy(false)
+              if (successText) showNotice(successText)
               return true
             },
             function (failure) {
@@ -3896,7 +3997,7 @@ window.__ModuleLoader__.load({
             }
           )
         },
-        [refresh]
+        [refresh, showNotice]
       )
 
       var index = React.useMemo(
@@ -4002,6 +4103,29 @@ window.__ModuleLoader__.load({
             setError(null)
           }
         }),
+        notice !== ''
+          ? h(
+              'div',
+              {
+                role: 'status',
+                style: {
+                  position: 'fixed',
+                  right: 16,
+                  bottom: 46,
+                  zIndex: 60,
+                  maxWidth: 300,
+                  background: 'var(--dsw-alias-bg-layer-2)',
+                  color: 'var(--dsw-alias-label-primary)',
+                  border: '0.5px solid var(--dsw-alias-border-l3)',
+                  borderRadius: 10,
+                  padding: '8px 12px',
+                  fontSize: 12,
+                  boxShadow: '0 10px 30px rgba(0,0,0,.28)'
+                }
+              },
+              notice
+            )
+          : null,
         data !== null && !settingsOpen ? h(TabBar, { tab: tab, state: state, onChange: setTab }) : null,
         h('div', { style: styles.content }, body),
         h(

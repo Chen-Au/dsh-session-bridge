@@ -98,6 +98,17 @@
 - **修bug群**：`bugfix.ensure` 命令 / 右侧栏「🛡️ 建修bug群」按钮 / `session_board action=bugfix` 一键创建或复用「星桥 · 修bug」群（自动命名复用 v2.9.0 的 `generateGroupName` 规则）——维护者为群管理、普通成员自动入群；`bugfix.report`（面板「🛡️ 报BUG」按钮）与 `session_share kind=bug` 会把 bug 报告投递到该群并通知维护者；`bugfix.list` 可查看开放/已修复的 bug 列表（复用看板 request 状态）；
 - **契约测试**：新增 H 段覆盖「自动路由排除维护者、group.post 指派维护者报错/跳过、session_ask 与 session_nudge 拒绝、用户显式 @ 例外、修bug群创建/复用与 bug 投递、成员列表角色标记」，并与 G 段的 idle/busy 用例叠加回归。
 
+### 11. 直接撤回与打断（v2.9.2）
+
+- **一键撤回消息/任务**：群聊/世界消息 hover 出现「撤回」，任务卡与待复核卡也有「撤回」按钮；不需要二次确认，操作后 toast 显示结果并自动刷新；
+- 撤回按看板条目 id 生效（命令 `entry.retract`，别名 `message.retract`）：append `remove` 事件，并同步清理送达记录（deliveries）；
+- **撤回任务/请求时的关联清理**：关联未完成 request 标 `canceled`、任务 `taskStatus=canceled`、关联的 pending approval（待复核）标 `canceled` 并移除隐藏卡片；已撤回任务的迟到「完成」回复**不再结算积分**，不会误发完成奖励；
+- **撤回权限矩阵**：面板用户 / 维护者全量；群管理只能撤回本群条目；作者只能撤回自己未处理的条目（至少群聊）；普通成员不能撤回他人任务；
+- **一键打断运行会话**：成员卡片 / 群成员行对 running 会话显示「⏹ 打断」，命令 `agent.interrupt`（按 sessionId / contactId / 短 id / 标题均可），只中止当前一轮，不删除会话、不丢历史，并保留排队输入；
+- **运行时能力探测**：依次探测宿主 agent 的 `cancel` / `interrupt` / `abort` / `stop` 方法（当前 DSH 用 `agent.cancel({kind:'user'}, {keepInbox:true})`）；宿主没有这些能力时明确返回「宿主不支持直接打断」并给出替代（`session_nudge` 插话 / 等待这一轮结束 / 宿主自带停止按钮），**不会假装成功**；
+- **打断权限矩阵**：面板用户 / 维护者全量；群管理只能打断本群 running 成员；普通成员只能打断自己；维护者会话不能被群管理打断；
+- 新增模型工具 `session_retract` / `session_interrupt`，面板按钮走本地 HTTP 命令（`entry.retract` / `agent.interrupt`）；state 里暴露 `capabilities.interrupt` 供 UI 判断宿主能力。
+
 ---
 
 ## 安装
