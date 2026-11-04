@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.5.0'
+const VERSION = '2.6.0'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -2987,6 +2987,102 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  const ensureWorkspaceForFolder = async (folderPath, nameHint) => {
+    const registry = (ctx.get && ctx.get('workspaceRegistry')) || ctx.workspaceRegistry
+    if (!registry || typeof registry.create !== 'function') {
+      return { ok: false, error: '宿主不提供 workspaceRegistry' }
+    }
+    const target = path.resolve(String(folderPath || ''))
+    try {
+      if (!fs.statSync(target).isDirectory()) return { ok: false, error: '目标不是文件夹' }
+    } catch {
+      return { ok: false, error: '文件夹不存在：' + target }
+    }
+    try {
+      let workspace = null
+      if (typeof registry.resolveByPath === 'function') {
+        try {
+          workspace = await registry.resolveByPath(target)
+        } catch {
+          workspace = null
+        }
+      }
+      let created = false
+      if (!workspace) {
+        workspace = await registry.create(target, String(nameHint || path.basename(target)).slice(0, 40))
+        created = true
+      }
+      return { ok: true, cwd: target, path: target, workspaceId: workspace && workspace.id, name: (workspace && workspace.title) || path.basename(target), created }
+    } catch (error) {
+      return { ok: false, error: error && error.message ? error.message : String(error) }
+    }
+  }
+
+  const resolveFolderTask = (text) => {
+    const source = String(text || '')
+    const roots = [
+      path.join(os.homedir(), 'Desktop'),
+      path.join(os.homedir(), 'Documents'),
+      path.join(os.homedir(), 'Downloads'),
+      os.homedir()
+    ]
+    const folders = []
+    for (const root of roots) {
+      let entries = []
+      try {
+        entries = fs.readdirSync(root, { withFileTypes: true })
+      } catch {
+        continue
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('.')) continue
+        const full = path.join(root, entry.name)
+        try {
+          const stat = fs.statSync(full)
+          folders.push({ path: full, name: entry.name, root, mtime: stat.mtimeMs || 0 })
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    // 1) 绝对路径
+    const absoluteMatches = source.match(/[A-Za-z]:[\\/][^，。；、\n"'“”]+/g) || []
+    for (const raw of absoluteMatches) {
+      const candidate = raw.trim().replace(/[。；，、]+$/, '')
+      try {
+        if (fs.statSync(candidate).isDirectory()) {
+          return { path: candidate, name: path.basename(candidate) }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    // 2) 引号/“叫 xxx”里的文件夹名
+    const names = []
+    for (const pattern of [
+      /(?:文件夹|目录|路径)[^「“"']{0,8}[「“"']([^」”"']{2,40})[」”"']/g,
+      /(?:叫|名为|名字是)\s*[「“"']?([^\s，。；、」”"']{2,30})/g
+    ]) {
+      for (const match of source.matchAll(pattern)) names.push(match[1])
+    }
+    for (const name of names) {
+      const hit = folders.find((folder) => folder.name === name) || folders.find((folder) => folder.name.includes(name))
+      if (hit) return { path: hit.path, name: hit.name }
+    }
+    // 3) 正文里直接出现文件夹名
+    for (const folder of folders) {
+      if (folder.name.length >= 2 && source.includes(folder.name)) return { path: folder.path, name: folder.name }
+    }
+    // 4) 明确说桌面文件夹但没写名字：桌面只有一个文件夹就选它；多个时选最近修改的
+    if (/桌面/.test(source) && /文件夹|目录/.test(source)) {
+      const desktopFolders = folders
+        .filter((folder) => folder.root === path.join(os.homedir(), 'Desktop'))
+        .sort((a, b) => b.mtime - a.mtime)
+      if (desktopFolders.length) return { path: desktopFolders[0].path, name: desktopFolders[0].name }
+    }
+    return null
+  }
+
   const worldEntriesOf = () =>
     store
       .readActive()
@@ -4540,6 +4636,7 @@ export function apply(ctx, config = {}) {
       const mentionCandidates = sessionsNow.filter((session) => session.worldEligible === true)
       const parsedWorldMentions = parseMentionsInText(text, mentionCandidates)
       const wantsNewMembers = /(新成员|新会话|新建会话|开新会话|创建.{0,10}(会话|成员)|入驻|扩编|扩招|加.{0,4}(个|位)?.{0,4}(人|成员|会话))/i.test(text)
+      const folderTask = resolveFolderTask(text)
       const parseMemberCount = () => {
         const arabic = text.match(/(\d{1,2})\s*(?:个|位|名)?\s*(?:新)?(?:会话|成员|人)/)
         if (arabic) return Math.min(5, Math.max(1, Number(arabic[1])))
@@ -4557,7 +4654,19 @@ export function apply(ctx, config = {}) {
           route: 'new',
           sessionId: '',
           newWorkspace: false,
-          reason: '用户明确要新成员/新会话：由宿主创建根会话，不能用子代理冒充成员'
+          folderPath: folderTask ? folderTask.path : '',
+          workspaceName: folderTask ? folderTask.name : '',
+          reason: '用户明确要新成员/新会话：由宿主创建根会话，不能用子代理冒充成员' + (folderTask ? '（指定文件夹：' + folderTask.name + '）' : '')
+        }
+      } else if (folderTask) {
+        decision = {
+          engine: 'folder-workspace',
+          route: 'new',
+          sessionId: '',
+          newWorkspace: true,
+          folderPath: folderTask.path,
+          workspaceName: folderTask.name,
+          reason: '任务指向本地文件夹「' + folderTask.name + '」，自动为该目录建工作区并开新会话'
         }
       } else if (parsedWorldMentions.all) {
         decision = {
@@ -4633,7 +4742,7 @@ export function apply(ctx, config = {}) {
         const baseSession = parsedWorldMentions.ids
           .map((sessionId) => sessionsNow.find((session) => session.id === sessionId))
           .find((session) => session && session.cwd)
-        let cwdOverride = baseSession && baseSession.cwd ? baseSession.cwd : ''
+        let cwdOverride = decision.folderPath || (baseSession && baseSession.cwd ? baseSession.cwd : '')
         // 没 @ 人时，从正文里找已知工作区名（例如「入驻 shoot_game」），把新成员放进对应工作区。
         if (!cwdOverride) {
           try {
@@ -4682,7 +4791,16 @@ export function apply(ctx, config = {}) {
       }
       if (!assigned.length) {
         let cwdOverride = ''
-        if (decision.newWorkspace) {
+        if (decision.folderPath) {
+          const ensured = await ensureWorkspaceForFolder(decision.folderPath, decision.workspaceName)
+          if (ensured.ok) {
+            cwdOverride = ensured.cwd
+            createdWorkspace = ensured.cwd
+          } else {
+            createError = '为文件夹建工作区失败：' + ensured.error
+          }
+        }
+        if (decision.newWorkspace && !cwdOverride) {
           const workspace = await createWorkspaceForTask(text, decision.workspaceName)
           if (workspace.ok) {
             cwdOverride = workspace.cwd
@@ -6330,6 +6448,7 @@ export function apply(ctx, config = {}) {
   // ---------------------------------------------------------------- 维护者 / 健康巡检
   const healthFile = path.join(boardDir, 'health.json')
   let lastHealthAlertAt = 0
+  const taskRetryAt = new Map()
   const runHealthCheck = async (options = {}) => {
     const issues = []
     const fixes = []
@@ -6447,6 +6566,65 @@ export function apply(ctx, config = {}) {
         }
       } catch {
         /* ignore */
+      }
+      // 未完成任务：目标会话掉线/异常关闭时，自动拉起并重试（每条请求+会话 20 分钟冷却，单次最多 3 个）。
+      try {
+        const sessionsHealth = await buildSessionIndex()
+        const healthById = new Map(sessionsHealth.map((session) => [session.id, session]))
+        const recentRequests = store
+          .readActive()
+          .filter(
+            (entry) =>
+              entry.kind === 'request' &&
+              entry.status !== 'answered' &&
+              !entry.answeredBy &&
+              (entry.ts || 0) > Date.now() - 48 * 3600 * 1000 &&
+              Array.isArray(entry.requestTo)
+          )
+          .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+        let retried = 0
+        for (const request of recentRequests) {
+          if (retried >= 3) break
+          for (const targetId of request.requestTo) {
+            if (retried >= 3) break
+            const cooldownKey = request.id + '|' + targetId
+            if (Date.now() - (taskRetryAt.get(cooldownKey) || 0) < 20 * 60 * 1000) continue
+            const targetSession = healthById.get(targetId)
+            if (targetSession && targetSession.closed) {
+              issues.push('任务「' + truncate(request.title || request.id, 24) + '」的目标会话已关闭，需人工处理')
+              continue
+            }
+            const retryMessage = [
+              '【任务恢复 · 掉线/中断重试】',
+              '你有一个未完成的任务请求：' + (request.title || request.id),
+              String(request.text || '').slice(0, 500),
+              '',
+              '系统已把会话拉起。请继续处理；确实无法完成请用 session_share（replyTo=' + request.id + '）说明原因。'
+            ].join('\n')
+            if (targetSession && targetSession.live) {
+              const agent = ctx.agents.get ? ctx.agents.get(targetId) : undefined
+              const requestAge = Date.now() - (request.ts || 0)
+              if (agent && agent.status === 'idle' && requestAge > 20 * 60 * 1000) {
+                wakeSession(targetId, retryMessage, { requestId: request.id })
+                taskRetryAt.set(cooldownKey, Date.now())
+                retried += 1
+                fixes.push('任务「' + truncate(request.title || request.id, 20) + '」已提醒 ' + shortSid(targetId) + ' 重试')
+              }
+              continue
+            }
+            const revived = await ensureSessionLive(targetId)
+            if (revived) {
+              wakeSession(targetId, retryMessage, { requestId: request.id })
+              taskRetryAt.set(cooldownKey, Date.now())
+              retried += 1
+              fixes.push('任务「' + truncate(request.title || request.id, 20) + '」已拉起 ' + shortSid(targetId) + ' 重试')
+            } else {
+              issues.push('任务「' + truncate(request.title || request.id, 24) + '」的成员 ' + shortSid(targetId) + ' 无法拉起')
+            }
+          }
+        }
+      } catch (error) {
+        logger.warn('任务掉线重试失败：' + (error && error.message ? error.message : error))
       }
       // 日志近期警告数量
       try {
