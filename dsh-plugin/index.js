@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.8.0'
+const VERSION = '2.8.1'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -120,11 +120,13 @@ const INSTRUCTIONS = `## 跨会话经验桥（session-bridge，插件自动生�
 
 **发布规则**：标题 ≤ 20 字；正文 ≤ 400 字，写成可独立理解的规则或事实，不要复制整段对话；只发通用信息，不发隐私、密钥、一次性细节；发布前可先 \`session_board\` 查重，重复就不要发。若用户已经建了群组（右侧栏「经验桥」看板里管理），可以用 \`group\` 参数把内容只发给该群成员（\`session_board action=groups\` 可列出群组）。
 
-**群组协作（避免重复造轮子）**：加入群组后先看/提交申报；需要别人的文件或进度时用 \`session_ask\`（定向唤醒，只通知被问的人；探测用默认 mode=probe，给成员派活才用 mode=task），不要把所有信息刷给所有人。完成阶段性成果后用 \`kind=handoff\` + \`group=群名\` + \`files=文件路径\` 交接，群成员可在需要时按需查看。
+**群组协作（避免重复造轮子）**：加入群组后先看/提交申报；需要别人的文件或进度时用 \`session_ask\`（定向唤醒，只通知被问的人；探测用默认 mode=probe，给成员派活才用 mode=task），不要把所有信息刷给所有人。完成阶段性成果后用 \`kind=handoff\` + \`group=群名\` + \`files=文件路径\` 交接，群成员可在需要时按需查看。派活前不确定找谁/成员 id 是什么，用 \`session_directory\`（可按 group/query 过滤）查通讯录：每个会话都有稳定的 **contactId**（完整 id 去掉 \`session-\` 前缀后的前 8 位，如 \`4f51e99f\`），可直接复制使用。
 
 **申报材料（session_profile）**：新会话若要参与协作，先调用 \`session_profile action=update\` 提交一句话申报（summary=在做什么/方向；direction、assets=主要资产/文件、needs=需要什么，总≤200 字）。收到「入群申报」请求时立即提交；资产/方向有主要变化时更新（只保留主要介绍，省 token）。不想参与可 \`session_profile action=skip\`。需要了解群内其他会话时用 \`session_profile action=directory group=群名\`，不要要求无条件广播。
 
 **向群内其他会话要文件/进度**：需要别的会话的产出（文件、数据、进度）时，调用 \`session_ask\`（group=群名，to=**必填指定成员且需用户授权**，mode=probe，text=探测正文）。它会把请求写进看板，并**唤醒**在线的目标会话去处理。收到别人的请求时，用 \`session_share\` 的 \`kind=handoff\` + \`group=群名\` + \`replyTo=请求 id\` + \`files=文件\` 回复；请求方会自动收到通知。
+
+**会话引用（统一解析）**：\`session_ask\`/\`session_nudge\` 的 \`to\`、\`group_member\` 的 \`sessions\`、面板加/移成员、世界任务正文里的 \`@\` 都支持同一种写法：完整 id、不带 \`session-\` 前缀的 id、contactId（8 位）、短 id（6 位压缩前缀）、handle、标题（精确优先，其次包含）。唯一前缀/后缀也可以。**匹配到多个时会报错并列出候选，不会替你猜**；这时改用 contactId 或完整 id 重试即可。
 
 **群任务角色（防止人人都是组长）**：用户在群里 @ 多人发布任务时，宿主会指定唯一组长并把任务拆成两步：组长先分工、收集成员结果、最后向用户提交唯一汇总；成员只做自己那部分，用 replyTo 交给组长，不要直接向用户汇报、不要自称组长。任务创建时只唤醒组长，成员只有被组长派活时才会被唤醒一次。
 
@@ -206,6 +208,30 @@ function shortSid(sid) {
   if (typeof sid !== 'string' || !sid) return '?'
   const tail = sid.startsWith('session-') ? sid.slice(8) : sid
   return tail.replace(/-/g, '').slice(0, 6) || '?'
+}
+
+/**
+ * 稳定通讯录 ID（contactId）：由完整 sessionId **确定性推导**，不用随机数。
+ * 规则：去掉 `session-` 前缀后，取前 8 位字母/数字并转小写。
+ *  - `session-4f51e99f-91a8-4255-b3cf-e71e32323230` → `4f51e99f`
+ *  - `session-aaaa0001` → `aaaa0001`
+ * 同一会话在任何进程、任何消息里都得到同一个值，可直接写进提示词/派活消息/面板供人复制。
+ * 注意：理论上不同会话的前 8 位可能相同；resolveSessionRef 会把这种输入判为歧义并返回候选，
+ * 不会静默选第一个（目录里也会显示完整 id 用于区分）。
+ */
+function contactIdOf(sid) {
+  if (typeof sid !== 'string' || !sid.trim()) return ''
+  const tail = sid.startsWith('session-') ? sid.slice(8) : sid
+  return tail.replace(/[^0-9a-zA-Z]/g, '').toLowerCase().slice(0, 8)
+}
+
+/** 通讯录一行的人读文本：contactId · handle · title（无 handle 时省略）。 */
+function formatContactLine(session) {
+  if (!session || typeof session !== 'object') return ''
+  const cid = session.contactId || contactIdOf(session.id)
+  const handle = typeof session.handle === 'string' && session.handle.trim() ? session.handle.trim() : ''
+  const title = String(session.title || '').trim() || shortSid(session.id)
+  return [cid || '?', handle, title].filter(Boolean).join(' · ')
 }
 
 function truncate(text, max) {
@@ -1484,23 +1510,160 @@ export function apply(ctx, config = {}) {
     return hit && hit.title ? hit.title : shortSid(sessionId)
   }
 
-  /** 从正文里的 @handle/@标题/@all 解析出被点名的成员。 */
+  // ---------------------------------------------------------------- 会话引用解析（v2.8.1）
+  // 统一入口：完整 id、无 `session-` 前缀 id、contactId、短 id（6 位压缩前缀）、
+  // 唯一前缀/后缀、handle、标题（精确优先，其次包含）。
+  // 匹配按优先级分层；同一层命中多个 → 返回歧义 + 候选，禁止静默取第一个。
+  const sessionRefKeysOf = (session) => {
+    const id = String((session && session.id) || '')
+    const tail = id.startsWith('session-') ? id.slice(8) : id
+    return {
+      id: id.toLowerCase(),
+      tail: tail.toLowerCase(),
+      tailCompact: tail.replace(/-/g, '').toLowerCase(),
+      contactId: String((session && session.contactId) || contactIdOf(id)).toLowerCase(),
+      handle: String((session && session.handle) || '').trim().toLowerCase(),
+      title: String((session && session.title) || '').trim().toLowerCase()
+    }
+  }
+
+  const describeSessionCandidate = (session) => {
+    if (!session) return '(未知)'
+    const parts = [formatContactLine(session)]
+    if (session.cwd) parts.push('cwd=' + session.cwd)
+    if (session.status) parts.push(String(session.status))
+    parts.push('完整 id=' + session.id)
+    return parts.join(' · ')
+  }
+
+  const resolveSessionRef = (ref, candidates, options = {}) => {
+    const wantedRaw = String(ref ?? '').trim().replace(/^@+/, '').trim()
+    const list = (Array.isArray(candidates) ? candidates : []).filter((item) => item && typeof item.id === 'string' && item.id)
+    const failed = (extra = {}) => ({ ok: false, ambiguous: false, candidates: [], ...extra })
+    if (!wantedRaw) return failed({ error: '会话引用为空。' })
+    if (!list.length) return failed({ error: '当前没有可匹配的会话。' })
+    const wanted = wantedRaw.toLowerCase()
+    const wantedCompact = wanted.replace(/[^0-9a-z]/g, '')
+    const minPrefix = Math.max(3, toNumber(options.minPrefixLength, 4))
+    const minContains = Math.max(2, toNumber(options.minContainsLength, 2))
+    const tiers = [
+      // ① 精确命中 id 类：完整 id / 无前缀 id / contactId / 完整压缩形式
+      (keys) =>
+        keys.id === wanted ||
+        keys.tail === wanted ||
+        keys.contactId === wanted ||
+        (wantedCompact !== '' && keys.tailCompact === wantedCompact),
+      // ② exact handle（名片 ID，用户最可能输入的形式）
+      (keys) => keys.handle !== '' && keys.handle === wanted,
+      // ③ 唯一前缀/后缀（短 id 6 位、contactId 的一部分、id 结尾片段都走这里）
+      (keys) =>
+        wanted.length >= minPrefix &&
+        (keys.id.startsWith(wanted) ||
+          keys.tail.startsWith(wanted) ||
+          (wantedCompact !== '' && keys.tailCompact.startsWith(wantedCompact)) ||
+          keys.id.endsWith(wanted) ||
+          keys.tail.endsWith(wanted) ||
+          keys.contactId.endsWith(wanted)),
+      // ④ 标题精确
+      (keys) => keys.title !== '' && keys.title === wanted,
+      // ⑤ 包含匹配（handle/标题的一部分）
+      (keys) =>
+        wanted.length >= minContains &&
+        ((keys.handle !== '' && keys.handle.includes(wanted)) ||
+          (keys.title !== '' && keys.title.includes(wanted)))
+    ]
+    for (const hitTest of tiers) {
+      const hits = list.filter((session) => hitTest(sessionRefKeysOf(session)))
+      if (hits.length === 1) return { ok: true, session: hits[0], candidates: hits }
+      if (hits.length > 1) {
+        return {
+          ok: false,
+          ambiguous: true,
+          candidates: hits,
+          error:
+            `「${wantedRaw}」匹配到 ${hits.length} 个会话，无法确定是哪一个（不会替你猜）：\n- ` +
+            hits.slice(0, 8).map(describeSessionCandidate).join('\n- ')
+        }
+      }
+    }
+    return failed({
+      error:
+        `没有匹配「${wantedRaw}」的会话。可用成员：\n- ` +
+        list.slice(0, 12).map(describeSessionCandidate).join('\n- ')
+    })
+  }
+
+  /** 批量解析（group_member sessions、面板加/移成员）：任一失败则整体不执行，避免半套操作。 */
+  const resolveSessionRefs = (refs, candidates) => {
+    const resolved = []
+    const errors = []
+    let ambiguous = false
+    for (const ref of Array.isArray(refs) ? refs : []) {
+      const outcome = resolveSessionRef(ref, candidates)
+      if (!outcome.ok) {
+        if (outcome.ambiguous) ambiguous = true
+        errors.push(outcome.error)
+        continue
+      }
+      if (!resolved.some((item) => item.id === outcome.session.id)) resolved.push(outcome.session)
+    }
+    return { ok: errors.length === 0 && resolved.length > 0, resolved, errors, ambiguous }
+  }
+
+  /** to= 等参数可用逗号/顿号一次指定多个会话引用。 */
+  const splitSessionRefs = (ref) =>
+    String(ref || '')
+      .split(/[,，、;；]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+
+  /** 群成员通讯录（派活消息/错误提示用）：每行 `- contactId · handle · title`。 */
+  const memberDirectoryText = (sessions, options = {}) => {
+    const list = (Array.isArray(sessions) ? sessions : []).filter(Boolean)
+    if (!list.length) return '（暂无成员）'
+    return list
+      .slice(0, toNumber(options.limit, 20))
+      .map((session) => '- ' + formatContactLine(session))
+      .join('\n')
+  }
+
+  /** 一行式成员列表：contactId（handle）title，用于简短状态行。 */
+  const memberInlineText = (sessions, limit = 8) =>
+    (Array.isArray(sessions) ? sessions : [])
+      .filter(Boolean)
+      .slice(0, limit)
+      .map((session) => {
+        const cid = session.contactId || contactIdOf(session.id)
+        const handle = session.handle ? session.handle + ' ' : ''
+        return `${cid}（${handle}${session.title || shortSid(session.id)}）`
+      })
+      .join('、')
+
+  /** 从正文里的 @handle/@contactId/@短id/@标题/@all 解析出被点名的成员。 */
   const parseMentionsInText = (text, candidates) => {
     const source = String(text || '')
     const matched = new Set()
     const all = /@\s*(all|所有人|全体|大家)/i.test(source)
-    const lower = source.toLowerCase()
-    for (const item of candidates) {
-      const keys = [item.handle, item.title, item.id].filter(Boolean)
-      for (const key of keys) {
-        const needle = String(key).toLowerCase()
-        if (needle && (lower.includes('@' + needle) || lower.includes('@ ' + needle))) {
-          matched.add(item.id)
-          break
-        }
-      }
+    const unresolved = []
+    const ambiguous = []
+    const list = (Array.isArray(candidates) ? candidates : []).filter(Boolean)
+    const tokens = []
+    // 只取 @ 后面不带空白/常见标点的片段；`@@`、`@/` 这类装饰性写法不会产生 token。
+    const re = /@([^\s@，,。；;：:！!？?、（）()\[\]【】{}<>"'“”‘’/\\]+)/g
+    let match
+    while ((match = re.exec(source))) {
+      const token = match[1].trim()
+      if (!token) continue
+      if (/^(all|所有人|全体|大家)$/i.test(token)) continue
+      if (!tokens.includes(token)) tokens.push(token)
     }
-    return { ids: [...matched], all }
+    for (const token of tokens) {
+      const outcome = resolveSessionRef(token, list)
+      if (outcome.ok) matched.add(outcome.session.id)
+      else if (outcome.ambiguous) ambiguous.push({ token, candidates: outcome.candidates })
+      else unresolved.push(token)
+    }
+    return { ids: [...matched], all, unresolved, ambiguous }
   }
 
   const buildSessionIndex = async () => {
@@ -1614,6 +1777,7 @@ export function apply(ctx, config = {}) {
         const identity = identityOf(record.id, title)
         return {
           id: record.id,
+          contactId: contactIdOf(record.id),
           title,
           handle: identity.handle,
           avatar: identity.avatar,
@@ -3520,13 +3684,18 @@ export function apply(ctx, config = {}) {
       '向同一群组的其他会话要文件/进度：把请求写进看板，并唤醒在线的目标会话去处理（会启动对方的一轮对话，消耗 token）。' +
       '默认 mode=probe（只问正文，不叮嘱回复格式）；只有真正派活时传 mode=task（才会附 replyTo/files 交付说明）。' +
       '当用户说「问一下…会话/…群：第 3 章初稿在哪/进度如何/把文件发我/数据发我」时调用。' +
+      'to 支持 contactId（8 位，如 4f51e99f）、短 id（6 位）、无 session- 前缀的完整 id、handle、标题；不确定用 session_directory 查通讯录。' +
       '收到请求的一方用 session_share（kind=handoff、group=群名、replyTo=请求 id、files=文件）回复，请求方会被自动通知。',
     parameters: {
       type: 'object',
       properties: {
         group: { type: 'string', description: '群组名或群 id（session_board action=groups 可列出）' },
         text: { type: 'string', description: '要什么：文件路径 / 进度 / 数据 / 结论，写清楚（≤400 字）' },
-        to: { type: 'string', description: '可选，只发给某个群成员（会话标题或短 id）；不填则发给群内所有其他主会话' },
+        to: {
+          type: 'string',
+          description:
+            '要发给哪个群成员：contactId / 短 id / handle / 标题 / 完整 id 均可；多个用逗号或顿号分隔（最多 3 个）。必填（默认禁止群发唤醒）'
+        },
         mode: {
           type: 'string',
           enum: ['probe', 'task'],
@@ -3565,23 +3734,42 @@ export function apply(ctx, config = {}) {
         .filter((sessionId) => sessionId !== info.id)
         .map((sessionId) => byId.get(sessionId))
         .filter(Boolean)
+      const allMembers = targets.slice()
       const toRef = String((args && args.to) || '').trim()
       if (!toRef) {
         // 资源保护：默认禁止 session 群发唤醒，必须先指定对象，且对象需用户授权。
         return [
-          '为节省资源，默认禁止群发唤醒。请用 to= 指定群成员（会话标题或短 id，最多 3 个）。',
-          `群「${group.name}」可用成员：${targets.map((session) => `${session.title}（${shortSid(session.id)}）`).join('、') || '(无)'}`,
+          '为节省资源，默认禁止群发唤醒。请用 to= 指定群成员（contactId / 短 id / handle / 标题，最多 3 个）。',
+          `群「${group.name}」可用成员（contactId 可直接复制）：`,
+          memberDirectoryText(targets),
           '授权方式：右侧栏「经验桥」→ 群组 → 设置 → 成员行的「可唤醒」下拉里勾选你允许它唤醒的成员。'
         ].join('\n')
       }
-      const matched = targets.filter(
-        (session) =>
-          session.id === toRef ||
-          session.id.startsWith(toRef) ||
-          String(session.title || '').includes(toRef)
-      )
-      if (!matched.length) {
-        return `群「${group.name}」里没有匹配「${toRef}」的成员。可用成员：${targets.map((session) => `${session.title}（${shortSid(session.id)}）`).join('、') || '(无)'}`
+      // to= 支持一次给多个引用（逗号/顿号分隔），也支持单个 contactId/短 id/handle/标题。
+      const segments = splitSessionRefs(toRef)
+      let matched = []
+      if (segments.length > 1) {
+        const batch = resolveSessionRefs(segments, targets)
+        if (!batch.ok) {
+          return [
+            `无法解析 to=「${toRef}」：`,
+            ...batch.errors,
+            `群「${group.name}」可用成员（contactId 可直接复制）：`,
+            memberDirectoryText(targets)
+          ].join('\n')
+        }
+        matched = batch.resolved
+      } else {
+        const outcome = resolveSessionRef(toRef, targets)
+        if (!outcome.ok) {
+          return [
+            outcome.ambiguous ? `to=「${toRef}」指向不唯一，请改用 contactId 或完整 id：` : `群「${group.name}」里没有匹配「${toRef}」的成员。`,
+            ...(outcome.ambiguous ? [outcome.error] : []),
+            `群「${group.name}」可用成员（contactId 可直接复制）：`,
+            memberDirectoryText(targets)
+          ].join('\n')
+        }
+        matched = [outcome.session]
       }
       targets = matched.slice(0, 3)
       const grants = readPermissionsOf(boardDir).grants[info.id] || []
@@ -3590,11 +3778,11 @@ export function apply(ctx, config = {}) {
         const grantedTitles = grants
           .map((sessionId) => {
             const session = byId.get(sessionId)
-            return session ? session.title : shortSid(sessionId)
+            return session ? `${session.contactId || contactIdOf(sessionId)}（${session.title}）` : shortSid(sessionId)
           })
           .join('、')
         return [
-          `没有唤醒权限：${unauthorized.map((session) => session.title).join('、')}。`,
+          `没有唤醒权限：${unauthorized.map((session) => `${session.contactId || contactIdOf(session.id)}（${session.title}）`).join('、')}。`,
           `本会话已被授权唤醒：${grantedTitles || '（无）'}。`,
           '请让用户在右侧栏「经验桥」→ 群组 → 设置 → 成员行的「可唤醒」里授权后再请求。'
         ].join('\n')
@@ -3751,12 +3939,15 @@ export function apply(ctx, config = {}) {
         askMode === 'task'
           ? `已向群组「${group.name}」发出任务分配：${title}（id=${requestId}）`
           : `已向群组「${group.name}」发出探测：${title}（id=${requestId}）`,
-        `目标成员：${targets.map((session) => session.title).join('、')}`,
+        `目标成员：${memberInlineText(targets) || '(无)'}`,
         woken.length
-          ? `已唤醒 ${woken.length} 个在线会话（${woken.map((session) => session.title).join('、')}），它们会立即处理；`
+          ? `已唤醒 ${woken.length} 个在线会话（${memberInlineText(woken)}），它们会立即处理；`
           : '',
         sleepy.length
-          ? `${sleepy.length} 个成员当前不在线（${sleepy.map((session) => session.title).join('、')}），下次运行会看到这条请求；`
+          ? `${sleepy.length} 个成员当前不在线（${memberInlineText(sleepy)}），下次运行会看到这条请求；`
+          : '',
+        askMode === 'task'
+          ? `群成员通讯录（后续派活直接用 to=contactId）：\n${memberDirectoryText(allMembers)}`
           : '',
         askMode === 'task'
           ? `等待交付：对方用 session_share（kind=handoff、group=${group.name}、replyTo=${requestId}、files=…）回复后，本会话会被唤醒/看到通知。`
@@ -3776,7 +3967,10 @@ export function apply(ctx, config = {}) {
       type: 'object',
       properties: {
         group: { type: 'string', description: '群组名或群 id' },
-        to: { type: 'string', description: '要提醒的群成员（会话标题或短 id，必填）' },
+        to: {
+          type: 'string',
+          description: '要提醒的群成员：contactId / 短 id / handle / 标题 / 完整 id 均可（必填）'
+        },
         text: { type: 'string', description: '提醒内容（催什么/还差什么）' },
         title: { type: 'string', description: '可选，短标题（默认从 text 生成）' }
       },
@@ -3802,13 +3996,18 @@ export function apply(ctx, config = {}) {
         .filter((sessionId) => sessionId !== info.id)
         .map((sessionId) => byId.get(sessionId))
         .filter(Boolean)
-      const target =
-        candidates.find(
-          (session) => session.id === toRef || session.id.startsWith(toRef) || String(session.title || '').includes(toRef)
-        ) || null
-      if (!target) {
-        return `群「${group.name}」里没有匹配「${toRef}」的成员。可用：${candidates.map((session) => session.title).join('、') || '(无)'}`
+      const resolution = resolveSessionRef(toRef, candidates)
+      if (!resolution.ok) {
+        return [
+          resolution.ambiguous
+            ? `to=「${toRef}」指向不唯一，请改用 contactId 或完整 id：`
+            : `群「${group.name}」里没有匹配「${toRef}」的成员。`,
+          ...(resolution.ambiguous ? [resolution.error] : []),
+          `群「${group.name}」可用成员（contactId 可直接复制）：`,
+          memberDirectoryText(candidates)
+        ].join('\n')
       }
+      const target = resolution.session
       const grants = readPermissionsOf(boardDir).grants[info.id] || []
       if (!grants.includes(target.id)) {
         return `没有插话权限：用户还没有授权本会话唤醒/提醒「${target.title}」。请让用户在群组设置里授权。`
@@ -4116,7 +4315,7 @@ export function apply(ctx, config = {}) {
 
   register({
     name: 'group_member',
-    description: '群管理专用：根据组内需要拉人入群或踢出成员（action=add/remove/list）。拉人后会给新成员发入群欢迎/申报提示；踢人只移出群，不删除会话。',
+    description: '群管理专用：根据组内需要拉人入群或踢出成员（action=add/remove/list）。拉人后会给新成员发入群欢迎/申报提示；踢人只移出群，不删除会话。sessions 支持 contactId / 短 id / handle / 标题 / 完整 id。',
     parameters: {
       type: 'object',
       properties: {
@@ -4124,7 +4323,7 @@ export function apply(ctx, config = {}) {
         group: { type: 'string', description: '群名或群 id' },
         sessions: {
           type: 'array',
-          description: '要加入/移出的成员（会话 ID、handle 或标题，可给多个）',
+          description: '要加入/移出的成员（contactId、短 id、会话 ID、handle 或标题，可给多个）',
           items: { type: 'string' }
         }
       },
@@ -4144,22 +4343,24 @@ export function apply(ctx, config = {}) {
       const byId = new Map(sessions.map((session) => [session.id, session]))
       const members = group.sessionIds.map((sessionId) => byId.get(sessionId)).filter(Boolean)
       if (args.action === 'list') {
-        return '群「' + group.name + '」成员（' + members.length + '）：\n' + members.map((member) => '- ' + member.avatar + ' ' + (member.handle || member.title) + '（' + member.title + '）').join('\n')
+        return (
+          '群「' + group.name + '」成员（' + members.length + '）：\n' +
+          members
+            .map((member) => '- ' + member.avatar + ' ' + (member.handle || member.title) + '（' + member.title + '）· contactId=' + (member.contactId || contactIdOf(member.id)) + ' · 完整 id=' + member.id)
+            .join('\n')
+        )
       }
       const refs = Array.isArray(args.sessions) ? args.sessions.filter((item) => typeof item === 'string' && item) : []
-      if (!refs.length) return '请提供 sessions（会话 ID / handle / 标题）。'
-      const resolved = []
-      for (const ref of refs) {
-        const hit = sessions.find(
-          (session) =>
-            session.id === ref ||
-            session.id.startsWith(ref) ||
-            String(session.handle || '').includes(ref) ||
-            String(session.title || '').includes(ref)
-        )
-        if (hit && !resolved.some((item) => item.id === hit.id)) resolved.push(hit)
+      if (!refs.length) return '请提供 sessions（contactId / 短 id / 会话 ID / handle / 标题）。'
+      const batch = resolveSessionRefs(refs, sessions)
+      if (!batch.ok) {
+        return [
+          '成员引用解析失败，本次未做任何改动：',
+          ...batch.errors,
+          '提示：先用 session_directory（可加 group=群名）查 contactId，或改用完整 id。'
+        ].join('\n')
       }
-      if (!resolved.length) return '没有匹配到可操作的会话。'
+      const resolved = batch.resolved
       let nextIds = group.sessionIds.slice()
       if (args.action === 'add') {
         for (const member of resolved) if (!nextIds.includes(member.id)) nextIds.push(member.id)
@@ -4181,7 +4382,7 @@ export function apply(ctx, config = {}) {
       } catch {
         /* ignore */
       }
-      const handles = resolved.map((member) => member.handle || member.title || shortSid(member.id))
+      const handles = resolved.map((member) => formatContactLine(member))
       addEntry(
         {
           title: (args.action === 'add' ? '新成员入群：' : '成员移出群：') + handles.join('、'),
@@ -4210,6 +4411,85 @@ export function apply(ctx, config = {}) {
         }
       }
       return (args.action === 'add' ? '已拉入：' : '已移出：') + handles.join('、') + '；当前成员 ' + nextIds.length + ' 人。'
+    }
+  })
+
+  register({
+    name: 'session_directory',
+    description:
+      '跨会话通讯录：列出主会话的 contactId（稳定短 ID）、完整 id、handle、标题、工作区、在线状态、所属群组、是否可派世界任务。' +
+      '支持 group（只看某个群组的成员）和 query（按 contactId / 完整 id / handle / 标题 / 工作区 模糊筛选）。' +
+      '任何主会话可用。不确定派给谁、或不知道成员 id 时先查这里：contactId 可直接用于 session_ask/session_nudge 的 to、group_member 的 sessions、世界任务正文 @。',
+    parameters: {
+      type: 'object',
+      properties: {
+        group: { type: 'string', description: '可选：只看该群组的成员（群名或群 id）' },
+        query: { type: 'string', description: '可选：按 contactId / 完整 id / handle / 标题 / 工作区 模糊筛选' }
+      }
+    },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute(args, exec) {
+      const guard = requireRootAgent(exec)
+      if (guard.error) return guard.error
+      const info = sessionInfoOf(guard.agent)
+      const groups = groupStore.read()
+      const groupRef = String((args && args.group) || '').trim()
+      let group = null
+      if (groupRef) {
+        group = groupStore.find(groupRef, info.cwd)
+        if (!group) {
+          return [
+            `找不到群组「${groupRef}」。`,
+            groups.length ? `当前群组：${groups.map((item) => item.name).join('、')}` : '当前还没有群组。'
+          ].join('\n')
+        }
+      }
+      const sessions = await buildSessionIndex()
+      const groupNamesBySession = new Map()
+      for (const item of groups) {
+        for (const sessionId of item.sessionIds || []) {
+          if (!groupNamesBySession.has(sessionId)) groupNamesBySession.set(sessionId, [])
+          groupNamesBySession.get(sessionId).push(item.name)
+        }
+      }
+      const query = String((args && args.query) || '').trim().toLowerCase()
+      const allCount = sessions.length
+      let rows = sessions
+      if (group) rows = rows.filter((session) => group.sessionIds.includes(session.id))
+      if (query) {
+        rows = rows.filter((session) =>
+          [session.contactId, session.id, session.handle, session.title, session.cwd]
+            .filter(Boolean)
+            .some((value) => String(value).toLowerCase().includes(query))
+        )
+      }
+      rows = rows.sort((a, b) => (b.live === true ? 1 : 0) - (a.live === true ? 1 : 0) || (b.createdAt || 0) - (a.createdAt || 0))
+      const header = group
+        ? `群「${group.name}」通讯录（${rows.length} 个主会话）`
+        : `跨会话通讯录（${rows.length} 个主会话${allCount !== rows.length ? `，共 ${allCount} 个` : ''}）`
+      if (!rows.length) {
+        return [header, query ? `没有匹配「${query}」的会话。` : '没有可列出的主会话。'].join('\n')
+      }
+      const lines = [
+        header,
+        'contactId = 完整 id 去掉 session- 前缀后的前 8 位（稳定、可直接复制），可用于 session_ask/session_nudge 的 to、group_member 的 sessions、世界任务正文 @。',
+        ''
+      ]
+      for (const session of rows) {
+        const groupNames = groupNamesBySession.get(session.id) || []
+        lines.push(
+          `- contactId=${session.contactId || contactIdOf(session.id)} · handle=${session.handle || '（无）'} · title=${session.title || shortSid(session.id)}`
+        )
+        lines.push(
+          `  fullId=${session.id} · live=${session.live ? 'yes' : 'no'} · status=${session.status || (session.live ? 'idle' : 'history')} · 群组=${groupNames.length ? groupNames.join('、') : '（无）'} · worldEligible=${session.worldEligible ? 'yes' : 'no'} · cwd=${session.cwd || '（无）'}`
+        )
+      }
+      if (group && group.managerSessionId) {
+        const manager = sessions.find((session) => session.id === group.managerSessionId)
+        lines.push('', `群管理：${manager ? formatContactLine(manager) : shortSid(group.managerSessionId)}`)
+      }
+      lines.push('', '提示：直接复制 contactId 使用即可；若输入同时匹配多个会话，解析会报歧义并给出候选（此时改用完整 id）。')
+      return lines.join('\n')
     }
   })
 
@@ -4431,6 +4711,8 @@ export function apply(ctx, config = {}) {
         if (!groups.length) {
           return '当前还没有群组。在右侧栏「经验桥」面板里新建群组并拉入会话，之后 session_share 就可以用 group 参数只发给群成员。'
         }
+        const sessionsNow = await buildSessionIndex()
+        const sessionById = new Map(sessionsNow.map((session) => [session.id, session]))
         const ruleCount = new Map()
         for (const entry of store.readActive()) {
           if (entry.groupId) ruleCount.set(entry.groupId, (ruleCount.get(entry.groupId) || 0) + 1)
@@ -4440,7 +4722,16 @@ export function apply(ctx, config = {}) {
           lines.push(
             `${index + 1}. ${group.name}（id=${group.id.slice(0, 12)}…，${group.sessionIds.length} 个会话，${ruleCount.get(group.id) || 0} 条群规矩）`
           )
-          if (group.sessionIds.length) lines.push(`   成员：${group.sessionIds.map((id) => shortSid(id)).join('、')}`)
+          if (group.sessionIds.length) {
+            lines.push(
+              `   成员：${group.sessionIds
+                .map((id) => {
+                  const session = sessionById.get(id)
+                  return session ? `${session.contactId || contactIdOf(id)}（${session.handle || session.title}）` : shortSid(id)
+                })
+                .join('、')}`
+            )
+          }
         })
         return lines.join('\n')
       }
@@ -4450,6 +4741,8 @@ export function apply(ctx, config = {}) {
         const mine = all.filter((entry) => entry.author === info.id)
         const groups = groupStore.read()
         const live = liveRootSessions()
+        const sessionsNow = await buildSessionIndex()
+        const sessionById = new Map(sessionsNow.map((session) => [session.id, session]))
         const moduleInfo = (() => {
           try {
             const clientModules = ctx.get ? ctx.get('clientModules') : undefined
@@ -4471,14 +4764,19 @@ export function apply(ctx, config = {}) {
           `session-bridge v${VERSION} · 插件已加载`,
           `看板文件：${path.join(boardDir, BOARD_FILE)}`,
           `看板条目：活动 ${all.length} 条（其中我发布的 ${mine.length} 条）· 群组 ${groups.length} 个`,
-          `当前会话：${info.id || '?'}${info.cwd ? ` · 工作区 ${info.cwd}` : ''}`,
+          `当前会话：contactId=${contactIdOf(info.id) || '?'} · ${info.id || '?'}${info.cwd ? ` · 工作区 ${info.cwd}` : ''}`,
+          `通讯录：${sessionsNow.length} 个主会话（contactId 见下，可用 session_directory 查询/过滤；派活用 session_ask 的 to=contactId）`,
           `配置：scope=${cfg.scope} · maxShown=${cfg.maxShown} · ttl=${cfg.ttlHours}h · autoCapture=${cfg.autoCapture !== false}`,
           `注册：系统提示词说明=${registration.section ? '是' : '否'} · 运行时上下文=${registration.context ? '是' : '否'} · 看板 API=${registration.api ? '是' : '否'} · 面板 client.js=${fs.existsSync(path.resolve(HERE, '..', 'client.js')) || fs.existsSync(path.join(HERE, 'client.js')) ? '存在' : '缺失'}`,
           `客户端模块：${moduleInfo.available ? `已挂载（${moduleInfo.count} 个，本插件=${moduleInfo.hasSelf ? '已注册' : '未注册'}）` : '服务不可用'}${moduleInfo.available && !moduleInfo.hasSelf && moduleInfo.ids ? `\n  ids：${moduleInfo.ids.join(', ')}` : ''}`,
           `工具：${registeredTools.join(', ') || '(无)'}${failedTools.length ? ` · 失败=${failedTools.join(', ')}` : ''}`,
           `活动主会话（${live.length}）：`,
           ...(live.length
-            ? live.map((item) => `  - ${shortSid(item.id)} · ${item.status} · ${item.cwd ? path.basename(item.cwd) : '(无 cwd)'}`)
+            ? live.map((item) => {
+                const session = sessionById.get(item.id)
+                const who = session ? `${session.contactId || contactIdOf(item.id)} · ${session.handle || session.title}` : `${contactIdOf(item.id) || shortSid(item.id)}`
+                return `  - ${who} · ${item.status} · ${item.cwd ? path.basename(item.cwd) : '(无 cwd)'}`
+              })
             : ['  (无)'])
         ].join('\n')
       }
@@ -4712,6 +5010,18 @@ export function apply(ctx, config = {}) {
       const sessionsNow = await buildSessionIndex()
       const mentionCandidates = sessionsNow.filter((session) => session.worldEligible === true)
       const parsedWorldMentions = parseMentionsInText(text, mentionCandidates)
+      if (parsedWorldMentions.ambiguous.length) {
+        return {
+          ok: false,
+          error: [
+            '世界任务正文的 @ 指向不唯一，请改用 contactId（如 4f51e99f）或完整 id 重新发布（不会替你猜）：',
+            ...parsedWorldMentions.ambiguous.slice(0, 4).map(
+              (item) => `「@${item.token}」匹配到多个会话：\n- ` + item.candidates.slice(0, 8).map(describeSessionCandidate).join('\n- ')
+            ),
+            '可用 session_directory 查通讯录（contactId / handle / 标题）。'
+          ].join('\n')
+        }
+      }
       const wantsNewMembers = /(新成员|新会话|新建会话|开新会话|创建.{0,10}(会话|成员)|入驻|扩编|扩招|加.{0,4}(个|位)?.{0,4}(人|成员|会话))/i.test(text)
       const folderTask = resolveFolderTask(text)
       const parseMemberCount = () => {
@@ -4842,7 +5152,7 @@ export function apply(ctx, config = {}) {
         assigned = ids
           .map((sessionId) => sessions.find((session) => session.id === sessionId))
           .filter(Boolean)
-          .map((target) => ({ id: target.id, title: target.title, score: 0 }))
+          .map((target) => ({ id: target.id, title: target.title, contactId: target.contactId || contactIdOf(target.id), score: 0 }))
       }
       // 协同类任务：如果只命中一个会话，再挑 1-2 个申报相关的成员一起拉群。
       if (decision.route === 'existing' && decision.engine !== 'mentions' && assigned.length === 1) {
@@ -5040,7 +5350,7 @@ export function apply(ctx, config = {}) {
             addEntry(
               {
                 title: '任务已下发：' + truncate(text, 20),
-                text: '组长：' + (assigned[0].title || shortSid(autoCoordinatorId)) + '。成员：' + assignees.map((id) => shortSid(id)).join('、') + '。\n' + text,
+                text: '组长：' + (assigned[0].title || shortSid(autoCoordinatorId)) + '（contactId=' + contactIdOf(autoCoordinatorId) + '）。成员：' + assignees.map((id) => contactIdOf(id)).join('、') + '。\n' + text,
                 kind: 'chat',
                 groupId: createdGroup.id,
                 author: 'panel',
@@ -5133,12 +5443,16 @@ export function apply(ctx, config = {}) {
             ? [
                 '【世界任务 · 你是组长】',
                 `已自动拉协作群「${createdGroup.name}」，成员：${assigned.slice(1).map((member) => member.title || shortSid(member.id)).join('、') || '（暂无）'}。`,
+                '成员通讯录（派活用 session_ask 的 to=contactId，下方 contactId 可直接复制；也可用 session_directory group=群名 查询）：',
+                memberDirectoryText(
+                  assigned.slice(1).map((member) => sessionsNow.find((session) => session.id === member.id) || member)
+                ),
                 createdWorkspace ? `（本任务新开了工作区：${createdWorkspace}）` : '',
                 `路由理由：${decision.reason}`,
                 '',
                 text,
                 '',
-                `请用 session_ask（mode=task）把任务拆给群成员并跟进。中间进度只发本任务群（不要 replyTo 世界请求）；全部完成后，用 session_share（kind=handoff、replyTo=${request.entry.id}、files=文件路径）写【任务完成】汇总，系统才会发布到世界并结算积分。`
+                `请用 session_ask（mode=task）把任务拆给群成员并跟进（to 支持 contactId / 短 id / handle / 标题，不限完整 id）。中间进度只发本任务群（不要 replyTo 世界请求）；全部完成后，用 session_share（kind=handoff、replyTo=${request.entry.id}、files=文件路径）写【任务完成】汇总，系统才会发布到世界并结算积分。`
               ]
                 .filter(Boolean)
                 .join('\n')
@@ -5307,6 +5621,18 @@ export function apply(ctx, config = {}) {
         .map((sessionId) => sessions.find((session) => session.id === sessionId))
         .filter(Boolean)
       const parsedMentions = parseMentionsInText(text, memberSessions)
+      if (parsedMentions.ambiguous.length) {
+        return {
+          ok: false,
+          error: [
+            '正文的 @ 指向不唯一，请改用 contactId 或完整 id 重新发送（不会替你猜）：',
+            ...parsedMentions.ambiguous.slice(0, 4).map(
+              (item) => `「@${item.token}」匹配到多个会话：\n- ` + item.candidates.slice(0, 8).map(describeSessionCandidate).join('\n- ')
+            ),
+            '可用 session_directory group=群名 查 contactId。'
+          ].join('\n')
+        }
+      }
       const mentionAll = payload.mentionAll === true || parsedMentions.all
       const requested = [
         ...(Array.isArray(payload.mentionSessionIds)
@@ -5320,6 +5646,7 @@ export function apply(ctx, config = {}) {
       targetIds = [...new Set(targetIds)]
       if (mentionAll) targetIds = targetIds.filter((sessionId) => sessionId !== maintainerStore.get())
       const titleById = new Map(sessions.map((session) => [session.id, session.title]))
+      const sessionById = new Map(sessions.map((session) => [session.id, session]))
       const titleOf = (sessionId) => titleById.get(sessionId) || shortSid(sessionId)
 
       // 多人任务：一个任务只能有一个组长；成员只交组长、不直接向用户汇报，避免“人人都是组长”。
@@ -5387,6 +5714,7 @@ export function apply(ctx, config = {}) {
         }
 
         const memberTitles = assigneeIds.map((sessionId) => titleOf(sessionId)).join('、')
+        const assigneeSessions = assigneeIds.map((sessionId) => sessionById.get(sessionId) || { id: sessionId, title: titleOf(sessionId) })
         let woken = 0
         const requestIds = []
         const coordinatorRequest = addEntry(
@@ -5412,9 +5740,15 @@ export function apply(ctx, config = {}) {
             `【群任务 · 你是唯一组长（用户指定）】群组「${group.name}」`,
             `任务：${text}`,
             `成员：${memberTitles || '(无)'}`,
+            ...(assigneeSessions.length
+              ? [
+                  '成员通讯录（派活用 session_ask 的 to=contactId，下方 contactId 可直接复制；也可用 session_directory group=群名 查询）：',
+                  memberDirectoryText(assigneeSessions)
+                ]
+              : []),
             '',
             '你的职责：',
-            '1. 先规划分工；成员目前**还没有被唤醒**，只有你用 session_ask mode=task 派活后他们才会收到（派活会自动归属本任务，避免同一任务被重复执行）；',
+            '1. 先规划分工；成员目前**还没有被唤醒**，只有你用 session_ask mode=task 派活后他们才会收到（派活会自动归属本任务，避免同一任务被重复执行；to 支持 contactId / 短 id / handle / 标题，不限完整 id）；',
             '2. 收集成员提交的内容；',
             `3. 最后用 session_share（kind=handoff、group=${group.name}、replyTo=${coordinatorRequest.entry.id}、files=…）向用户提交唯一汇总。`,
             '注意：成员不会直接向用户汇报；只有你是组长，不要让成员替你汇总，也不要重复成员已完成的工作。'
@@ -5431,8 +5765,8 @@ export function apply(ctx, config = {}) {
           messageId: taskId,
           task: {
             id: taskId,
-            coordinator: { id: coordinatorId, title: titleOf(coordinatorId) },
-            assignees: assigneeIds.map((sessionId) => ({ id: sessionId, title: titleOf(sessionId) })),
+            coordinator: { id: coordinatorId, title: titleOf(coordinatorId), contactId: contactIdOf(coordinatorId) },
+            assignees: assigneeIds.map((sessionId) => ({ id: sessionId, title: titleOf(sessionId), contactId: contactIdOf(sessionId) })),
             status: 'assigned'
           },
           woken,
@@ -5946,12 +6280,37 @@ export function apply(ctx, config = {}) {
     }
     if (action === 'group.add' || action === 'group.remove') {
       const wanted = String(payload.id || '').trim()
-      const sessionIds = Array.isArray(payload.sessionIds)
+      const refs = Array.isArray(payload.sessionIds)
         ? payload.sessionIds.filter((item) => typeof item === 'string' && item)
         : payload.sessionId
           ? [String(payload.sessionId)]
           : []
-      if (!sessionIds.length) return { ok: false, error: '缺少会话 id' }
+      if (!refs.length) return { ok: false, error: '缺少会话 id' }
+      // 面板可能传 contactId / 短 id / handle（从通讯录复制），统一解析成完整 id；
+      // 解析不了的引用直接报错、不改群组，避免把错的人拉进群。
+      let sessionIds = refs
+      try {
+        const sessionsNow = await buildSessionIndex()
+        if (sessionsNow.length) {
+          const resolved = []
+          const problems = []
+          for (const ref of refs) {
+            const outcome = resolveSessionRef(ref, sessionsNow)
+            if (outcome.ok) resolved.push(outcome.session.id)
+            else if (/^session-[0-9a-z-]{6,}$/i.test(ref)) resolved.push(ref)
+            else problems.push(outcome.error)
+          }
+          if (problems.length) {
+            return {
+              ok: false,
+              error: ['成员引用解析失败，本次未做任何改动：', ...problems, '可用 session_directory 查 contactId。'].join('\n')
+            }
+          }
+          sessionIds = [...new Set(resolved)]
+        }
+      } catch {
+        sessionIds = refs
+      }
       let affectedGroup = null
       let addedSessionIds = []
       let removedSessionIds = []

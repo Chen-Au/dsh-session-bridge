@@ -196,7 +196,7 @@ function assertJsonSchema(node, where) {
 }
 
 await check('恰好注册 session_share / session_board / session_ask', () => {
-  assert.deepEqual([...toolByName.keys()].sort(), ['group_member', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_discuss', 'session_identity', 'session_like', 'session_nudge', 'session_profile', 'session_share'])
+  assert.deepEqual([...toolByName.keys()].sort(), ['group_member', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_like', 'session_nudge', 'session_profile', 'session_share'])
   assert.equal(captured.harnessLogs.filter(([level]) => level === 'error').length, 0, '注册阶段不应有 error 级日志')
 })
 
@@ -346,15 +346,17 @@ await check('查重生效（相同内容不重复发布）', async () => {
 
 await check('session_board status 报告版本与注册结果', async () => {
   const result = String(await board.execute({ action: 'status' }, { agent: rootAgent }))
-  assert.match(result, /session-bridge v2\.8\.0/)
-  assert.match(result, /工具：session_share, session_ask, session_nudge, group_rule, session_like, session_discuss, session_identity, group_member, group_skill, session_profile, session_board/)
+  assert.match(result, /session-bridge v2\.8\.1/)
+  assert.match(result, /工具：session_share, session_ask, session_nudge, group_rule, session_like, session_discuss, session_identity, group_member, session_directory, group_skill, session_profile, session_board/)
+  assert.match(result, /通讯录：3 个主会话/)
+  assert.match(result, /contactId=aaaa0001/)
   assert.match(result, /看板 API=是/)
   assert.ok(!/失败=(session_share|session_board)/.test(result), '不应有注册失败的工具')
 })
 
 await check('子会话可只读查看经验板（list / status）', async () => {
   const status = String(await board.execute({ action: 'status' }, { agent: subAgent }))
-  assert.match(status, /session-bridge v2\.8\.0/)
+  assert.match(status, /session-bridge v2\.8\.1/)
   const listed = String(await board.execute({ action: 'list' }, { agent: subAgent }))
   assert.match(listed, /跨会话经验板/)
 })
@@ -449,7 +451,7 @@ await check('GET state 返回规则/群组/会话/送达结构', async () => {
   const { res, json } = await callState()
   assert.equal(res.out.status, 200)
   assert.equal(json.ok, true)
-  assert.equal(json.version, '2.8.0')
+  assert.equal(json.version, '2.8.1')
   assert.ok(Array.isArray(json.rules) && json.rules.length >= 1)
   assert.ok(Array.isArray(json.groups))
   assert.ok(Array.isArray(json.sessions) && json.sessions.length >= 2)
@@ -1058,8 +1060,8 @@ await check('面板命令：删除规矩与群组', async () => {
 
 await check('插件启动凭证写入正确（工具/注册/版本/API）', () => {
   const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))
-  assert.equal(receipt.version, '2.8.0')
-  assert.deepEqual(receipt.tools.slice().sort(), ['group_member', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_discuss', 'session_identity', 'session_like', 'session_nudge', 'session_profile', 'session_share'])
+  assert.equal(receipt.version, '2.8.1')
+  assert.deepEqual(receipt.tools.slice().sort(), ['group_member', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_like', 'session_nudge', 'session_profile', 'session_share'])
   assert.deepEqual(receipt.failedTools, [])
   assert.equal(receipt.registration.section, true)
   assert.equal(receipt.registration.context, true)
@@ -1371,8 +1373,289 @@ await check('面板设置：config.update 写入 settings.json 并立即生效',
   assert.equal(saved.injectMode, 'targeted')
 })
 
+// ---------------------------------------------------------------- F. 通讯录与稳健会话引用解析（v2.8.1）
+// 复现场景：组长拿到短 id「4f51e9」，实际会话是 session-4f51e99f-…；
+// 旧版只支持「完整 id / startsWith / 标题包含」，所以 4f51e9 解析不到、只能退回给值班员。
+console.log('== F. 通讯录与稳健会话引用解析（v2.8.1）')
+const contactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-bridge-contacts-'))
+const UUID_A = 'session-4f51e99f-91a8-4255-b3cf-e71e32323230'
+const UUID_B = 'session-77aa1111-0000-4000-8000-aaaaaaaaaaaa'
+const UUID_C = 'session-77aa2222-0000-4000-8000-bbbbbbbbbbbb'
+const DIR_ROOT = 'session-b0b0b0b0'
+const contactCaptured = { tools: [], sections: [], contexts: [], listeners: [], routes: [], followups: [] }
+const contactAgent = (id) => ({
+  id,
+  status: 'idle',
+  session: { id, header: { cwd: CWD, createdAt: 1 } },
+  followup(message) {
+    contactCaptured.followups.push({ sessionId: this.id, message })
+  }
+})
+const dirRoot = contactAgent(DIR_ROOT)
+const uuidAgentA = contactAgent(UUID_A)
+const uuidAgentB = contactAgent(UUID_B)
+const uuidAgentC = contactAgent(UUID_C)
+const contactAgents = [dirRoot, uuidAgentA, uuidAgentB, uuidAgentC]
+const contactTitles = {
+  [DIR_ROOT]: '主编排会话',
+  [UUID_A]: 'shoot_game 性能优化',
+  [UUID_B]: '审稿任务-上',
+  [UUID_C]: '审稿任务-下'
+}
+const fakeSessionQuery3 = {
+  async listSessions() {
+    return contactAgents.map((agent) => ({ header: agent.session.header, live: true, persisted: true, formatStatus: 'current' }))
+  },
+  async readTitleSnapshots(ids) {
+    return ids.map((id) => ({
+      sessionId: id,
+      status: 'fulfilled',
+      value: { session: { id }, ...(contactTitles[id] ? { title: { title: contactTitles[id] } } : {}) }
+    }))
+  }
+}
+fs.writeFileSync(
+  path.join(contactDir, 'identities.json'),
+  JSON.stringify(
+    {
+      sessions: {
+        [DIR_ROOT]: { sessionId: DIR_ROOT, handle: '值班员', avatar: '🛰️' },
+        [UUID_A]: { sessionId: UUID_A, handle: '远山', avatar: '🦊' },
+        [UUID_B]: { sessionId: UUID_B, handle: '小北', avatar: '🐼' },
+        [UUID_C]: { sessionId: UUID_C, handle: '小南', avatar: '🐯' }
+      }
+    },
+    null,
+    2
+  ),
+  'utf8'
+)
+fs.writeFileSync(
+  path.join(contactDir, 'groups.json'),
+  JSON.stringify(
+    {
+      version: 1,
+      groups: [
+        {
+          id: 'g-dir',
+          name: '性能组',
+          workspace: CWD,
+          goal: '性能优化交付',
+          managerSessionId: DIR_ROOT,
+          sessionIds: [DIR_ROOT, UUID_A, UUID_B, UUID_C],
+          createdAt: 0,
+          updatedAt: 0
+        }
+      ]
+    },
+    null,
+    2
+  ),
+  'utf8'
+)
+fs.writeFileSync(
+  path.join(contactDir, 'permissions.json'),
+  JSON.stringify({ grants: { [DIR_ROOT]: [UUID_A, UUID_B, UUID_C] } }, null, 2),
+  'utf8'
+)
+const fakeWebServer3 = {
+  register(route) {
+    contactCaptured.routes.push(route)
+    return () => {}
+  }
+}
+const ctx3 = {
+  tools: {
+    register(definition) {
+      contactCaptured.tools.push(definition)
+      return () => {}
+    }
+  },
+  systemPrompt: {
+    section(options) {
+      contactCaptured.sections.push(options)
+      return () => {}
+    },
+    context(options) {
+      contactCaptured.contexts.push(options)
+      return () => {}
+    }
+  },
+  agents: {
+    roots: () => contactAgents,
+    list: () => contactAgents,
+    get: (id) => contactAgents.find((agent) => agent.id === id)
+  },
+  sessions: { list: () => contactAgents.map((agent) => agent.session) },
+  get(name) {
+    if (name === 'sessionQuery') return fakeSessionQuery3
+    if (name === 'webServer') return fakeWebServer3
+    return undefined
+  },
+  effect(callback) {
+    const disposer = callback()
+    return typeof disposer === 'function' ? disposer : () => {}
+  },
+  on() {
+    return () => {}
+  },
+  logger: { info() {}, warn() {}, error() {} }
+}
+plugin.apply(ctx3, { boardDir: contactDir, injectMode: 'broadcast', autoPrompt: false })
+const toolByName3 = new Map(contactCaptured.tools.map((tool) => [tool.name, tool]))
+const routeHandler3 = (path) => contactCaptured.routes.find((route) => route.path === path)?.handler
+const callState3 = async () => {
+  const res = fakeRes()
+  await routeHandler3('/api/session-bridge/state')(fakeReq(), res)
+  return { res, json: JSON.parse(res.out.body) }
+}
+const callCommand3 = async (command) => {
+  const res = fakeRes()
+  await routeHandler3('/api/session-bridge/command')(
+    fakeReq({
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-session-bridge-action': '1' },
+      body: JSON.stringify(command)
+    }),
+    res
+  )
+  return { res, json: JSON.parse(res.out.body) }
+}
+
+await check('session_directory：通讯录字段齐全，支持 group/query 过滤', async () => {
+  const dirTool = toolByName3.get('session_directory')
+  assert.ok(dirTool, '缺少 session_directory 工具')
+  const all = String(await dirTool.execute({}, { agent: dirRoot }))
+  assert.match(all, /跨会话通讯录（4 个主会话）/)
+  assert.ok(all.includes('contactId=4f51e99f'), '应包含 contactId')
+  assert.ok(all.includes(`fullId=${UUID_A}`), '应包含完整 id')
+  assert.match(all, /handle=远山/)
+  assert.match(all, /title=shoot_game 性能优化/)
+  assert.match(all, /live=yes/)
+  assert.match(all, /status=idle/)
+  assert.match(all, /群组=性能组/)
+  assert.match(all, /worldEligible=yes/)
+  assert.match(all, /cwd=/)
+  const grouped = String(await dirTool.execute({ group: '性能组' }, { agent: dirRoot }))
+  assert.match(grouped, /群「性能组」通讯录（4 个主会话）/)
+  const queried = String(await dirTool.execute({ query: '4f51e9' }, { agent: dirRoot }))
+  assert.ok(queried.includes('4f51e99f'))
+  assert.ok(!queried.includes(UUID_B), 'query 应过滤掉不匹配的会话')
+  const byHandle = String(await dirTool.execute({ query: '远山' }, { agent: dirRoot }))
+  assert.ok(byHandle.includes('4f51e99f'), 'query 支持 handle')
+})
+
+await check('session_ask：短 id / contactId / 无前缀 id / handle / 标题 / 唯一后缀都能解析', async () => {
+  const askTool3 = toolByName3.get('session_ask')
+  assert.ok(askTool3, '缺少 session_ask')
+  const refs = [
+    '4f51e9', // 短 id（6 位压缩前缀，旧版这里解析失败）
+    '4f51e99f', // contactId
+    '4f51e99f-91a8-4255-b3cf-e71e32323230', // 无 session- 前缀的完整 id
+    '远山', // handle
+    'shoot_game 性能优化', // 标题
+    '323230' // 唯一后缀
+  ]
+  for (const [index, ref] of refs.entries()) {
+    contactCaptured.followups.length = 0
+    const out = String(
+      await askTool3.execute({ group: '性能组', text: `第 ${index + 1} 次询问（${ref}）现在进度如何？`, to: ref }, { agent: dirRoot })
+    )
+    assert.match(out, /已向群组「性能组」发出探测/, `${ref} 应解析成功：${out}`)
+    assert.equal(contactCaptured.followups.length, 1, `${ref} 应唤醒一个会话`)
+    assert.equal(contactCaptured.followups[0].sessionId, UUID_A, `${ref} 应解析到 4f51e99f…`)
+  }
+})
+
+await check('session_ask：歧义输入返回候选且不唤醒', async () => {
+  const askTool3 = toolByName3.get('session_ask')
+  contactCaptured.followups.length = 0
+  const out = String(await askTool3.execute({ group: '性能组', text: '现在进度如何？', to: '77aa' }, { agent: dirRoot }))
+  assert.match(out, /指向不唯一/)
+  assert.ok(out.includes('77aa1111'), '候选应包含 77aa1111')
+  assert.ok(out.includes('77aa2222'), '候选应包含 77aa2222')
+  assert.equal(contactCaptured.followups.length, 0, '歧义时不应唤醒任何会话')
+})
+
+await check('session_ask：任务派活回复带成员通讯录（contactId）', async () => {
+  const askTool3 = toolByName3.get('session_ask')
+  contactCaptured.followups.length = 0
+  const out = String(
+    await askTool3.execute({ group: '性能组', text: '请把压测数据补充到性能报告里', to: '4f51e99f', mode: 'task' }, { agent: dirRoot })
+  )
+  assert.match(out, /发出任务分配/)
+  assert.match(out, /群成员通讯录/)
+  assert.ok(out.includes('77aa1111'), '通讯录应含其他成员 contactId')
+  assert.equal(contactCaptured.followups.length, 1)
+  const message = String(contactCaptured.followups[0].message.content[0].text)
+  assert.match(message, /replyTo=/, '任务分配才叮嘱如何回复')
+})
+
+await check('group_member：列表显示 contactId，可用 contactId/短 id 拉人，歧义不落盘', async () => {
+  const memberTool = toolByName3.get('group_member')
+  assert.ok(memberTool, '缺少 group_member')
+  const listed = String(await memberTool.execute({ action: 'list', group: '性能组' }, { agent: dirRoot }))
+  assert.match(listed, /contactId=4f51e99f/)
+  assert.ok(listed.includes(`完整 id=${UUID_A}`))
+  const removed = String(await memberTool.execute({ action: 'remove', group: '性能组', sessions: ['77aa11'] }, { agent: dirRoot }))
+  assert.match(removed, /已移出/)
+  let state = await callState3()
+  let groupNow = state.json.groups.find((group) => group.id === 'g-dir')
+  assert.ok(!groupNow.sessionIds.includes(UUID_B), '短 id 应能移出成员')
+  const added = String(await memberTool.execute({ action: 'add', group: '性能组', sessions: ['77aa1111'] }, { agent: dirRoot }))
+  assert.match(added, /已拉入/)
+  state = await callState3()
+  groupNow = state.json.groups.find((group) => group.id === 'g-dir')
+  assert.ok(groupNow.sessionIds.includes(UUID_B), 'contactId 应能把成员加回')
+  const ambiguous = String(await memberTool.execute({ action: 'remove', group: '性能组', sessions: ['77aa'] }, { agent: dirRoot }))
+  assert.match(ambiguous, /解析失败/)
+  assert.ok(ambiguous.includes('77aa1111') && ambiguous.includes('77aa2222'), '歧义应列出候选')
+  state = await callState3()
+  assert.equal(state.json.groups.find((group) => group.id === 'g-dir').sessionIds.length, 4, '歧义时群成员不应被改动')
+})
+
+await check('面板 group.add/remove 支持 contactId', async () => {
+  const removed = await callCommand3({ action: 'group.remove', payload: { id: 'g-dir', sessionIds: [UUID_B] } })
+  assert.equal(removed.json.ok, true, JSON.stringify(removed.json))
+  const added = await callCommand3({ action: 'group.add', payload: { id: 'g-dir', sessionIds: ['77aa1111'] } })
+  assert.equal(added.json.ok, true, JSON.stringify(added.json))
+  assert.ok(added.json.state.groups.find((group) => group.id === 'g-dir').sessionIds.includes(UUID_B))
+  const ambiguous = await callCommand3({ action: 'group.add', payload: { id: 'g-dir', sessionIds: ['77aa'] } })
+  assert.equal(ambiguous.json.ok, false)
+  assert.match(String(ambiguous.json.error), /解析失败/)
+})
+
+await check('世界任务正文 @ 支持 contactId/短 id；歧义返回候选', async () => {
+  contactCaptured.followups.length = 0
+  const ok = await callCommand3({ action: 'world.post', payload: { text: '@4f51e9 把性能分析整理成报告' } })
+  assert.equal(ok.json.ok, true, JSON.stringify(ok.json))
+  assert.equal(ok.json.router.engine, 'mentions')
+  assert.ok(ok.json.assigned.some((item) => item.id === UUID_A), '应派给 4f51e99f…')
+  assert.ok(contactCaptured.followups.some((item) => item.sessionId === UUID_A), '应唤醒被 @ 的会话')
+  const ambiguous = await callCommand3({ action: 'world.post', payload: { text: '@77aa 处理一下这份报告' } })
+  assert.equal(ambiguous.json.ok, false, JSON.stringify(ambiguous.json))
+  assert.match(String(ambiguous.json.error), /指向不唯一/)
+  assert.ok(String(ambiguous.json.error).includes('77aa1111') && String(ambiguous.json.error).includes('77aa2222'))
+})
+
+await check('群任务派活消息带成员通讯录（避免组长再猜短 id）', async () => {
+  contactCaptured.followups.length = 0
+  const res = await callCommand3({
+    action: 'group.post',
+    payload: { id: 'g-dir', text: '大家一起审阅性能报告并给出结论', mentionAll: true, coordinatorId: UUID_B }
+  })
+  assert.equal(res.json.ok, true, JSON.stringify(res.json))
+  const coordinatorFollowup = contactCaptured.followups.find((item) => item.sessionId === UUID_B)
+  assert.ok(coordinatorFollowup, '应唤醒组长')
+  const message = String(coordinatorFollowup.message.content[0].text)
+  assert.match(message, /成员通讯录/)
+  assert.ok(message.includes('4f51e99f'), '通讯录应含成员 contactId')
+  assert.match(message, /session_ask 的 to=contactId/)
+})
+
 // ---------------------------------------------------------------- 收尾
 fs.rmSync(targetedDir, { recursive: true, force: true })
+fs.rmSync(contactDir, { recursive: true, force: true })
 fs.rmSync(boardDir, { recursive: true, force: true })
 console.log('')
 if (failures.length) {

@@ -247,6 +247,13 @@
   .member .avatar { flex: none; }
   .member .who small { color: var(--muted); font-size: 10.5px; }
   .member .actions { display: flex; gap: 6px; }
+  .contactid {
+    display: inline-block; font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 10px; color: var(--mint); background: rgba(95,242,200,.08);
+    border: 1px solid rgba(95,242,200,.28); border-radius: 6px; padding: 0 4px;
+    cursor: pointer; user-select: all; line-height: 1.5;
+  }
+  .contactid:hover { background: rgba(95,242,200,.18); }
   .badge-manager { color: var(--gold); border: 1px solid rgba(255,209,102,.4); border-radius: 999px; padding: 1px 7px; font-size: 9.5px; }
   .empty { color: var(--dim); text-align: center; padding: 36px 12px; border: 1px dashed var(--line); border-radius: var(--radius); }
   .toast-wrap { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 20; }
@@ -485,6 +492,43 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
   }
   function short(value, n) { var s = String(value || ''); return s.length > n ? s.slice(0, n) + '…' : s }
+  /** contactId：与宿主端 contactIdOf 一致——完整 id 去掉 session- 前缀后的前 8 位（稳定短 ID）。 */
+  function contactIdOf(id) {
+    var text = String(id || '')
+    if (text.indexOf('session-') === 0) text = text.slice('session-'.length)
+    return text.replace(/[^0-9a-zA-Z]/g, '').toLowerCase().slice(0, 8)
+  }
+  /** 优先用后端下发的 contactId，历史快照没有时本地按同一规则推导。 */
+  function contactIdFor(id) {
+    var session = sessionById[id]
+    return (session && session.contactId) || contactIdOf(id)
+  }
+  function fallbackCopy(text) {
+    try {
+      var area = document.createElement('textarea')
+      area.value = text
+      area.style.position = 'fixed'
+      area.style.opacity = '0'
+      document.body.appendChild(area)
+      area.select()
+      var ok = document.execCommand('copy')
+      document.body.removeChild(area)
+      toast(ok ? '已复制 contactId：' + text : '复制失败，请手动选择')
+    } catch (error) {
+      toast('复制失败：' + (error && error.message ? error.message : error), true)
+    }
+  }
+  function copyText(text) {
+    var value = String(text || '')
+    if (!value) return
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(value).then(function () { toast('已复制 contactId：' + value) }, function () { fallbackCopy(value) })
+        return
+      }
+    } catch (error) { /* 忽略，走兜底 */ }
+    fallbackCopy(value)
+  }
   function avatarHtml(value) {
     var avatar = String(value || '')
     if (/^data:image\//i.test(avatar)) return '<img src="' + esc(avatar) + '" alt="" />'
@@ -556,11 +600,12 @@
       var session = sessionById[id] || {}
       return {
         id: id,
+        contactId: contactIdFor(id),
         handle: who.handle,
         avatar: who.avatar,
         role: who.role || '',
         title: session.title || '',
-        search: (who.handle + ' ' + (who.role || '') + ' ' + (session.title || '')).toLowerCase()
+        search: (who.handle + ' ' + (who.role || '') + ' ' + (session.title || '') + ' ' + contactIdFor(id)).toLowerCase()
       }
     })
   }
@@ -574,11 +619,12 @@
         var who = identityOf(session.id)
         return {
           id: session.id,
+          contactId: session.contactId || contactIdOf(session.id),
           handle: who.handle,
           avatar: who.avatar,
           role: who.role || '会话',
           title: session.title || '',
-          search: (who.handle + ' ' + (who.role || '') + ' ' + (session.title || '')).toLowerCase()
+          search: (who.handle + ' ' + (who.role || '') + ' ' + (session.title || '') + ' ' + (session.contactId || contactIdOf(session.id))).toLowerCase()
         }
       })
   }
@@ -627,7 +673,7 @@
       ? list.map(function (item, index) {
           return '<div class="mention-item' + (index === mentionState.index ? ' active' : '') + '" data-mention-id="' + esc(item.id) + '" data-mention-handle="' + esc(item.handle) + '">' +
             '<div class="avatar">' + avatarHtml(item.avatar) + '</div>' +
-            '<div class="mi-main"><b>' + esc(item.handle) + '</b><small>' + esc(item.title || '') + '</small></div>' +
+            '<div class="mi-main"><b>' + esc(item.handle) + '</b><small>' + esc(item.title || '') + (item.contactId ? ' · ' + esc(item.contactId) : '') + '</small></div>' +
             (item.role ? '<span class="mi-role">' + esc(item.role) + '</span>' : '') +
             '</div>'
         }).join('')
@@ -829,7 +875,7 @@
       return
     }
     $('groupTitle').textContent = '群聊 · ' + group.name
-    $('groupHint').textContent = '成员 ' + group.sessionIds.length + ' 人 · 发起讨论会唤醒全员聊两句'
+    $('groupHint').textContent = '成员 ' + group.sessionIds.length + ' 人 · 点成员行里的 contactId 可复制（session_ask 的 to 直接用它）· 发起讨论会唤醒全员聊两句'
     $('mentionBar').innerHTML = '<span class="hint">@ 插入：</span>' + group.sessionIds.map(function (id) {
       var who = identityOf(id)
       return '<button class="mention-chip" data-mention="' + esc(who.handle) + '">' + avatarHtml(who.avatar) + ' ' + esc(who.handle) + '</button>'
@@ -872,10 +918,12 @@
       var who = identityOf(id)
       var session = sessionById[id] || {}
       var manager = group.managerSessionId === id
+      var cid = contactIdFor(id)
+      var meta = (who.role ? '<span class="role">' + esc(who.role) + '</span> · ' : '') + (who.style ? esc(who.style) + ' · ' : '') + ((session.points || 0) >= 0 ? '+' : '') + (session.points || 0) + ' 分'
       return '<div class="member compact">' +
         '<div class="avatar clickable" data-jump="' + esc(id) + '" data-title="' + esc(session.title || who.handle) + '">' + avatarHtml(who.avatar) + '</div>' +
         '<div class="who"><b>' + esc(who.handle) + (manager ? ' <span class="badge-manager">群管理</span>' : '') + '</b>' +
-        '<small>' + (who.role ? '<span class="role">' + esc(who.role) + '</span> · ' : '') + (who.style ? esc(who.style) + ' · ' : '') + ((session.points || 0) >= 0 ? '+' : '') + (session.points || 0) + ' 分</small></div>' +
+        '<small><code class="contactid" data-copy="' + esc(cid) + '" title="点击复制 contactId（可直接用作 session_ask 的 to）">' + esc(cid) + '</code> · ' + meta + '</small></div>' +
         '<div class="actions"><button class="btn small mint" data-like="' + esc(id) + '">👍</button>' +
         '<button class="btn small" data-card="' + esc(id) + '">⋯</button></div></div>'
         }).join('')
@@ -1313,6 +1361,8 @@
       if (jump) jumpToSession(jump.getAttribute('data-jump'), jump.getAttribute('data-title'))
     })
     $('memberList').addEventListener('click', function (event) {
+      var copy = event.target.closest('[data-copy]')
+      if (copy) { copyText(copy.getAttribute('data-copy')); return }
       var like = event.target.closest('[data-like]')
       if (like) { likeMember(like.getAttribute('data-like')); return }
       var jump = event.target.closest('[data-jump]')

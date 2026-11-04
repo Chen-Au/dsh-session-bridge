@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.8.0-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.8.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 
@@ -56,7 +56,7 @@
 - 多人任务（≥2 人）会自动创建协作群，新成员直接进群；
 - 新成员命名采用「项目名 · 中文代号」，并自动配头像/角色。
 
-- 世界任务输入框支持 `@` 光标联想，正文 @ 可直接把任务派给指定会话；
+- 世界任务输入框支持 `@` 光标联想，正文 @ 可直接把任务派给指定会话（`@` 支持 handle / contactId / 短 id / 标题）；
 - 说「要新成员/新会话」时由宿主创建**根会话**（并尽量按正文里的工作区名入驻），不会把现有 agent 的子代理冒充成员；
 - 新成员会收到报到与申报提示，主责成员执行任务。
 
@@ -73,6 +73,14 @@
 - 通过后才创建并唤醒；驳回则不创建；
 - 仅拦截插件自动创建，不影响你手动新建对话；
 - 远程访问推荐 Tailscale 私有组网：不需要公网 IP，`docs/REMOTE_TAILSCALE.md` 有完整步骤与安全检查。
+
+### 8. 通讯录与短 ID 解析（v2.8.1）
+
+- 每个主会话都有稳定的 **contactId**：完整 id 去掉 `session-` 前缀后的前 8 位（例如 `session-4f51e99f-…` → `4f51e99f`），确定性推导、可跨消息复制；
+- 新增工具 **`session_directory`**：列出通讯录（contactId、完整 id、handle、标题、工作区、在线/运行状态、所属群组、是否可派世界任务），支持 `group` / `query` 过滤，任何主会话可用；
+- **统一会话引用解析**：`session_ask` / `session_nudge` 的 `to`、`group_member` 的 `sessions`、面板加/移成员、世界任务正文 `@` 都支持完整 id、无前缀 id、contactId、短 id（6 位压缩前缀）、唯一前后缀、handle、标题；命中多个时**返回候选并明确报错**，不会静默选错；
+- 群任务派活消息自动附带成员通讯录（contactId + handle + 标题），面板群成员列表显示可点击复制的 contactId，组长不必再猜短 ID；
+- **修复**：此前 6 位短 id（如 `4f51e9`）无法用于 `session_ask` 的 `to`（旧逻辑只支持完整 id / startsWith / 标题），只能退回给值班员；现在可直接派活。
 
 ---
 

@@ -124,6 +124,27 @@ window.__ModuleLoader__.load({
       return s.length > 8 ? s.slice(-8) : s
     }
 
+    /** contactId：与宿主端 contactIdOf 一致——完整 id 去掉 session- 前缀后的前 8 位（稳定短 ID，可直接复制给 session_ask 的 to）。 */
+    function contactIdOf(id) {
+      var s = asString(id)
+      if (s === '') return ''
+      if (s.indexOf('session-') === 0) s = s.slice('session-'.length)
+      return s.replace(/[^0-9a-zA-Z]/g, '').toLowerCase().slice(0, 8)
+    }
+
+    /** 点击复制 contactId（剪贴板不可用时静默失败，不阻塞面板）。 */
+    function copyContactId(text) {
+      var value = asString(text)
+      if (value === '') return
+      try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(value)
+        }
+      } catch (error) {
+        /* ignore */
+      }
+    }
+
     /** 路径最后一段，用于会话行的紧凑显示。 */
     function cwdTail(cwd) {
       var s = asString(cwd)
@@ -258,6 +279,7 @@ window.__ModuleLoader__.load({
       if (status !== 'running' && status !== 'idle') status = 'idle'
       return {
         id: asString(src.id),
+        contactId: asString(src.contactId) || contactIdOf(src.id),
         title: asString(src.title) || '（未命名会话）',
         cwd: asString(src.cwd),
         live: src.live === true,
@@ -1131,7 +1153,7 @@ window.__ModuleLoader__.load({
         { style: mergeStyle(styles.pickerBox, props.style) },
         sessions.map(function (session) {
           var checked = selected.indexOf(session.id) >= 0
-          var label = session.title + '（' + shortId(session.id) + '）'
+          var label = session.title + '（' + (session.contactId || contactIdOf(session.id)) + '）'
           return h(
             'label',
             { key: 'pick-' + session.id, style: styles.checkRow, title: session.cwd || session.id },
@@ -1684,7 +1706,50 @@ window.__ModuleLoader__.load({
               (session.avatar || '👤') + ' ' + session.title,
               props.group && props.group.managerSessionId === session.id ? '（群管理）' : ''
             ),
-            session.handle ? h('div', { style: mergeStyle(styles.rowMuted, { fontSize: 10.5 }) }, 'ID：' + session.handle) : null,
+            session.handle
+              ? h(
+                  'div',
+                  { style: mergeStyle(styles.rowMuted, { fontSize: 10.5 }) },
+                  'ID：' + session.handle,
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      title: 'contactId：点击复制（可直接用作 session_ask 的 to）',
+                      onClick: function () {
+                        copyContactId(session.contactId || contactIdOf(session.id))
+                      },
+                      style: mergeStyle(styles.chip || {}, {
+                        cursor: 'pointer',
+                        marginLeft: 6,
+                        fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
+                        fontSize: 10
+                      })
+                    },
+                    session.contactId || contactIdOf(session.id)
+                  )
+                )
+              : h(
+                  'div',
+                  { style: mergeStyle(styles.rowMuted, { fontSize: 10.5 }) },
+                  'contactId：',
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      title: '点击复制（可直接用作 session_ask 的 to）',
+                      onClick: function () {
+                        copyContactId(session.contactId || contactIdOf(session.id))
+                      },
+                      style: mergeStyle(styles.chip || {}, {
+                        cursor: 'pointer',
+                        fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
+                        fontSize: 10
+                      })
+                    },
+                    session.contactId || contactIdOf(session.id)
+                  )
+                ),
             props.profile && props.profile.summary
               ? h(
                   'div',
@@ -1693,7 +1758,18 @@ window.__ModuleLoader__.load({
                 )
               : h('div', { style: mergeStyle(styles.rowMuted, { fontSize: 10.5 }) }, '未申报')
           ),
-          h('span', { style: mergeStyle(styles.rowMuted, { flex: 'none' }) }, shortId(session.id)),
+          h('span', {
+            key: 'contact-' + session.id,
+            title: 'contactId：点击复制（可直接用作 session_ask 的 to）',
+            onClick: function () {
+              copyContactId(session.contactId || contactIdOf(session.id))
+            },
+            style: mergeStyle(styles.rowMuted, {
+              flex: 'none',
+              cursor: 'pointer',
+              fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace'
+            })
+          }, session.contactId || contactIdOf(session.id)),
           h(
             'span',
             { style: mergeStyle(styles.rowMuted, { flex: 'none', fontSize: 10.5 }) },
@@ -3024,7 +3100,18 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { style: styles.rowLine },
-          h('span', { style: mergeStyle(styles.rowMuted, { flex: 'none' }) }, shortId(session.id)),
+          h('span', {
+            key: 'contact-' + session.id,
+            title: 'contactId：点击复制（可直接用作 session_ask 的 to）',
+            onClick: function () {
+              copyContactId(session.contactId || contactIdOf(session.id))
+            },
+            style: mergeStyle(styles.rowMuted, {
+              flex: 'none',
+              cursor: 'pointer',
+              fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace'
+            })
+          }, session.contactId || contactIdOf(session.id)),
           h('span', { style: mergeStyle(styles.rowMuted, { flex: 1 }), title: session.cwd || '' }, cwdLabel || '（未知工作区）')
         ),
         props.profile && props.profile.summary

@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.8.0-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.8.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 **English** | [简体中文](README.md)
@@ -68,7 +68,7 @@ The plugin does not take over the right sidebar. Click **"星桥"** at the botto
 
 - Multi-person tasks automatically create a task group; newcomers join it directly.
 - New members are named `project · codename` and receive an avatar and role automatically.
-- `@` autocomplete in the world task input; typing `@` in the body can assign the task to a specific session.
+- `@` autocomplete in the world task input; typing `@` in the body can assign the task to a specific session (handle, contactId, short id, or title).
 - Asking for "new members / new sessions" creates **root sessions** via the host (not sub-agents pretending to be members), preferably in the workspace named in the task.
 - Newcomers receive a check-in and profile prompt; the lead member executes the task.
 
@@ -86,6 +86,14 @@ The plugin does not take over the right sidebar. Click **"星桥"** at the botto
 - The review card shows the task text, workspace path, number of sessions, and the permission note.
 - Approve to create and wake the task; reject to cancel. Manual conversations are not intercepted.
 - For remote access without a public IP, the recommended setup is a private **Tailscale** tailnet; see [docs/REMOTE_TAILSCALE.md](./docs/REMOTE_TAILSCALE.md).
+
+### 8. Contact directory and robust session references (v2.8.1)
+
+- Every root session has a stable **contactId**: the first 8 characters of the session id after the `session-` prefix (`session-4f51e99f-…` → `4f51e99f`). It is derived deterministically and is safe to copy between messages.
+- New **`session_directory`** tool lists the directory — contactId, full id, handle, title, workspace, live/status, groups, and world eligibility — with optional `group` / `query` filters. Any root session can call it.
+- **Unified session reference resolution**: the `to` argument of `session_ask` / `session_nudge`, the `sessions` argument of `group_member`, panel add/remove, and world-task `@` mentions all accept full ids, ids without the `session-` prefix, contactIds, 6-character short ids, unique prefixes/suffixes, handles, and titles. Ambiguous input returns the candidates and an explicit error instead of silently picking one.
+- Group task dispatch messages now include the member directory (contactId + handle + title), and the group member list shows a click-to-copy contactId, so coordinators no longer have to guess short ids.
+- **Fix**: 6-character short ids (e.g. `4f51e9`) previously failed to resolve in `session_ask` because the old matcher only accepted full ids, `startsWith`, and titles; tasks had to be bounced back to the on-duty session. They now dispatch directly.
 
 ## Install
 
