@@ -450,6 +450,7 @@
         <div class="group-topline">
           <div class="section-title" id="groupTitle">群聊</div>
           <span class="group-fold-summary" id="groupFoldSummary"></span>
+          <button class="btn group-fold-btn" id="groupDeleteBtn" title="删除当前群（不删除会话）">删除</button>
           <button class="btn group-fold-btn" id="groupFoldBtn" title="收起/展开群聊头部">收起</button>
         </div>
         <div class="group-foldable" id="groupFoldable">
@@ -544,6 +545,20 @@
     <div id="taskDetail"></div>
     <div class="bar" style="margin-top:12px">
       <button class="btn" id="taskDetailClose">关闭</button>
+    </div>
+  </div>
+</div>
+<div class="modal-mask" id="groupModal">
+  <div class="modal" style="width:min(520px,92vw)">
+    <h3>新建群聊</h3>
+    <p>先建群，再拉成员；建好后可直接在群内发布任务。</p>
+    <input id="groupName" maxlength="40" placeholder="群名（例：shoot_game · 招募协作）" />
+    <input id="groupWorkspace" placeholder="工作区路径（可选；留空用默认）" />
+    <div class="hint" style="margin:10px 0 5px">成员（可多选，之后也能用群管理拉人/踢人）</div>
+    <div class="task-members" id="groupMembers"></div>
+    <div class="bar" style="margin-top:12px">
+      <button class="btn" id="groupCreateCancel">取消</button>
+      <button class="btn primary" id="groupCreateBtn">创建群聊</button>
     </div>
   </div>
 </div>
@@ -1022,11 +1037,12 @@
   }
   function renderGroups() {
     var groups = state.groups || []
-    $('groupChips').innerHTML = groups.length
+    var groupAddBtn = '<button class="group-chip group-add" id="groupAddBtn" title="新建群聊">＋ 新建群</button>'
+    $('groupChips').innerHTML = (groups.length
       ? groups.map(function (group) {
           return '<button class="group-chip' + (group.id === currentGroupId ? ' active' : '') + '" data-group="' + esc(group.id) + '">' + esc(group.name) + '</button>'
         }).join('')
-      : '<div class="hint">还没有群组，先在世界页发任务或去侧栏建群。</div>'
+      : '<div class="hint">还没有群组，点右边「＋ 新建群」。</div>') + groupAddBtn
     var group = currentGroup()
     if (!group) {
       $('groupChat').innerHTML = '<div class="empty">暂无群组。</div>'
@@ -1305,6 +1321,53 @@
       '<div class="task-meta">' + coordinatorHtml + memberHtml + '</div>' +
       '<div class="task-actions"><button class="btn small" data-task-detail="' + esc(entry.id) + '">查看任务请求 / 状态</button></div>' +
       '</div></div>'
+  }
+  var groupDraft = { members: [] }
+  function renderGroupMembers() {
+    var candidates = (state.sessions || []).filter(function (s) { return s && s.isLead !== false && !s.internal })
+    $('groupMembers').innerHTML = candidates.length
+      ? candidates.map(function (s) {
+          var who = identityOf(s.id)
+          var checked = groupDraft.members.indexOf(s.id) >= 0
+          return '<label class="task-member"><input type="checkbox" data-group-member="' + esc(s.id) + '"' + (checked ? ' checked' : '') + ' />' +
+            '<span class="who">' + esc(who.handle) + '</span><small>' + esc(s.title || '') + ' · ' + esc(s.contactId || '') + '</small></label>'
+        }).join('')
+      : '<div class="hint">暂无可加入的主会话。</div>'
+  }
+  function openGroupModal() {
+    groupDraft.members = []
+    $('groupName').value = ''
+    $('groupWorkspace').value = (state && state.defaultWorkspace) || ''
+    renderGroupMembers()
+    $('groupModal').classList.add('open')
+    setTimeout(function () { $('groupName').focus() }, 30)
+  }
+  function createGroup() {
+    var name = $('groupName').value.trim()
+    if (!name) { toast('群名不能为空', true); return }
+    $('groupCreateBtn').disabled = true
+    command('group.create', { name: name, workspace: $('groupWorkspace').value.trim(), sessionIds: groupDraft.members.slice() }).then(function (result) {
+      $('groupCreateBtn').disabled = false
+      if (!result || result.ok === false) { toast('创建失败：' + (result && result.error || '未知错误'), true); return }
+      $('groupModal').classList.remove('open')
+      if (result.groupId) currentGroupId = result.groupId
+      toast('群聊已创建：' + name)
+      refresh()
+    }).catch(function (error) {
+      $('groupCreateBtn').disabled = false
+      toast('创建失败：' + (error && error.message ? error.message : error), true)
+    })
+  }
+  function deleteCurrentGroup() {
+    var group = currentGroup()
+    if (!group) { toast('先选择一个群', true); return }
+    if (!window.confirm('删除群「' + group.name + '」？成员和会话不会被删除。')) return
+    command('group.delete', { id: group.id }).then(function (result) {
+      if (!result || result.ok === false) { toast('删除失败：' + (result && result.error || '未知错误'), true); return }
+      currentGroupId = ''
+      toast('群聊已删除')
+      refresh()
+    })
   }
   function openTaskModal() {
     var group = currentGroup()
@@ -1674,6 +1737,17 @@
     $('reportBugBtn').addEventListener('click', reportBug)
     $('groupUrgent').addEventListener('click', function () { setUrgentMode(!urgentMode) })
     $('taskBtn').addEventListener('click', openTaskModal)
+    $('groupCreateCancel').addEventListener('click', function () { $('groupModal').classList.remove('open') })
+    $('groupCreateBtn').addEventListener('click', createGroup)
+    $('groupDeleteBtn').addEventListener('click', deleteCurrentGroup)
+    $('groupMembers').addEventListener('change', function (event) {
+      var cb = event.target.closest('[data-group-member]')
+      if (!cb) return
+      var id = cb.getAttribute('data-group-member')
+      var idx = groupDraft.members.indexOf(id)
+      if (cb.checked && idx < 0) groupDraft.members.push(id)
+      if (!cb.checked && idx >= 0) groupDraft.members.splice(idx, 1)
+    })
     $('taskCancel').addEventListener('click', function () { $('taskModal').classList.remove('open') })
     $('taskPublish').addEventListener('click', publishTask)
     $('taskCoordinator').addEventListener('change', function (event) { setTaskCoordinator(event.target.value) })
@@ -1784,6 +1858,7 @@
       true
     )
     $('groupChips').addEventListener('click', function (event) {
+      if (event.target.closest('#groupAddBtn')) { openGroupModal(); return }
       var chip = event.target.closest('[data-group]')
       if (!chip) return
       if (currentGroupId !== chip.getAttribute('data-group')) groupScrollState.groupId = ''
