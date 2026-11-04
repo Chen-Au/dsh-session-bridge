@@ -3367,6 +3367,135 @@ await (async () => {
     assert.ok(appHtml.includes('badge-urgent') || appHtml.includes('chip urgent'), 'app.html 应有加急标记样式')
   })
 })()
+// ---------------------------------------------------------------- L. 群任务显式发布（v2.9.4）
+// 场景：面板群聊点「发布任务」→ group.post { task:true, coordinatorId, assigneeIds }。
+// 旧版只在 @ 人数 >=2 时建任务，单人 @ 会退化成普通请求；讨论也不该触发任务。
+console.log('== L. 群任务显式发布（v2.9.4）')
+
+const taskCountOf = async () =>
+  (await callState3()).json.rules.filter((item) => item.kind === 'task' && item.groupId === 'g-dir').length
+
+await check('显式任务（单人）：task:true + 指定组长 → 任务卡 + 组长请求', async () => {
+  contactCaptured.followups.length = 0
+  const before = await taskCountOf()
+  const res = await callCommand3({
+    action: 'group.post',
+    payload: { id: 'g-dir', text: '把性能报告整理成一页结论，今晚前给我', task: true, coordinatorId: UUID_A }
+  })
+  assert.equal(res.json.ok, true, JSON.stringify(res.json))
+  assert.ok(res.json.task, '显式任务应返回 task')
+  assert.equal(res.json.task.coordinator.id, UUID_A, '单人任务组长就是被指定的人')
+  assert.deepEqual(res.json.task.assignees, [], '单人任务 assignees 必须为空')
+  assert.equal(res.json.woken, 1, '只唤醒组长')
+  assert.equal(contactCaptured.followups.length, 1)
+  assert.equal(contactCaptured.followups[0].sessionId, UUID_A)
+  assert.match(String(contactCaptured.followups[0].message.content[0].text), /本任务负责人/)
+  const task = res.json.state.rules.find((item) => item.id === res.json.task.id)
+  assert.ok(task && task.kind === 'task', '任务卡应写入看板')
+  assert.equal(task.coordinator, UUID_A)
+  assert.deepEqual(task.assignees, [])
+  assert.equal(task.taskStatus, 'assigned')
+  const request = res.json.state.rules.find(
+    (item) => item.kind === 'request' && item.taskId === task.id && item.taskRole === 'coordinator'
+  )
+  assert.ok(request, '应创建组长请求')
+  assert.deepEqual(request.requestTo, [UUID_A])
+  assert.equal(request.hiddenFromChat, true, '组长请求不刷聊天流，由任务卡查看')
+  assert.equal(await taskCountOf(), before + 1)
+})
+
+await check('显式任务（两人）：mode:task + 指定组长 + 成员多选', async () => {
+  contactCaptured.followups.length = 0
+  const res = await callCommand3({
+    action: 'group.post',
+    payload: {
+      id: 'g-dir',
+      text: '合并两份审稿意见，产出唯一修改清单',
+      mode: 'task',
+      coordinatorId: UUID_B,
+      assigneeIds: [UUID_A, UUID_C]
+    }
+  })
+  assert.equal(res.json.ok, true, JSON.stringify(res.json))
+  assert.equal(res.json.task.coordinator.id, UUID_B)
+  assert.deepEqual(res.json.task.assignees.map((item) => item.id).sort(), [UUID_A, UUID_C].sort())
+  assert.equal(res.json.woken, 1, '创建任务只唤醒组长')
+  assert.equal(contactCaptured.followups[0].sessionId, UUID_B)
+  assert.match(String(contactCaptured.followups[0].message.content[0].text), /唯一组长/)
+  const task = res.json.state.rules.find((item) => item.id === res.json.task.id)
+  assert.equal(task.coordinator, UUID_B)
+  assert.deepEqual([...task.assignees].sort(), [UUID_A, UUID_C].sort())
+  const grants = res.json.state.permissions[UUID_B] || []
+  assert.ok(grants.includes(UUID_A) && grants.includes(UUID_C), '组长应获得唤醒成员的临时授权')
+})
+
+await check('普通聊天 / 讨论不创建任务（保持旧行为）', async () => {
+  const before = await taskCountOf()
+  contactCaptured.followups.length = 0
+  const chat = await callCommand3({
+    action: 'group.post',
+    payload: { id: 'g-dir', text: '今天先同步一下进度', mentionSessionIds: [UUID_A] }
+  })
+  assert.equal(chat.json.ok, true, JSON.stringify(chat.json))
+  assert.equal(chat.json.task, undefined, '普通聊天不应返回 task')
+  assert.equal(await taskCountOf(), before, '普通聊天不应新增任务卡')
+  const discuss = await callCommand3({ action: 'group.discuss', payload: { id: 'g-dir', topic: '聊聊这周踩过的坑' } })
+  assert.equal(discuss.json.ok, true, JSON.stringify(discuss.json))
+  assert.equal(discuss.json.task, undefined, '讨论不创建任务')
+  assert.equal(await taskCountOf(), before)
+  assert.ok(
+    discuss.json.state.rules.some((item) => item.kind === 'chat' && /讨论/.test(item.title)),
+    '讨论仍应写入群聊'
+  )
+})
+
+await check('显式任务缺少组长 / 组长不在群内 / 正文为空 → 报错且不落任务', async () => {
+  const before = await taskCountOf()
+  const missing = await callCommand3({
+    action: 'group.post',
+    payload: { id: 'g-dir', text: '没有组长的任务', task: true, assigneeIds: [UUID_A] }
+  })
+  assert.equal(missing.json.ok, false, JSON.stringify(missing.json))
+  assert.match(String(missing.json.error), /组长/)
+  const outsider = await callCommand3({
+    action: 'group.post',
+    payload: { id: 'g-dir', text: '组长不在本群', task: true, coordinatorId: 'session-not-in-this-group' }
+  })
+  assert.equal(outsider.json.ok, false, JSON.stringify(outsider.json))
+  assert.match(String(outsider.json.error), /本群成员/)
+  const emptyText = await callCommand3({
+    action: 'group.post',
+    payload: { id: 'g-dir', text: '   ', task: true, coordinatorId: UUID_A }
+  })
+  assert.equal(emptyText.json.ok, false, '空任务正文必须报错')
+  // 普通成员（非群管理/维护者/面板）不能创建任务。
+  const unauthorized = await callCommand3({
+    action: 'group.post',
+    payload: { id: 'g-dir', text: '普通成员越权发布', task: true, coordinatorId: UUID_B, actorId: UUID_A }
+  })
+  assert.equal(unauthorized.json.ok, false, '普通成员无权发布任务')
+  assert.match(String(unauthorized.json.error), /只有群管理/)
+  assert.equal(await taskCountOf(), before, '校验失败不应创建任务')
+})
+
+await check('群任务 UI：发布任务入口 / 组长选择 / 任务卡可见（静态检查）', () => {
+  const candidates = [path.join(CWD, 'app.html'), path.join(CWD, 'dsh-plugin', 'app.html')]
+  const appFile = candidates.find((file) => fs.existsSync(file))
+  assert.ok(appFile, '找不到 app.html')
+  const html = fs.readFileSync(appFile, 'utf8')
+  assert.match(html, /id="taskBtn"/, '群输入区应有「发布任务」按钮')
+  assert.match(html, /发布任务/, '按钮/弹窗文案应包含发布任务')
+  assert.match(html, /id="taskModal"/, '应有发布任务弹窗')
+  assert.match(html, /id="taskCoordinator"/, '弹窗应有组长下拉')
+  assert.match(html, /id="taskMembers"/, '弹窗应有成员多选')
+  assert.match(html, /function openTaskModal/, '应有打开任务弹窗的逻辑')
+  assert.match(html, /function renderTaskCard/, '群聊应能渲染任务卡')
+  assert.match(html, /data-task-detail/, '任务卡应可点开查看任务请求/状态')
+  assert.match(html, /data-task-member/, '成员多选应有 checkbox')
+  assert.ok(!/entry\.kind !== 'task'/.test(html), '群聊不应再过滤掉任务卡')
+  assert.match(html, /entry\.kind === 'task'/, '群聊渲染应包含任务卡分支')
+})
+
 // ---------------------------------------------------------------- 收尾
 fs.rmSync(targetedDir, { recursive: true, force: true })
 fs.rmSync(contactDir, { recursive: true, force: true })

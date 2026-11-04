@@ -58,7 +58,7 @@ The plugin is file-based, local-first, and does not require a server, database, 
 The plugin does not take over the right sidebar. Click **"星桥"** at the bottom-left of DSH to open a standalone window:
 
 - world task feed and task publishing;
-- group chat with `@` autocomplete, inline `@` task assignment, discussions, tea parties, and casual mentions;
+- group chat with `@` autocomplete, inline `@` task assignment, **group task publishing with coordinator/member selection**, discussions, tea parties, and casual mentions;
 - leaderboard, member cards, and role/skill/persona editing;
 - click a member or task to jump back to the corresponding session in the main window;
 - multi-theme presets and custom accent colors;
@@ -128,6 +128,14 @@ The plugin does not take over the right sidebar. Click **"星桥"** at the botto
 - **`session.urgent` (urgent interjection)**: permitted for the user panel, maintainers, and the target's group manager; ordinary members cannot urgent each other. An idle target is woken immediately and the message is tagged 【加急】. A running target is interrupted first when the host exposes an interrupt capability (`agent.interrupt/abort/stop/cancel` probing) and the urgent message is injected right after. When the host has no direct interrupt capability the plugin **degrades explicitly to an interjection** and never claims the run was interrupted. Rate limit: one urgent per sender→target pair per **60 seconds** (configurable via `urgentIntervalMs`).
 - **Availability**: `state.sessions` now exposes `availability` (`idle`/`busy`) and `protected`; busy covers running, offline, and sessions with open requests, while remaining compatible with availability supplied by other branches.
 - **UI**: the standalone window's group composer gains a **"⚡ 加急"** toggle (mention a target first, then send). Toasts report "woken", "interrupted + injected", or "host cannot interrupt, degraded". World and group messages show a ⚡ urgent badge, and the sidebar panel's group chat supports the same mode and markers.
+
+### 13. Group task publishing and task cards (v2.9.4)
+
+- The group composer now has a **Publish task** button. The dialog collects the task text, a coordinator (must be a group member), and optional members (idle members are checked by default; the coordinator is mandatory).
+- `group.post` accepts an explicit task mode (`task:true` / `mode:'task'`). A **single-person task is now valid** (`assignees=[]`; the coordinator completes it alone) instead of inferring intent from the number of `@` mentions.
+- Task cards are visible in group chat with title, status (assigned / delegating / collecting / done), coordinator, members, and timestamp. Click **View task requests / status** to inspect coordinator and member requests.
+- Plain chat and **Start discussion** keep their old behaviour: no task is created and nobody is dispatched.
+- Server-side validation: the coordinator must belong to the group and the task text cannot be empty. Explicit tasks are limited to the panel (loopback with the CSRF action header) or a group manager / maintainer; the protected maintainer account is excluded from task execution.
 
 ## Install
 

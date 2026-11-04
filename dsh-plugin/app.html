@@ -335,6 +335,31 @@
   .file-chip { cursor: pointer; }
   .msg.collapsible { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: zoom-in; }
   .msg.collapsible.expanded { display: block; cursor: zoom-out; }
+  /* 群任务卡（v2.9.4）：任务在群聊里可见，点开看组长/成员/请求状态。 */
+  .bubble.task-bubble { max-width: 92%; }
+  .bubble.task-bubble .body { border-color: rgba(124,92,255,.42); background: linear-gradient(135deg, rgba(124,92,255,.13), rgba(79,216,255,.05)); }
+  .task-card-title { font-size: 13px; font-weight: 700; color: #fff; margin: 2px 0 5px; word-break: break-word; }
+  .task-card-text { font-size: 12.3px; color: #c8cee9; white-space: pre-wrap; margin: 6px 0 8px; word-break: break-word; }
+  .task-meta { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: 10.5px; color: var(--muted); }
+  .task-chip { border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; background: rgba(255,255,255,.03); }
+  .task-status { font-size: 9.5px; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--line-strong); color: var(--mint); }
+  .task-status.done { color: var(--dim); border-color: var(--line); }
+  .task-status.delegating, .task-status.collecting { color: var(--gold); border-color: rgba(255,209,102,.4); }
+  .task-actions { margin-top: 8px; }
+  .task-members { display: flex; flex-direction: column; gap: 5px; max-height: 190px; overflow: auto; margin-bottom: 4px; }
+  .task-member { display: flex; align-items: center; gap: 8px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; font-size: 12px; }
+  .task-member:hover { border-color: var(--line-strong); }
+  .task-member input { accent-color: var(--accent); width: auto; }
+  .task-member .who { flex: 1; min-width: 0; }
+  .task-member small { color: var(--muted); font-size: 10px; }
+  .task-member.disabled { opacity: .6; cursor: default; }
+  select#taskCoordinator { width: 100%; padding: 9px 12px; border-radius: 11px; border: 1px solid var(--line); background: rgba(7,9,20,.72); color: var(--text); font: inherit; font-size: 12.5px; outline: none; }
+  select#taskCoordinator:focus { border-color: var(--line-strong); }
+  #taskText { min-height: 86px; }
+  .task-detail-meta { font-size: 12px; color: var(--muted); line-height: 1.8; }
+  .task-detail-meta b { color: var(--text); }
+  .task-request { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-top: 8px; font-size: 11.5px; color: var(--muted); }
+  .task-request b { color: var(--text); }
   .scroll::-webkit-scrollbar { width: 6px; height: 6px; }
   .scroll::-webkit-scrollbar-thumb { background: rgba(124,92,255,.35); border-radius: 6px; }
   body[data-theme="forest"] {
@@ -429,6 +454,7 @@
             <button class="btn" id="teaBtn">☕ 茶话会</button>
             <button class="btn" id="sparkBtn">✨ 闲聊</button>
             <button class="btn mint" id="discussBtn">发起讨论</button>
+            <button class="btn primary" id="taskBtn">发布任务</button>
             <button class="btn urgent" id="groupUrgent" title="加急插话：先 @ 目标成员，再点发送；目标忙碌时会尝试打断后插话，宿主不支持打断会明确降级">⚡ 加急</button>
             <button class="btn primary" id="groupSend">发送</button>
           </div>
@@ -483,6 +509,32 @@
   </div>
 </div>
 <div class="toast-wrap" id="toastWrap"></div>
+<div class="modal-mask" id="taskModal">
+  <div class="modal" style="width:min(540px,92vw)">
+    <h3>发布群任务</h3>
+    <p>任务交给组长拆解，成员等组长派活后才被唤醒；普通消息和「发起讨论」不会触发任务。</p>
+    <textarea id="taskText" rows="4" maxlength="1200" placeholder="任务目标（例：把中期报告第三章补齐，图表统一成 600dpi）"></textarea>
+    <div class="hint" style="margin:10px 0 5px">组长（必选 · 只能是本群成员）</div>
+    <select id="taskCoordinator"></select>
+    <div class="hint" style="margin:10px 0 5px">成员（默认只勾空闲成员；可多选，组长自动包含）</div>
+    <div class="task-members" id="taskMembers"></div>
+    <div class="hint" id="taskHint" style="margin:6px 0 2px"></div>
+    <div class="bar" style="margin-top:12px">
+      <button class="btn" id="taskCancel">取消</button>
+      <button class="btn primary" id="taskPublish">发布任务</button>
+    </div>
+  </div>
+</div>
+<div class="modal-mask" id="taskDetailModal">
+  <div class="modal" style="width:min(580px,92vw)">
+    <h3>任务详情</h3>
+    <p>任务卡与组长请求同源：下面列出当前状态和已发出的请求。</p>
+    <div id="taskDetail"></div>
+    <div class="bar" style="margin-top:12px">
+      <button class="btn" id="taskDetailClose">关闭</button>
+    </div>
+  </div>
+</div>
 <div class="modal-mask" id="identityModal">
   <div class="modal">
     <h3 id="identityTitle">编辑名片</h3>
@@ -522,7 +574,7 @@
   ]
   var currentTheme = { name: 'nebula', custom: null }
   var KIND = { note:'经验', handoff:'交接', lesson:'教训', decision:'约定', request:'请求', command:'命令', task:'任务', chat:'交流' }
-  var TASK_STATUS = { assigned: '已分配', delegating: '已派发', collecting: '收集中', done: '已完成', canceled: '已撤回' }
+    var TASK_STATUS = { assigned: '已分配', delegating: '已派发', collecting: '收集中', done: '已完成', canceled: '已撤回', cancelled: '已取消' }
   var state = { rules: [], groups: [], sessions: [], world: [], reputation: [], config: {}, profiles: {}, deliveries: {} }
   var sessionById = {}
   var currentGroupId = ''
@@ -533,6 +585,7 @@
   var editingSkills = []
   var mentionState = { open: false, target: 'groupInput', start: 0, query: '', items: [], index: 0, hover: false }
   var groupScrollState = { groupId: '', forceBottom: false }
+  var taskDraft = { coordinator: '', members: [] }
   var editingStyle = ''
   var editingPersona = ''
 
@@ -943,6 +996,8 @@
   }
   function groupEntries(group) {
     if (!group) return []
+    // v2.9.4：任务卡（kind=task）也要进群聊；hiddenFromChat 的组长/成员请求仍不进聊天流，
+    // 只通过任务卡「查看任务请求 / 状态」打开。
     return (state.rules || []).filter(function (entry) {
       return entry.groupId === group.id && entry.hiddenFromChat !== true
     }).sort(function (a, b) { return (a.ts || 0) - (b.ts || 0) })
@@ -963,7 +1018,7 @@
       return
     }
     $('groupTitle').textContent = '群聊 · ' + group.name
-    $('groupHint').textContent = (urgentMode ? '⚡ 加急模式 · ' : '') + '成员 ' + group.sessionIds.length + ' 人 · 维护者只观察、不接普通任务（bug 点「报BUG」投递到修bug群）· 点成员行里的 contactId 可复制'
+    $('groupHint').textContent = (urgentMode ? '⚡ 加急模式 · ' : '') + '成员 ' + group.sessionIds.length + ' 人 · 维护者只观察、不接普通任务（bug 点「报BUG」投递到修bug群）· 点成员行里的 contactId 可复制 · 发布任务只唤醒组长 · 发起讨论只聊天、不触发任务'
     var urgentBtn = $('groupUrgent')
     if (urgentBtn) urgentBtn.classList.toggle('active', urgentMode)
     $('mentionBar').innerHTML = '<span class="hint">@ 插入：</span>' + group.sessionIds.map(function (id) {
@@ -978,6 +1033,7 @@
     var entries = groupEntries(group)
     $('groupChat').innerHTML = entries.length
       ? entries.map(function (entry) {
+          if (entry.kind === 'task') return renderTaskCard(entry)
           var who = identityOf(entry.author)
           var mine = entry.author === 'panel'
           var kind = KIND[entry.kind] || entry.kind
@@ -1184,6 +1240,163 @@
       $('discussBtn').disabled = false
       toast('发起失败：' + (error && error.message ? error.message : error), true)
     })
+  }
+  // ---------------------------------------------------------------- 群任务（v2.9.4）
+  // 「发布任务」是显式任务模式：只有这里（或正文 @ 两人以上）会创建 kind=task；
+  // 普通发送与「发起讨论」都只聊天，不建任务。
+  function taskStatusLabel(status) { return TASK_STATUS[status] || status || '已分派' }
+  function taskSessionTitle(id) { return (sessionById[id] && sessionById[id].title) || identityOf(id).handle }
+  function isFreeSession(id) {
+    var session = sessionById[id]
+    if (!session || session.closed === true) return false
+    return session.live !== false && String(session.status || 'idle') === 'idle'
+  }
+  function maintainerSessionId() { return state.maintainer && state.maintainer.sessionId ? state.maintainer.sessionId : '' }
+  function taskCandidates(group) {
+    if (!group) return []
+    var blocked = maintainerSessionId()
+    return (group.sessionIds || []).filter(function (id) {
+      return id && id !== blocked && !(sessionById[id] && sessionById[id].closed === true)
+    }).map(function (id) {
+      var who = identityOf(id)
+      var session = sessionById[id] || {}
+      return { id: id, handle: who.handle, title: session.title || '', free: isFreeSession(id), manager: group.managerSessionId === id }
+    }).sort(function (a, b) {
+      if (a.manager !== b.manager) return a.manager ? -1 : 1
+      if (a.free !== b.free) return a.free ? -1 : 1
+      return a.handle.localeCompare(b.handle)
+    })
+  }
+  function renderTaskCard(entry) {
+    var coordinator = entry.coordinator || ''
+    var assignees = Array.isArray(entry.assignees) ? entry.assignees : []
+    var status = entry.taskStatus || 'assigned'
+    var coordinatorHtml = coordinator
+      ? '<button class="task-chip jump" data-jump="' + esc(coordinator) + '" data-title="' + esc(taskSessionTitle(coordinator)) + '">组长 @' + esc(identityOf(coordinator).handle) + '</button>'
+      : '<span class="task-chip">组长未指定</span>'
+    var memberHtml = assignees.length
+      ? assignees.map(function (id) {
+          return '<button class="task-chip jump" data-jump="' + esc(id) + '" data-title="' + esc(taskSessionTitle(id)) + '">@' + esc(identityOf(id).handle) + '</button>'
+        }).join('')
+      : '<span class="task-chip">无成员（组长独立完成）</span>'
+    var who = identityOf(entry.author)
+    return '<div class="bubble task-bubble"><div class="avatar clickable" data-jump="' + esc(entry.author) + '" data-title="' + esc(taskSessionTitle(entry.author)) + '">' + avatarHtml(who.avatar) + '</div>' +
+      '<div class="body"><div class="head"><b>' + esc(who.handle) + '</b><small>任务 · ' + when(entry.ts) + '</small><span class="task-status ' + esc(status) + '">' + esc(taskStatusLabel(status)) + '</span></div>' +
+      '<div class="task-card-title">' + esc(entry.title || entry.text || '群任务') + '</div>' +
+      '<div class="task-card-text">' + esc(entry.text || '') + '</div>' +
+      '<div class="task-meta">' + coordinatorHtml + memberHtml + '</div>' +
+      '<div class="task-actions"><button class="btn small" data-task-detail="' + esc(entry.id) + '">查看任务请求 / 状态</button></div>' +
+      '</div></div>'
+  }
+  function openTaskModal() {
+    var group = currentGroup()
+    if (!group) { toast('先选择一个群组', true); return }
+    var candidates = taskCandidates(group)
+    if (!candidates.length) { toast('本群没有可派任务的成员（维护者受保护，不参与派工）', true); return }
+    var preferred = candidates.find(function (item) { return item.manager }) || candidates.find(function (item) { return item.free }) || candidates[0]
+    taskDraft = {
+      coordinator: preferred.id,
+      members: candidates.filter(function (item) { return item.free && item.id !== preferred.id }).map(function (item) { return item.id })
+    }
+    $('taskText').value = $('groupInput').value.trim()
+    renderTaskComposer(group)
+    $('taskModal').classList.add('open')
+    setTimeout(function () { $('taskText').focus() }, 30)
+  }
+  function renderTaskComposer(group) {
+    var candidates = taskCandidates(group)
+    if (!candidates.some(function (item) { return item.id === taskDraft.coordinator })) {
+      taskDraft.coordinator = candidates.length ? candidates[0].id : ''
+    }
+    $('taskCoordinator').innerHTML = candidates.map(function (item) {
+      var tags = []
+      if (item.manager) tags.push('群管理')
+      if (!item.free) tags.push('忙/离线')
+      return '<option value="' + esc(item.id) + '"' + (item.id === taskDraft.coordinator ? ' selected' : '') + '>' + esc(item.handle) + (item.title ? ' · ' + esc(short(item.title, 18)) : '') + (tags.length ? ' · ' + esc(tags.join('/')) : '') + '</option>'
+    }).join('')
+    $('taskMembers').innerHTML = candidates.map(function (item) {
+      var isCoordinator = item.id === taskDraft.coordinator
+      var checked = isCoordinator || taskDraft.members.indexOf(item.id) >= 0
+      var suffix = isCoordinator ? '组长（必选）' : (item.free ? '空闲' : '忙/离线')
+      return '<label class="task-member' + (isCoordinator ? ' disabled' : '') + '"><input type="checkbox" data-task-member="' + esc(item.id) + '"' + (checked ? ' checked' : '') + (isCoordinator ? ' disabled' : '') + ' />' +
+        '<span class="who">' + esc(item.handle) + '</span><small>' + esc(suffix) + '</small></label>'
+    }).join('')
+    var busy = candidates.filter(function (item) { return !item.free && item.id !== taskDraft.coordinator }).length
+    $('taskHint').textContent = '组长：' + identityOf(taskDraft.coordinator).handle + ' · 已选成员 ' + taskDraft.members.length + ' 人' + (busy ? '（另有 ' + busy + ' 人忙/离线，可手动勾选）' : '')
+  }
+  function setTaskCoordinator(id) {
+    var group = currentGroup()
+    var previous = taskDraft.coordinator
+    if (!id || id === previous) return
+    taskDraft.coordinator = id
+    var index = taskDraft.members.indexOf(id)
+    if (index >= 0) taskDraft.members.splice(index, 1)
+    // 换下来的旧组长如果空闲，继续留在成员里，避免用户重选后丢人。
+    if (previous && isFreeSession(previous) && taskDraft.members.indexOf(previous) < 0) taskDraft.members.push(previous)
+    renderTaskComposer(group)
+  }
+  function toggleTaskMember(id, checked) {
+    if (!id || id === taskDraft.coordinator) return
+    var index = taskDraft.members.indexOf(id)
+    if (checked && index < 0) taskDraft.members.push(id)
+    if (!checked && index >= 0) taskDraft.members.splice(index, 1)
+    renderTaskComposer(currentGroup())
+  }
+  function publishTask() {
+    var group = currentGroup()
+    if (!group) return
+    var text = $('taskText').value.trim()
+    var coordinatorId = $('taskCoordinator').value
+    if (!text) { toast('任务正文不能为空', true); return }
+    if (!coordinatorId) { toast('请指定组长（只能是本群成员）', true); return }
+    var assigneeIds = taskDraft.members.filter(function (id) { return id !== coordinatorId })
+    $('taskPublish').disabled = true
+    command('group.post', {
+      id: group.id,
+      text: text,
+      task: true,
+      mode: 'task',
+      coordinatorId: coordinatorId,
+      assigneeIds: assigneeIds
+    }).then(function (result) {
+      $('taskPublish').disabled = false
+      if (!result || result.ok === false) { toast('发布失败：' + (result && result.error || '未知错误'), true); return }
+      $('taskModal').classList.remove('open')
+      if ($('groupInput').value.trim() === text) $('groupInput').value = ''
+      groupScrollState.forceBottom = true
+      var task = result.task || {}
+      var coordinator = task.coordinator || { id: coordinatorId }
+      toast('任务已发布：组长 ' + (coordinator.title || identityOf(coordinatorId).handle) + ' · 成员 ' + ((task.assignees || []).length) + ' 人')
+      refresh()
+    }).catch(function (error) {
+      $('taskPublish').disabled = false
+      toast('发布失败：' + (error && error.message ? error.message : error), true)
+    })
+  }
+  function openTaskDetail(taskId) {
+    var task = (state.rules || []).find(function (item) { return item.id === taskId && item.kind === 'task' })
+    if (!task) { toast('任务卡已失效', true); return }
+    var requests = (state.rules || []).filter(function (item) { return item.kind === 'request' && item.taskId === task.id })
+    var coordinator = task.coordinator || ''
+    var assignees = Array.isArray(task.assignees) ? task.assignees : []
+    var html = '<div class="task-detail-meta">' +
+      '<div>状态：<b>' + esc(taskStatusLabel(task.taskStatus || 'assigned')) + '</b> · 组长：<b>' + esc(coordinator ? identityOf(coordinator).handle : '未指定') + '</b></div>' +
+      '<div>成员：<b>' + esc(assignees.length ? assignees.map(function (id) { return identityOf(id).handle }).join('、') : '无（组长独立完成）') + '</b></div>' +
+      '<div>创建：' + when(task.ts) + ' · 任务 id：' + esc(task.id) + '</div>' +
+      '</div>' +
+      '<div class="task-card-text" style="margin-top:6px">' + esc(task.text || task.title || '') + '</div>'
+    if (!requests.length) {
+      html += '<div class="task-request">还没有创建组长请求。</div>'
+    } else {
+      requests.forEach(function (request) {
+        var status = request.status === 'answered' || request.answeredBy ? '已回复' : '等待处理'
+        html += '<div class="task-request"><b>' + esc(request.taskRole === 'coordinator' ? '组长请求' : '成员请求') + '</b> · ' + esc(status) +
+          ' · 发给 ' + esc((request.requestTo || []).map(function (id) { return identityOf(id).handle }).join('、')) +
+          ' · ' + when(request.ts) + '<br/>' + esc(request.title || '') + '</div>'
+      })
+    }
+    $('taskDetail').innerHTML = html
+    $('taskDetailModal').classList.add('open')
   }
   function likeMember(sessionId) {
     var group = currentGroup()
@@ -1442,6 +1655,21 @@
     $('bugfixBtn').addEventListener('click', ensureBugfixGroup)
     $('reportBugBtn').addEventListener('click', reportBug)
     $('groupUrgent').addEventListener('click', function () { setUrgentMode(!urgentMode) })
+    $('taskBtn').addEventListener('click', openTaskModal)
+    $('taskCancel').addEventListener('click', function () { $('taskModal').classList.remove('open') })
+    $('taskPublish').addEventListener('click', publishTask)
+    $('taskCoordinator').addEventListener('change', function (event) { setTaskCoordinator(event.target.value) })
+    $('taskMembers').addEventListener('change', function (event) {
+      var input = event.target.closest('[data-task-member]')
+      if (input) toggleTaskMember(input.getAttribute('data-task-member'), input.checked)
+    })
+    $('taskModal').addEventListener('click', function (event) {
+      if (event.target === $('taskModal')) $('taskModal').classList.remove('open')
+    })
+    $('taskDetailClose').addEventListener('click', function () { $('taskDetailModal').classList.remove('open') })
+    $('taskDetailModal').addEventListener('click', function (event) {
+      if (event.target === $('taskDetailModal')) $('taskDetailModal').classList.remove('open')
+    })
     $('discussBtn').addEventListener('click', startDiscussion)
     $('teaBtn').addEventListener('click', startTea)
     $('sparkBtn').addEventListener('click', startSpark)
@@ -1547,6 +1775,8 @@
     $('groupChat').addEventListener('click', function (event) {
       var retract = event.target.closest('[data-retract]')
       if (retract) { retractEntry(retract.getAttribute('data-retract'), retract); return }
+      var taskDetail = event.target.closest('[data-task-detail]')
+      if (taskDetail) { openTaskDetail(taskDetail.getAttribute('data-task-detail')); return }
       var file = event.target.closest('[data-file]')
       if (file) { previewFile(file.getAttribute('data-file')); return }
       var expandable = event.target.closest('[data-expandable="1"]')
