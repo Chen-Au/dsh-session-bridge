@@ -470,6 +470,7 @@
   var editingAvatar = ''
   var editingSkills = []
   var mentionState = { open: false, target: 'groupInput', start: 0, query: '', items: [], index: 0, hover: false }
+  var groupScrollState = { groupId: '', forceBottom: false }
   var editingStyle = ''
   var editingPersona = ''
 
@@ -804,6 +805,7 @@
       $('groupChat').innerHTML = '<div class="empty">暂无群组。</div>'
       $('memberList').innerHTML = ''
       $('groupTitle').textContent = '群聊'
+      groupScrollState.groupId = ''
       return
     }
     $('groupTitle').textContent = '群聊 · ' + group.name
@@ -812,6 +814,11 @@
       var who = identityOf(id)
       return '<button class="mention-chip" data-mention="' + esc(who.handle) + '">' + avatarHtml(who.avatar) + ' ' + esc(who.handle) + '</button>'
     }).join('')
+    var chatEl = $('groupChat')
+    var sameGroup = groupScrollState.groupId === group.id
+    var wasNearBottom = chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 90
+    var previousScroll = chatEl.scrollTop
+    var stickToBottom = !sameGroup || groupScrollState.forceBottom || wasNearBottom
     var entries = groupEntries(group)
     $('groupChat').innerHTML = entries.length
       ? entries.map(function (entry) {
@@ -835,7 +842,11 @@
             ((fileChips || mentionMarks) ? '<div class="chips">' + mentionMarks + fileChips + '</div>' : '') + '</div></div>'
         }).join('')
       : '<div class="empty">群里还很安静，说点什么或发起一个讨论吧。</div>'
-    $('groupChat').scrollTop = $('groupChat').scrollHeight
+    var chatAfter = $('groupChat')
+    if (stickToBottom) chatAfter.scrollTop = chatAfter.scrollHeight
+    else chatAfter.scrollTop = previousScroll
+    groupScrollState.groupId = group.id
+    groupScrollState.forceBottom = false
     renderActivity(group)
     $('memberList').innerHTML = group.sessionIds.map(function (id) {
       var who = identityOf(id)
@@ -894,6 +905,7 @@
     command('group.post', { id: group.id, text: text, mentionSessionIds: mentionIds }).then(function (result) {
       $('groupSend').disabled = false
       if (!result || result.ok === false) { toast('发送失败：' + (result && result.error || '未知错误'), true); return }
+      groupScrollState.forceBottom = true
       refresh()
     }).catch(function (error) {
       $('groupSend').disabled = false
@@ -1225,7 +1237,9 @@
     $('groupChips').addEventListener('click', function (event) {
       var chip = event.target.closest('[data-group]')
       if (!chip) return
+      if (currentGroupId !== chip.getAttribute('data-group')) groupScrollState.groupId = ''
       currentGroupId = chip.getAttribute('data-group')
+      groupScrollState.forceBottom = true
       renderGroups()
     })
     $('mentionBar').addEventListener('click', function (event) {
