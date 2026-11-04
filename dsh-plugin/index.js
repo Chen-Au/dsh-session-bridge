@@ -58,7 +58,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.1.2'
+const VERSION = '2.2.0'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -1251,7 +1251,11 @@ export function apply(ctx, config = {}) {
       .replace(/[^\p{L}\p{N}_-]/gu, '')
       .trim()
       .slice(0, 16)
-  const isAvatar = (value) => AVATAR_PALETTE.includes(String(value || ''))
+  const isAvatar = (value) => {
+    const text = String(value || '')
+    if (AVATAR_PALETTE.includes(text)) return true
+    return /^data:image\/(png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/i.test(text) && text.length <= 120000
+  }
   const uniqueHandle = (wanted, sessionId) => {
     let handle = sanitizeHandle(wanted) || 'agent'
     const data = identityStore.read()
@@ -1419,6 +1423,39 @@ export function apply(ctx, config = {}) {
     const woke = wakeSession(target.id, message, {})
     logger.info('群「' + group.name + '」自发表达点名：' + target.title + '（' + (woke.ok ? '已唤醒' : '离线') + '）')
     return { ok: true, targetId: target.id, targetTitle: target.title, woken: woke.ok }
+  }
+
+  const PERSONA_TEMPLATES = [
+    '偏爱先给结论，再补证据，偶尔吐槽一句',
+    '说话简洁，不喜欢客套，遇到问题直接指出来',
+    '温和但较真，喜欢把风险先说清楚',
+    '数据控，能用实测数字说明就不空谈',
+    '有点幽默感，喜欢用比喻解释复杂问题',
+    '谨慎型，先确认口径再动手，讨厌返工',
+    '行动派，先做出可验证的小版本再迭代',
+    '好奇型，喜欢追问“为什么”和“还有没有别的路径”'
+  ]
+  const ensurePersona = (sessionId, title) => {
+    const stored = identityStore.get(sessionId) || {}
+    const current = identityOf(sessionId, title || identityTitleOf(sessionId))
+    if (current.style && current.persona) return current
+    let hash = 0
+    const seed = String(sessionId || '')
+    for (let index = 0; index < seed.length; index += 1) hash = (hash * 31 + seed.charCodeAt(index)) >>> 0
+    const style = current.style || PERSONA_STYLES[hash % PERSONA_STYLES.length]
+    const persona = current.persona || PERSONA_TEMPLATES[(hash >>> 3) % PERSONA_TEMPLATES.length]
+    identityStore.set(sessionId, {
+      ...stored,
+      handle: stored.handle || current.handle,
+      avatar: stored.avatar || current.avatar,
+      role: stored.role || current.role || '',
+      skills: stored.skills || current.skills || [],
+      style,
+      persona,
+      updatedAt: Date.now()
+    })
+    logger.info('自动补全人格：' + shortSid(sessionId) + ' · ' + style + ' · ' + persona)
+    return identityOf(sessionId, title || identityTitleOf(sessionId))
   }
 
   const identityTitleOf = (sessionId) => {
@@ -2451,6 +2488,7 @@ export function apply(ctx, config = {}) {
     try {
       const agent = ctx.agents.get(sessionId)
       if (!agent || typeof agent.followup !== 'function') return { ok: false, reason: 'not-live' }
+      ensurePersona(sessionId)
       const persona = personaLineFor(sessionId)
       const fullText = persona && !String(text).includes('【你的人设】') ? String(text) + '\n\n' + persona : text
       agent.followup(makeBridgeMessage(fullText, meta))
@@ -3814,7 +3852,7 @@ export function apply(ctx, config = {}) {
       properties: {
         action: { type: 'string', enum: ['get', 'set'], description: 'set 设置；get 查看' },
         handle: { type: 'string', description: '你的 ID/昵称（1-16 字）' },
-        avatar: { type: 'string', description: '头像 emoji（从 ' + AVATAR_PALETTE.join(' ') + ' 中选一个）' },
+        avatar: { type: 'string', description: '头像：emoji（从 ' + AVATAR_PALETTE.join(' ') + ' 中选）或自定义图片 data URI（data:image/png;base64,…）' },
         role: { type: 'string', description: '可选，自定义角色（如：审稿人/画图/协调/气氛组，≤24 字）' },
         skills: {
           type: 'array',
@@ -4358,7 +4396,49 @@ export function apply(ctx, config = {}) {
         /* 去重失败不影响正常发送 */
       }
       const forceNew = payload.forceNew === true || FORCE_NEW_RE.test(text)
-      const decision = await decideWorldRoute(text, forceNew)
+      // 世界任务的 @ 解析与「扩充新成员」意图：这两类不交给路由器，避免把新成员外包给子代理。
+      const sessionsNow = await buildSessionIndex()
+      const mentionCandidates = sessionsNow.filter((session) => session.internal !== true)
+      const parsedWorldMentions = parseMentionsInText(text, mentionCandidates)
+      const wantsNewMembers = /(新成员|新会话|新建会话|开新会话|创建.{0,10}(会话|成员)|入驻|扩编|扩招|帮手|人手|增援|加.{0,4}(个|位)?.{0,4}(人|成员|会话))/i.test(text)
+      const parseMemberCount = () => {
+        const arabic = text.match(/(\d{1,2})\s*(?:个|位|名)?\s*(?:新)?(?:会话|成员|人)/)
+        if (arabic) return Math.min(5, Math.max(1, Number(arabic[1])))
+        const cn = { 一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5 }
+        const chinese = text.match(/([一二两三四五])\s*(?:个|位|名)?\s*(?:新)?(?:会话|成员|人)/)
+        if (chinese) return cn[chinese[1]] || 1
+        if (/几个|几位/.test(text)) return 2
+        return 1
+      }
+      const requestedMemberCount = parseMemberCount()
+      let decision
+      if (wantsNewMembers) {
+        decision = {
+          engine: 'new-members',
+          route: 'new',
+          sessionId: '',
+          newWorkspace: false,
+          reason: '用户明确要新成员/新会话：由宿主创建根会话，不能用子代理冒充成员'
+        }
+      } else if (parsedWorldMentions.all) {
+        decision = {
+          engine: 'mentions',
+          route: 'existing',
+          sessionId: mentionCandidates[0] ? mentionCandidates[0].id : '',
+          sessionIds: mentionCandidates.slice(0, 6).map((session) => session.id),
+          reason: '用户在世界任务里 @所有人，直接派给现有成员'
+        }
+      } else if (parsedWorldMentions.ids.length) {
+        decision = {
+          engine: 'mentions',
+          route: 'existing',
+          sessionId: parsedWorldMentions.ids[0],
+          sessionIds: parsedWorldMentions.ids,
+          reason: '用户在世界任务里 @ 指定成员，直接派给 TA'
+        }
+      } else {
+        decision = await decideWorldRoute(text, forceNew)
+      }
       if (forceNew && decision.route !== 'new') {
         // 用户明确说「全新」时，无条件新建（模型判断也不能违背）。
         decision.route = 'new'
@@ -4370,10 +4450,52 @@ export function apply(ctx, config = {}) {
       let createdTitle = ''
       let createdWorkspace = ''
       let createError = ''
-      if (decision.route === 'existing' && decision.sessionId) {
-        const sessions = await buildSessionIndex()
-        const target = sessions.find((session) => session.id === decision.sessionId)
-        if (target) assigned = [{ id: target.id, title: target.title, score: 0 }]
+      if (decision.route === 'existing' && (decision.sessionIds || decision.sessionId)) {
+        const sessions = sessionsNow
+        const ids = decision.sessionIds && decision.sessionIds.length ? decision.sessionIds : [decision.sessionId]
+        assigned = ids
+          .map((sessionId) => sessions.find((session) => session.id === sessionId))
+          .filter(Boolean)
+          .map((target) => ({ id: target.id, title: target.title, score: 0 }))
+      }
+      const createdSessions = []
+      if (decision.engine === 'new-members') {
+        const baseSession = parsedWorldMentions.ids
+          .map((sessionId) => sessionsNow.find((session) => session.id === sessionId))
+          .find((session) => session && session.cwd)
+        let cwdOverride = baseSession && baseSession.cwd ? baseSession.cwd : ''
+        // 没 @ 人时，从正文里找已知工作区名（例如「入驻 shoot_game」），把新成员放进对应工作区。
+        if (!cwdOverride) {
+          try {
+            const registry = (ctx.get && ctx.get('workspaceRegistry')) || ctx.workspaceRegistry
+            const workspaces = registry && typeof registry.list === 'function' ? registry.list() : []
+            const lowerText = String(text).toLowerCase()
+            const matchedWorkspace = workspaces.find((workspace) => {
+              const title = String(workspace.title || '').toLowerCase()
+              const base = String(workspace.path || '').split(/[\\/]/).filter(Boolean).pop() || ''
+              return (title && lowerText.includes(title)) || (base && lowerText.includes(base.toLowerCase()))
+            })
+            if (matchedWorkspace && matchedWorkspace.path) cwdOverride = matchedWorkspace.path
+          } catch {
+            /* ignore */
+          }
+        }
+        for (let index = 0; index < requestedMemberCount; index += 1) {
+          const created = await createSessionForTask(
+            cwdOverride || undefined,
+            '世界任务·新成员' + (index + 1) + '：' + truncate(text, 18)
+          )
+          if (created.ok) {
+            createdSessions.push({ id: created.sessionId, title: created.title || '新成员 ' + (index + 1) })
+            assigned.push({ id: created.sessionId, title: '新成员 ' + (index + 1), score: 0 })
+            if (!createdSession) {
+              createdSession = created.sessionId
+              createdTitle = created.title || ''
+            }
+          } else {
+            createError = createError ? createError + '；' + created.error : created.error
+          }
+        }
       }
       if (!assigned.length) {
         let cwdOverride = ''
@@ -4433,17 +4555,26 @@ export function apply(ctx, config = {}) {
         )
         if (!request.ok) continue
         requestIds.push(request.entry.id)
-        const message = [
-          '【世界任务 · 用户 @ 你】',
-          createdWorkspace ? `（本任务新开了工作区：${createdWorkspace}）` : '',
-          `路由理由：${decision.reason}`,
-          '',
-          text,
-          '',
-          `请开始处理；完成后用 session_share（kind=handoff、replyTo=${request.entry.id}、files=文件路径）汇报，结果会出现在世界聊天。`
-        ]
-          .filter(Boolean)
-          .join('\n')
+        const isExtraMember = decision.engine === 'new-members' && item.id !== createdSession
+        const message = isExtraMember
+          ? [
+              '【新成员报到 · 用户在世界里要求扩充成员】',
+              `你刚刚作为根会话加入工作区，不是子代理。`,
+              '',
+              '请先用 session_profile（action=update）提交一句话申报（方向/擅长/需要什么），再用一句话介绍自己；',
+              '不要执行【任务】主体，等待主责成员或群主分配；有想法可以主动请缨。'
+            ].join('\n')
+          : [
+              '【世界任务 · 用户 @ 你】',
+              createdWorkspace ? `（本任务新开了工作区：${createdWorkspace}）` : '',
+              `路由理由：${decision.reason}`,
+              '',
+              text,
+              '',
+              `请开始处理；完成后用 session_share（kind=handoff、replyTo=${request.entry.id}、files=文件路径）汇报，结果会出现在世界聊天。`
+            ]
+              .filter(Boolean)
+              .join('\n')
         const outcome = wakeSession(item.id, message, { requestId: request.entry.id })
         if (outcome.ok) woken.push(item.id)
       }
@@ -4457,6 +4588,7 @@ export function apply(ctx, config = {}) {
         woken: woken.length,
         createdSession,
         createdSessionTitle: createdTitle,
+        createdSessions,
         createdWorkspace,
         createError,
         requestIds,
@@ -5219,6 +5351,103 @@ export function apply(ctx, config = {}) {
     res.end(fs.readFileSync(file, 'utf8'))
   }
 
+  const handleFileRoute = async (req, res) => {
+    if (req.method !== 'GET') {
+      res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end('method-not-allowed')
+      return
+    }
+    try {
+      const requestUrl = new URL(req.url, 'http://127.0.0.1')
+      const wanted = String(requestUrl.searchParams.get('path') || '').trim()
+      if (!wanted) {
+        res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('missing path')
+        return
+      }
+      let targetFile = ''
+      const groupsForFile = groupStore.read()
+      for (const entry of store.readActive()) {
+        for (const file of entry.files || []) {
+          const raw = String(file || '')
+          const matches = raw === wanted || path.resolve(raw) === path.resolve(wanted) || raw.endsWith(wanted)
+          if (!matches) continue
+          const candidates = [raw]
+          if (entry.workspace) candidates.push(path.join(entry.workspace, raw))
+          const entryGroup = entry.groupId ? groupsForFile.find((group) => group.id === entry.groupId) : null
+          if (entryGroup && entryGroup.workspace) candidates.push(path.join(entryGroup.workspace, raw))
+          const fallbackCwd = defaultWorkspaceForRule()
+          if (fallbackCwd) candidates.push(path.join(fallbackCwd, raw))
+          const existing = candidates
+            .map((candidate) => {
+              try {
+                return path.resolve(candidate)
+              } catch {
+                return ''
+              }
+            })
+            .find((candidate) => candidate && fs.existsSync(candidate))
+          if (existing) {
+            targetFile = existing
+            break
+          }
+        }
+        if (targetFile) break
+      }
+      if (!targetFile) {
+        res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('file not referenced by any board entry')
+        return
+      }
+      const normalized = targetFile
+      let stat
+      try {
+        stat = fs.statSync(normalized)
+      } catch {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('file not found')
+        return
+      }
+      if (!stat.isFile() || stat.size > 30 * 1024 * 1024) {
+        res.writeHead(413, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('file too large or not a regular file')
+        return
+      }
+      const ext = path.extname(normalized).toLowerCase()
+      const types = {
+        '.txt': 'text/plain; charset=utf-8',
+        '.md': 'text/markdown; charset=utf-8',
+        '.json': 'application/json; charset=utf-8',
+        '.jsonl': 'application/jsonlines; charset=utf-8',
+        '.log': 'text/plain; charset=utf-8',
+        '.csv': 'text/csv; charset=utf-8',
+        '.py': 'text/plain; charset=utf-8',
+        '.js': 'text/plain; charset=utf-8',
+        '.mjs': 'text/plain; charset=utf-8',
+        '.ts': 'text/plain; charset=utf-8',
+        '.tex': 'text/plain; charset=utf-8',
+        '.yaml': 'text/plain; charset=utf-8',
+        '.yml': 'text/plain; charset=utf-8',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.svg': 'image/svg+xml',
+        '.pdf': 'application/pdf'
+      }
+      res.writeHead(200, {
+        'content-type': types[ext] || 'application/octet-stream',
+        'content-disposition': 'inline; filename="' + encodeURIComponent(path.basename(normalized)) + '"',
+        'cache-control': 'no-store'
+      })
+      res.end(fs.readFileSync(normalized))
+    } catch (error) {
+      res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end('file preview failed: ' + (error && error.message ? error.message : error))
+    }
+  }
+
   const handleStateRoute = async (req, res) => {
     try {
       if (req.method !== 'GET') return jsonOut(res, 405, { ok: false, error: 'method-not-allowed' })
@@ -5278,7 +5507,7 @@ export function apply(ctx, config = {}) {
       return jsonOut(res, 200, response)
     } catch (error) {
       logger.warn(`看板命令执行失败：${error && error.message ? error.message : error}`)
-      jsonOut(res, 500, { ok: false, error: 'command-failed' })
+      jsonOut(res, 500, { ok: false, error: 'command-failed', detail: String(error && error.message || error).slice(0, 200) })
     }
   }
 
@@ -5315,9 +5544,13 @@ export function apply(ctx, config = {}) {
           () => webServer.register({ kind: 'exact', path: '/session-bridge/app', handler: handleAppRoute }),
           'session-bridge: GET /session-bridge/app'
         )
+        ctx.effect(
+          () => webServer.register({ kind: 'exact', path: '/session-bridge/file', handler: handleFileRoute }),
+          'session-bridge: GET /session-bridge/file'
+        )
         registration.api = true
         registration.webServer = true
-        logger.info('看板 HTTP API 已注册：/api/session-bridge/state、/api/session-bridge/command、/session-bridge/app')
+        logger.info('看板 HTTP API 已注册：/api/session-bridge/state、/api/session-bridge/command、/session-bridge/app、/session-bridge/file')
         patchReceiptApi()
         return
       }

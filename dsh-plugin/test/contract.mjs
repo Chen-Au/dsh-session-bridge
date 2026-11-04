@@ -346,7 +346,7 @@ await check('查重生效（相同内容不重复发布）', async () => {
 
 await check('session_board status 报告版本与注册结果', async () => {
   const result = String(await board.execute({ action: 'status' }, { agent: rootAgent }))
-  assert.match(result, /session-bridge v2\.1\.2/)
+  assert.match(result, /session-bridge v2\.2\.0/)
   assert.match(result, /工具：session_share, session_ask, session_nudge, group_rule, session_like, session_discuss, session_identity, group_skill, session_profile, session_board/)
   assert.match(result, /看板 API=是/)
   assert.ok(!/失败=(session_share|session_board)/.test(result), '不应有注册失败的工具')
@@ -354,7 +354,7 @@ await check('session_board status 报告版本与注册结果', async () => {
 
 await check('子会话可只读查看经验板（list / status）', async () => {
   const status = String(await board.execute({ action: 'status' }, { agent: subAgent }))
-  assert.match(status, /session-bridge v2\.1\.2/)
+  assert.match(status, /session-bridge v2\.2\.0/)
   const listed = String(await board.execute({ action: 'list' }, { agent: subAgent }))
   assert.match(listed, /跨会话经验板/)
 })
@@ -449,7 +449,7 @@ await check('GET state 返回规则/群组/会话/送达结构', async () => {
   const { res, json } = await callState()
   assert.equal(res.out.status, 200)
   assert.equal(json.ok, true)
-  assert.equal(json.version, '2.1.2')
+  assert.equal(json.version, '2.2.0')
   assert.ok(Array.isArray(json.rules) && json.rules.length >= 1)
   assert.ok(Array.isArray(json.groups))
   assert.ok(Array.isArray(json.sessions) && json.sessions.length >= 2)
@@ -566,6 +566,8 @@ await check('群内请求：session_ask 唤醒目标会话，回复后通知请�
   const probeMessage = String(captured.followups[0].message.content[0].text)
   assert.match(probeMessage, /群内请求/)
   assert.match(probeMessage, /请直接回答正文/, '探测消息要突出正文')
+  const wokenSession = (await callState()).json.sessions.find((item) => item.id === otherAgent.id)
+  assert.ok(wokenSession.style && wokenSession.persona, '首次唤醒应自动补全人格')
   assert.ok(!probeMessage.includes('replyTo='), '探测消息不应叮嘱复杂回复格式')
 
   const afterAsk = await callState()
@@ -1056,7 +1058,7 @@ await check('面板命令：删除规矩与群组', async () => {
 
 await check('插件启动凭证写入正确（工具/注册/版本/API）', () => {
   const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))
-  assert.equal(receipt.version, '2.1.2')
+  assert.equal(receipt.version, '2.2.0')
   assert.deepEqual(receipt.tools.slice().sort(), ['group_rule', 'group_skill', 'session_ask', 'session_board', 'session_discuss', 'session_identity', 'session_like', 'session_nudge', 'session_profile', 'session_share'])
   assert.deepEqual(receipt.failedTools, [])
   assert.equal(receipt.registration.section, true)
@@ -1149,6 +1151,19 @@ await check('world.post：无申报匹配时走新建会话（桩环境无 agent
   const world = await callCommand({ action: 'world.post', payload: { text: 'zzzz-no-match-qqqq 的任务' } })
   assert.equal(world.json.ok, true, JSON.stringify(world.json))
   assert.ok(world.json.createError, '桩环境应返回新建会话失败原因，而不是抛错')
+})
+
+await check('世界任务：正文 @ 直接派给指定成员', async () => {
+  captured.followups.length = 0
+  const result = await callCommand({
+    action: 'world.post',
+    payload: { text: '@论文写作-第一篇 帮我检查一下这段说明' }
+  })
+  assert.equal(result.json.ok, true, JSON.stringify(result.json))
+  assert.equal(result.json.route, 'existing')
+  assert.equal(result.json.router.engine, 'mentions')
+  assert.ok(result.json.assigned.some((item) => item.id === rootAgent.id), '应派给被 @ 的成员')
+  assert.ok(captured.followups.length >= 1, '应唤醒被 @ 的会话')
 })
 
 await check('世界路由：明确「全新」直接新建；world.route 只分析不执行', async () => {

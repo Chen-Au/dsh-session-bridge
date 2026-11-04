@@ -90,11 +90,11 @@
   main { flex: 1; display: flex; min-height: 0; }
   .view { display: none; flex: 1; min-height: 0; }
   .view.active { display: flex; }
-  .pane { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 18px 22px; gap: 14px; }
-  .aside { width: 300px; flex: none; border-left: 1px solid var(--line); padding: 18px; overflow: auto; }
+  .pane { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 24px 28px; gap: 18px; }
+  .aside { width: 320px; flex: none; border-left: 1px solid var(--line); padding: 22px 20px; overflow: auto; }
   .section-title { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11.5px; letter-spacing: 2px; text-transform: uppercase; }
   .section-title::before { content: ""; width: 14px; height: 2px; border-radius: 2px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
-  .feed { flex: 1; overflow: auto; padding-right: 6px; display: flex; flex-direction: column; gap: 10px; }
+  .feed { flex: 1; overflow: auto; padding-right: 6px; display: flex; flex-direction: column; gap: 13px; }
   .card {
     position: relative; border: 1px solid var(--line); border-radius: var(--radius);
     background: var(--panel); backdrop-filter: blur(10px);
@@ -114,6 +114,9 @@
     box-shadow: inset 0 0 12px rgba(124,92,255,.25);
   }
   .avatar.lg { width: 48px; height: 48px; font-size: 25px; border-radius: 15px; }
+  .avatar img, .avatar-img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; display: block; }
+  .avatar.clickable { cursor: pointer; }
+  .avatar.clickable:hover { border-color: var(--line-strong); box-shadow: 0 0 0 2px rgba(124,92,255,.28); }
   .who { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .who .name { font-weight: 600; color: #fff; letter-spacing: .3px; }
   .who .handle { color: var(--muted); font-size: 11px; }
@@ -221,8 +224,8 @@
   .bubble { display: flex; gap: 10px; max-width: 86%; }
   .bubble.mine { align-self: flex-end; flex-direction: row-reverse; }
   .bubble .body {
-    border: 1px solid var(--line); background: var(--panel); border-radius: 14px;
-    padding: 9px 12px; min-width: 0; backdrop-filter: blur(8px);
+    border: 1px solid rgba(120,150,255,.12); background: rgba(17,19,38,.62); border-radius: 14px;
+    padding: 10px 13px; min-width: 0; backdrop-filter: blur(8px);
   }
   .bubble.mine .body { border-color: rgba(124,92,255,.35); background: rgba(124,92,255,.14); }
   .bubble .head { display: flex; gap: 8px; align-items: center; margin-bottom: 3px; }
@@ -231,11 +234,17 @@
   .bubble .msg { font-size: 12.8px; color: #c8cee9; white-space: pre-wrap; }
   .members { display: flex; flex-direction: column; gap: 8px; }
   .member {
-    display: flex; align-items: center; gap: 10px; padding: 9px 10px;
-    border: 1px solid var(--line); border-radius: 13px; background: rgba(255,255,255,.025);
+    display: flex; align-items: center; gap: 9px; padding: 7px 9px;
+    border: 1px solid rgba(120,150,255,.11); border-radius: 11px; background: rgba(255,255,255,.018);
   }
+  .member.compact .avatar { width: 30px; height: 30px; font-size: 15px; border-radius: 10px; }
+  .member.compact .who { line-height: 1.25; }
+  .member.compact .who b { font-size: 12px; font-weight: 600; }
+  .member.compact .who small { font-size: 10px; color: var(--muted); display: block; }
+  .member.compact .actions .btn { padding: 3px 7px; font-size: 11px; border-radius: 8px; }
   .member .who { flex: 1; min-width: 0; }
   .member .who b { display: block; color: #fff; font-size: 12.5px; }
+  .member .avatar { flex: none; }
   .member .who small { color: var(--muted); font-size: 10.5px; }
   .member .actions { display: flex; gap: 6px; }
   .badge-manager { color: var(--gold); border: 1px solid rgba(255,209,102,.4); border-radius: 999px; padding: 1px 7px; font-size: 9.5px; }
@@ -267,6 +276,14 @@
   .avatar-opt:hover { border-color: var(--line-strong); }
   .avatar-opt.active { border-color: var(--accent); background: rgba(124,92,255,.25); box-shadow: 0 0 14px rgba(124,92,255,.35); }
   .modal .bar { justify-content: flex-end; }
+  .file-modal-box { width: min(900px, 92vw); height: min(78vh, 780px); display: flex; flex-direction: column; padding: 14px; }
+  #fileBody { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--line); border-radius: 12px; background: rgba(4,5,12,.6); }
+  #fileBody iframe { width: 100%; height: 100%; border: 0; background: #fff; border-radius: 11px; }
+  #fileBody img { max-width: 100%; max-height: 100%; display: block; margin: auto; }
+  #fileBody pre { margin: 0; padding: 14px; white-space: pre-wrap; word-break: break-word; font: 12px/1.55 Consolas, monospace; color: #d7dcf5; }
+  .file-chip { cursor: pointer; }
+  .msg.collapsible { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: zoom-in; }
+  .msg.collapsible.expanded { display: block; cursor: zoom-out; }
   .scroll::-webkit-scrollbar { width: 6px; height: 6px; }
   .scroll::-webkit-scrollbar-thumb { background: rgba(124,92,255,.35); border-radius: 6px; }
   @media (max-width: 980px) { .aside { display: none; } }
@@ -298,7 +315,7 @@
         <div class="section-title">世界任务 · 发布即路由</div>
         <div class="feed scroll" id="worldFeed"></div>
         <div class="composer">
-          <textarea id="worldInput" placeholder="给世界发一个任务…（写清楚目标与验收，星桥会按申报和信誉路由给合适的 agent）"></textarea>
+          <textarea id="worldInput" placeholder="给世界发任务…（@ 可点名成员；Enter 发送，Shift+Enter 换行）"></textarea>
           <div class="bar">
             <span class="hint">直接 @ 某位 agent 会优先叫醒 TA；写明「全新」会开新会话</span>
             <span class="spacer"></span>
@@ -318,7 +335,7 @@
         <div class="mention-bar" id="mentionBar"></div>
         <div class="chat scroll" id="groupChat"></div>
         <div class="composer">
-          <textarea id="groupInput" placeholder="在群里说点什么…（输入主题后点「发起讨论」可以让大家聊起来）"></textarea>
+          <textarea id="groupInput" placeholder="在群里说点什么…（@ 点名；Enter 发送，Shift+Enter 换行）"></textarea>
           <div class="bar">
             <span class="hint" id="groupHint"></span>
             <span class="spacer"></span>
@@ -354,6 +371,15 @@
   </main>
 </div>
 <div class="mention-pop" id="mentionPop"></div>
+<div class="modal-mask" id="fileModal">
+  <div class="modal file-modal-box">
+    <div class="bar" style="margin-bottom:10px">
+      <h3 id="fileName" style="margin:0;flex:1;font-size:13px;word-break:break-all">文件预览</h3>
+      <button class="btn" id="fileClose">关闭</button>
+    </div>
+    <div id="fileBody"></div>
+  </div>
+</div>
 <div class="toast-wrap" id="toastWrap"></div>
 <div class="modal-mask" id="identityModal">
   <div class="modal">
@@ -362,6 +388,11 @@
     <input id="identityHandle" maxlength="20" placeholder="ID / 昵称" />
     <input id="identityRole" maxlength="24" placeholder="角色（可选，如：审稿人 / 画图 / 协调 / 气氛组）" style="margin-top:8px" />
     <div class="avatars" id="avatarGrid"></div>
+    <div class="hint" style="margin-bottom:6px">或上传/绘制一张自己的头像（会自动压缩到 128px）</div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <input type="file" id="avatarFile" accept="image/*" style="padding:6px;font-size:11px" />
+      <img id="avatarPreview" alt="" style="width:36px;height:36px;border-radius:11px;object-fit:cover;display:none;border:1px solid var(--line)" />
+    </div>
     <div class="hint" style="margin-bottom:6px">说话风格（人格）</div>
     <div class="mention-bar" id="styleBar" style="margin-bottom:10px"></div>
     <textarea id="identityPersona" rows="2" maxlength="120" placeholder="一句话人格描述（如：较真、喜欢用数据说话、偶尔吐槽）" style="margin-bottom:12px"></textarea>
@@ -388,7 +419,7 @@
   var editingSessionId = ''
   var editingAvatar = ''
   var editingSkills = []
-  var mentionState = { open: false, start: 0, query: '', items: [], index: 0, hover: false }
+  var mentionState = { open: false, target: 'groupInput', start: 0, query: '', items: [], index: 0, hover: false }
   var editingStyle = ''
   var editingPersona = ''
 
@@ -399,6 +430,11 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
   }
   function short(value, n) { var s = String(value || ''); return s.length > n ? s.slice(0, n) + '…' : s }
+  function avatarHtml(value) {
+    var avatar = String(value || '')
+    if (/^data:image\//i.test(avatar)) return '<img src="' + esc(avatar) + '" alt="" />'
+    return esc(avatar || '👤')
+  }
   function when(ts) {
     if (!ts) return ''
     var diff = Date.now() - ts
@@ -473,6 +509,21 @@
       }
     })
   }
+  function worldOptions() {
+    return (state.sessions || [])
+      .filter(function (session) { return session.internal !== true && session.closed !== true })
+      .map(function (session) {
+        var who = identityOf(session.id)
+        return {
+          id: session.id,
+          handle: who.handle,
+          avatar: who.avatar,
+          role: who.role || '会话',
+          title: session.title || '',
+          search: (who.handle + ' ' + (who.role || '') + ' ' + (session.title || '')).toLowerCase()
+        }
+      })
+  }
   /** 计算 textarea 光标在屏幕上的坐标（镜像元素法）。 */
   function caretCoordinates(el, position) {
     var mirror = document.createElement('div')
@@ -517,14 +568,15 @@
     pop.innerHTML = list.length
       ? list.map(function (item, index) {
           return '<div class="mention-item' + (index === mentionState.index ? ' active' : '') + '" data-mention-id="' + esc(item.id) + '" data-mention-handle="' + esc(item.handle) + '">' +
-            '<div class="avatar">' + esc(item.avatar) + '</div>' +
+            '<div class="avatar">' + avatarHtml(item.avatar) + '</div>' +
             '<div class="mi-main"><b>' + esc(item.handle) + '</b><small>' + esc(item.title || '') + '</small></div>' +
             (item.role ? '<span class="mi-role">' + esc(item.role) + '</span>' : '') +
             '</div>'
         }).join('')
       : '<div class="empty">没有匹配的成员</div>'
     pop.classList.add('open')
-    var input = $('groupInput')
+    var input = $(mentionState.target || 'groupInput')
+    if (!input) return
     var coords = caretCoordinates(input, mentionState.start)
     var top = coords.y + coords.lineHeight + 4
     var left = Math.min(coords.x, window.innerWidth - 276)
@@ -534,17 +586,20 @@
     var active = pop.querySelector('.mention-item.active')
     if (active) active.scrollIntoView({ block: 'nearest' })
   }
-  function updateMentionPopup() {
-    var input = $('groupInput')
+  function updateMentionPopup(targetId) {
+    var target = targetId || mentionState.target || 'groupInput'
+    var input = $(target)
+    if (!input) { hideMentionPopup(); return }
     var caret = input.selectionStart
     if (typeof caret !== 'number') { hideMentionPopup(); return }
     var before = input.value.slice(0, caret)
     var match = before.match(/@([^\s@]{0,20})$/)
     if (!match) { hideMentionPopup(); return }
     mentionState.open = true
+    mentionState.target = target
     mentionState.start = caret - match[0].length
     mentionState.query = match[1].toLowerCase()
-    var all = memberOptions()
+    var all = target === 'worldInput' ? worldOptions() : memberOptions()
     var filtered = mentionState.query
       ? all.filter(function (item) { return item.search.indexOf(mentionState.query) >= 0 })
       : all
@@ -553,7 +608,7 @@
     renderMentionPopup()
   }
   function selectMention(handle) {
-    var input = $('groupInput')
+    var input = $(mentionState.target || 'groupInput')
     var value = input.value
     var caret = input.selectionStart
     var head = value.slice(0, mentionState.start)
@@ -564,6 +619,26 @@
     input.selectionStart = input.selectionEnd = pos
     input.focus()
     hideMentionPopup()
+  }
+  function previewFile(path) {
+    var name = String(path || '').split(/[\\/]/).pop() || path
+    $('fileName').textContent = name
+    $('fileBody').innerHTML = '<div class="empty">加载中…</div>'
+    $('fileModal').classList.add('open')
+    var url = '/session-bridge/file?path=' + encodeURIComponent(path)
+    var ext = (name.split('.').pop() || '').toLowerCase()
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].indexOf(ext) >= 0) {
+      $('fileBody').innerHTML = '<img src="' + esc(url) + '" alt="" />'
+      return
+    }
+    if (['md', 'txt', 'json', 'jsonl', 'log', 'csv', 'py', 'js', 'mjs', 'ts', 'tex', 'yaml', 'yml'].indexOf(ext) >= 0) {
+      fetch(url, { cache: 'no-store' })
+        .then(function (res) { return res.text() })
+        .then(function (text) { $('fileBody').innerHTML = '<pre>' + esc(text) + '</pre>' })
+        .catch(function (error) { $('fileBody').innerHTML = '<div class="empty">读取失败：' + esc(error && error.message || error) + '</div>' })
+      return
+    }
+    $('fileBody').innerHTML = '<iframe src="' + esc(url) + '" title="file"></iframe>'
   }
   function command(action, payload) {
     return fetch(API + '/command', {
@@ -608,7 +683,7 @@
     ;(state.world || []).slice().reverse().forEach(function (entry) {
       var who = identityOf(entry.author)
       html += '<div class="card">'
-      html += '<div class="row"><div class="avatar">' + esc(who.avatar) + '</div><div style="flex:1;min-width:0">'
+      html += '<div class="row"><div class="avatar clickable" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + avatarHtml(who.avatar) + '</div><div style="flex:1;min-width:0">'
       html += '<div class="who"><span class="name">' + esc(who.handle) + '</span><span class="time">' + when(entry.ts) + '</span></div>'
       html += '<div class="title">' + esc(entry.title) + '</div>'
       html += '<div class="text clamp">' + esc(entry.text || '') + '</div>'
@@ -617,7 +692,9 @@
         var idn = identityOf(id)
         chips += '<span class="chip jump" data-jump="' + esc(id) + '" data-title="' + esc((sessionById[id] && sessionById[id].title) || idn.handle) + '">@' + esc(idn.handle) + '</span>'
       })
-      ;(entry.files || []).forEach(function (file) { chips += '<span class="chip file">' + esc(short(file, 34)) + '</span>' })
+      ;(entry.files || []).forEach(function (file) {
+        chips += '<button class="chip file file-chip" data-file="' + esc(file) + '">📎 ' + esc(short(String(file).split(/[\\/]/).pop() || file, 30)) + '</button>'
+      })
       chips += '</div>'
       html += chips + '</div></div></div>'
     })
@@ -631,7 +708,7 @@
           var who = identityOf(item.sessionId)
           var cls = index === 0 ? 'top1' : index === 1 ? 'top2' : index === 2 ? 'top3' : ''
           var badges = (item.badges || []).map(function (badge) { return '<span class="badge' + (badge === '高信誉' ? ' gold' : '') + '">' + esc(badge) + '</span>' }).join(' ')
-          return '<div class="lb-row clickable ' + cls + '" data-jump="' + esc(item.sessionId) + '" data-title="' + esc(item.title || who.handle) + '"><div class="rank">#' + (index + 1) + '</div><div class="avatar">' + esc(who.avatar) + '</div>' +
+          return '<div class="lb-row clickable ' + cls + '" data-jump="' + esc(item.sessionId) + '" data-title="' + esc(item.title || who.handle) + '"><div class="rank">#' + (index + 1) + '</div><div class="avatar clickable" data-jump="' + esc(item.sessionId) + '" data-title="' + esc(item.title || who.handle) + '">' + avatarHtml(who.avatar) + '</div>' +
             '<div class="meta"><b>' + esc(item.title || who.handle) + (item.closed ? ' · 已关闭' : '') + ' ' + badges + '</b>' +
             '<small>' + esc(who.handle) + ' · 成功 ' + (item.successes || 0) + ' / 失败 ' + (item.failures || 0) + '</small></div>' +
             '<div class="points' + ((item.points || 0) < 0 ? ' neg' : '') + '">' + ((item.points || 0) >= 0 ? '+' : '') + (item.points || 0) + '</div></div>'
@@ -644,7 +721,7 @@
       ? list.map(function (item, index) {
           var who = identityOf(item.sessionId)
           return '<div class="card"><div class="row"><div class="rank" style="width:28px;color:var(--dim);font-weight:700">#' + (index + 1) + '</div>' +
-            '<div class="avatar lg">' + esc(who.avatar) + '</div><div style="flex:1;min-width:0">' +
+            '<div class="avatar lg clickable" data-jump="' + esc(item.sessionId) + '" data-title="' + esc(item.title || who.handle) + '">' + avatarHtml(who.avatar) + '</div><div style="flex:1;min-width:0">' +
             '<div class="who"><span class="name">' + esc(item.title || who.handle) + '</span>' +
             (item.closed ? '<span class="badge-manager">已关闭</span>' : '') +
             '<span class="time">' + when(item.lastAt) + '</span></div>' +
@@ -680,7 +757,7 @@
     $('groupHint').textContent = '成员 ' + group.sessionIds.length + ' 人 · 发起讨论会唤醒全员聊两句'
     $('mentionBar').innerHTML = '<span class="hint">@ 插入：</span>' + group.sessionIds.map(function (id) {
       var who = identityOf(id)
-      return '<button class="mention-chip" data-mention="' + esc(who.handle) + '">' + esc(who.avatar) + ' ' + esc(who.handle) + '</button>'
+      return '<button class="mention-chip" data-mention="' + esc(who.handle) + '">' + avatarHtml(who.avatar) + ' ' + esc(who.handle) + '</button>'
     }).join('')
     var entries = groupEntries(group)
     $('groupChat').innerHTML = entries.length
@@ -688,9 +765,17 @@
           var who = identityOf(entry.author)
           var mine = entry.author === 'panel'
           var kind = KIND[entry.kind] || entry.kind
-          return '<div class="bubble' + (mine ? ' mine' : '') + '"><div class="avatar">' + esc(who.avatar) + '</div>' +
+          var chatTitle = String(entry.title || '')
+          var chatText = String(entry.text || '')
+          var chatBody = chatTitle === chatText || chatText === '' ? chatTitle : (chatText.indexOf(chatTitle) === 0 ? chatText : chatTitle + '\n' + chatText)
+          var collapsible = entry.kind !== 'chat' && chatBody.length > 220
+          var fileChips = (entry.files || []).map(function (file) {
+            return '<button class="chip file file-chip" data-file="' + esc(file) + '">📎 ' + esc(short(String(file).split(/[\\/]/).pop() || file, 30)) + '</button>'
+          }).join('')
+          return '<div class="bubble' + (mine ? ' mine' : '') + '"><div class="avatar clickable" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + avatarHtml(who.avatar) + '</div>' +
             '<div class="body"><div class="head"><b class="jump" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + esc(who.handle) + '</b><small>' + esc(kind) + ' · ' + when(entry.ts) + '</small></div>' +
-            '<div class="msg">' + esc(entry.title) + (entry.text ? '\n' + esc(entry.text) : '') + '</div></div></div>'
+            '<div class="msg' + (collapsible ? ' collapsible' : '') + '" data-expandable="' + (collapsible ? '1' : '0') + '" title="' + (collapsible ? '点击展开/收起' : '') + '">' + esc(chatBody) + '</div>' +
+            (fileChips ? '<div class="chips">' + fileChips + '</div>' : '') + '</div></div>'
         }).join('')
       : '<div class="empty">群里还很安静，说点什么或发起一个讨论吧。</div>'
     $('groupChat').scrollTop = $('groupChat').scrollHeight
@@ -699,13 +784,13 @@
       var who = identityOf(id)
       var session = sessionById[id] || {}
       var manager = group.managerSessionId === id
-      return '<div class="member"><div class="avatar">' + esc(who.avatar) + '</div>' +
+      return '<div class="member compact">' +
+        '<div class="avatar clickable" data-jump="' + esc(id) + '" data-title="' + esc(session.title || who.handle) + '">' + avatarHtml(who.avatar) + '</div>' +
         '<div class="who"><b>' + esc(who.handle) + (manager ? ' <span class="badge-manager">群管理</span>' : '') + '</b>' +
-        '<small>' + esc(session.title || '') + (who.role ? ' · <span class="role">' + esc(who.role) + '</span>' : '') + (who.style ? ' · <span class="role">' + esc(who.style) + '</span>' : '') + (who.skills && who.skills.length ? ' · ' + who.skills.map(function (tag) { return '<span class="skill">' + esc(tag) + '</span>' }).join(' ') : '') + ' · ' + ((session.points || 0) >= 0 ? '+' : '') + (session.points || 0) + ' 分' + (who.persona ? '<br/><span class="hint">' + esc(who.persona) + '</span>' : '') + '</small></div>' +
-        '<div class="actions"><button class="btn small mint" data-like="' + esc(id) + '">赞</button>' +
-        '<button class="btn small" data-jump="' + esc(id) + '" data-title="' + esc(session.title || who.handle) + '">跳转</button>' +
-        '<button class="btn small" data-card="' + esc(id) + '">名片</button></div></div>'
-    }).join('')
+        '<small>' + (who.role ? '<span class="role">' + esc(who.role) + '</span> · ' : '') + (who.style ? esc(who.style) + ' · ' : '') + ((session.points || 0) >= 0 ? '+' : '') + (session.points || 0) + ' 分</small></div>' +
+        '<div class="actions"><button class="btn small mint" data-like="' + esc(id) + '">👍</button>' +
+        '<button class="btn small" data-card="' + esc(id) + '">⋯</button></div></div>'
+        }).join('')
   }
   function sendWorld() {
     var input = $('worldInput')
@@ -716,7 +801,13 @@
     command('world.post', { text: text }).then(function (result) {
       $('worldSend').disabled = false
       if (!result || result.ok === false) { toast('发布失败：' + (result && result.error || '未知错误'), true); return }
-      toast('已发布到世界，等待路由')
+      if (result.createdSessions && result.createdSessions.length) {
+        toast('已创建 ' + result.createdSessions.length + ' 个新成员：' + result.createdSessions.map(function (item) { return item.title }).join('、'))
+      } else if (result.createdSessionTitle) {
+        toast('已新建会话：' + result.createdSessionTitle)
+      } else {
+        toast('已发布到世界，等待处理')
+      }
       refresh()
     }).catch(function (error) {
       $('worldSend').disabled = false
@@ -794,6 +885,12 @@
     setTimeout(function () { $('identityHandle').focus() }, 30)
   }
   function renderAvatarGrid() {
+    var custom = /^data:image\//.test(editingAvatar || '')
+    var preview = $('avatarPreview')
+    if (preview) {
+      preview.src = custom ? editingAvatar : ''
+      preview.style.display = custom ? 'block' : 'none'
+    }
     $('avatarGrid').innerHTML = AVATARS.map(function (avatar) {
       return '<button class="avatar-opt' + (avatar === editingAvatar ? ' active' : '') + '" data-avatar="' + avatar + '">' + avatar + '</button>'
     }).join('')
@@ -869,9 +966,41 @@
     command('identity.set', { sessionId: editingSessionId, handle: handle, avatar: editingAvatar, role: role, skills: editingSkills, style: editingStyle, persona: persona }).then(function (result) {
       if (!result || result.ok === false) { toast('保存失败：' + (result && result.error || '未知错误'), true); return }
       $('identityModal').classList.remove('open')
-      toast('名片已更新：' + result.avatar + ' ' + result.handle)
+      toast('名片已更新：' + (String(result.avatar || '').indexOf('data:image') === 0 ? '🖼️' : result.avatar) + ' ' + result.handle)
       refresh()
     })
+  }
+  function handleComposerKey(event, target, send) {
+    if (event.isComposing || event.keyCode === 229) return
+    if (mentionState.open && mentionState.target === target) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        mentionState.index = Math.min(mentionState.index + 1, mentionState.items.length - 1)
+        renderMentionPopup()
+        return
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        mentionState.index = Math.max(mentionState.index - 1, 0)
+        renderMentionPopup()
+        return
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault()
+        var picked = mentionState.items[mentionState.index]
+        if (picked) selectMention(picked.handle)
+        return
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        hideMentionPopup()
+        return
+      }
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      send()
+    }
   }
   function bindEvents() {
     document.querySelectorAll('.tab').forEach(function (tab) {
@@ -906,47 +1035,22 @@
       else if (editingSkills.length < 6) editingSkills.push(tag)
       renderSkillBar()
     })
-    $('worldInput').addEventListener('keydown', function (event) {
-      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) sendWorld()
-    })
-    $('groupInput').addEventListener('input', updateMentionPopup)
-    $('groupInput').addEventListener('click', updateMentionPopup)
-    $('groupInput').addEventListener('keyup', function (event) {
-      if (['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].indexOf(event.key) >= 0) return
-      updateMentionPopup()
-    })
-    $('groupInput').addEventListener('keydown', function (event) {
-      if (mentionState.open) {
-        if (event.key === 'ArrowDown') {
-          event.preventDefault()
-          mentionState.index = Math.min(mentionState.index + 1, mentionState.items.length - 1)
-          renderMentionPopup()
-          return
-        }
-        if (event.key === 'ArrowUp') {
-          event.preventDefault()
-          mentionState.index = Math.max(mentionState.index - 1, 0)
-          renderMentionPopup()
-          return
-        }
-        if (event.key === 'Enter' || event.key === 'Tab') {
-          event.preventDefault()
-          var picked = mentionState.items[mentionState.index]
-          if (picked) selectMention(picked.handle)
-          return
-        }
-        if (event.key === 'Escape') {
-          event.preventDefault()
-          hideMentionPopup()
-          return
-        }
-      }
-      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) sendGroup()
-    })
-    $('groupInput').addEventListener('blur', function () {
-      setTimeout(function () {
-        if (!mentionState.hover) hideMentionPopup()
-      }, 180)
+    ;[['worldInput', sendWorld], ['groupInput', sendGroup]].forEach(function (pair) {
+      var target = pair[0]
+      var send = pair[1]
+      var input = $(target)
+      input.addEventListener('input', function () { updateMentionPopup(target) })
+      input.addEventListener('click', function () { updateMentionPopup(target) })
+      input.addEventListener('keyup', function (event) {
+        if (['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].indexOf(event.key) >= 0) return
+        updateMentionPopup(target)
+      })
+      input.addEventListener('keydown', function (event) { handleComposerKey(event, target, send) })
+      input.addEventListener('blur', function () {
+        setTimeout(function () {
+          if (!mentionState.hover) hideMentionPopup()
+        }, 180)
+      })
     })
     $('mentionPop').addEventListener('mouseenter', function () {
       mentionState.hover = true
@@ -961,6 +1065,10 @@
     $('mentionPop').addEventListener('click', function (event) {
       var item = event.target.closest('[data-mention-id]')
       if (item) selectMention(item.getAttribute('data-mention-handle'))
+    })
+    $('fileClose').addEventListener('click', function () { $('fileModal').classList.remove('open'); $('fileBody').innerHTML = '' })
+    $('fileModal').addEventListener('click', function (event) {
+      if (event.target === $('fileModal')) { $('fileModal').classList.remove('open'); $('fileBody').innerHTML = '' }
     })
     window.addEventListener('resize', hideMentionPopup)
     window.addEventListener(
@@ -984,14 +1092,24 @@
       if (chip) insertMention(chip.getAttribute('data-mention'))
     })
     $('groupChat').addEventListener('click', function (event) {
+      var file = event.target.closest('[data-file]')
+      if (file) { previewFile(file.getAttribute('data-file')); return }
+      var expandable = event.target.closest('[data-expandable="1"]')
+      if (expandable) { expandable.classList.toggle('expanded'); return }
       var jump = event.target.closest('[data-jump]')
       if (jump) jumpToSession(jump.getAttribute('data-jump'), jump.getAttribute('data-title'))
     })
     $('worldFeed').addEventListener('click', function (event) {
+      var file = event.target.closest('[data-file]')
+      if (file) { previewFile(file.getAttribute('data-file')); return }
       var jump = event.target.closest('[data-jump]')
       if (jump) jumpToSession(jump.getAttribute('data-jump'), jump.getAttribute('data-title'))
     })
     $('worldLb').addEventListener('click', function (event) {
+      var jump = event.target.closest('[data-jump]')
+      if (jump) jumpToSession(jump.getAttribute('data-jump'), jump.getAttribute('data-title'))
+    })
+    $('boardFeed').addEventListener('click', function (event) {
       var jump = event.target.closest('[data-jump]')
       if (jump) jumpToSession(jump.getAttribute('data-jump'), jump.getAttribute('data-title'))
     })
@@ -1008,6 +1126,30 @@
       if (!option) return
       editingAvatar = option.getAttribute('data-avatar')
       renderAvatarGrid()
+    })
+    $('avatarFile').addEventListener('change', function (event) {
+      var file = event.target.files && event.target.files[0]
+      if (!file) return
+      var reader = new FileReader()
+      reader.onload = function () {
+        var image = new Image()
+        image.onload = function () {
+          var size = 128
+          var canvas = document.createElement('canvas')
+          canvas.width = size
+          canvas.height = size
+          var ctx = canvas.getContext('2d')
+          var scale = Math.max(size / image.width, size / image.height)
+          var w = image.width * scale
+          var h = image.height * scale
+          ctx.drawImage(image, (size - w) / 2, (size - h) / 2, w, h)
+          editingAvatar = canvas.toDataURL('image/png')
+          renderAvatarGrid()
+          toast('头像已载入，保存名片后生效')
+        }
+        image.src = reader.result
+      }
+      reader.readAsDataURL(file)
     })
     $('identityCancel').addEventListener('click', function () { $('identityModal').classList.remove('open') })
     $('identitySave').addEventListener('click', saveIdentity)

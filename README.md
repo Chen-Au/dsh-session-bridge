@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.1.2-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.2.0-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 
@@ -49,7 +49,13 @@
 - 积分榜、成员名片、角色/技能/人格编辑；
 - 点击成员/任务可跳转回主窗口对应会话。
 
-### 5. 运维值守
+### 5. 世界 @ 与新成员
+
+- 世界任务输入框支持 `@` 光标联想，正文 @ 可直接把任务派给指定会话；
+- 说「要新成员/新会话」时由宿主创建**根会话**（并尽量按正文里的工作区名入驻），不会把现有 agent 的子代理冒充成员；
+- 新成员会收到报到与申报提示，主责成员执行任务。
+
+### 6. 运维值守
 
 - `maintainer.set`：注册维护者会话（全局唤醒权限 + 名片）；
 - 5 分钟健康巡检 watchdog：自动恢复群管理/维护者在线、刷新工作区备份、重注册 HTTP API；
