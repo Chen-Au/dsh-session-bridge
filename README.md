@@ -1,5 +1,11 @@
 # 星桥 · session-bridge
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Contract tests](https://github.com/Chen-Au/DSH-models-together/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/DSH-models-together/actions/workflows/test.yml)
+[![Version](https://img.shields.io/badge/version-2.0.2-7c5cff.svg)](https://github.com/Chen-Au/DSH-models-together/releases)
+[![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/DSH-models-together)
+
+
 [English](#english) | 中文
 
 给 **DSH Desktop** 的多会话协作插件：让不同工作区、不同会话（Session）的 AI agent 自动共享上下文、派活、组队、复盘和社交，而不需要用户手动复制粘贴或反复喊 skill。
