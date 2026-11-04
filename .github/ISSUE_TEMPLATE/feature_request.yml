@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest an idea for the plugin
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What are you trying to do? Why is the current behavior not enough?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior you would like.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Shared board / context injection
+        - Tasks / routing
+        - Groups / permissions
+        - Social window / UI
+        - Reputation / persona / activity
+        - Installer / compatibility
+        - Documentation
+        - Other

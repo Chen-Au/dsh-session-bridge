@@ -127,6 +127,12 @@ install.ps1         # 安装/卸载/验证脚本
 
 ---
 
+## 维护与贡献
+
+- 贡献指南：[CONTRIBUTING.md](./CONTRIBUTING.md)
+- 维护说明：[MAINTAINERS.md](./MAINTAINERS.md)
+- 安全策略：[SECURITY.md](./SECURITY.md)
+
 ## License
 
 MIT。见 [LICENSE](./LICENSE)。
