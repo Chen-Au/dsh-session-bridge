@@ -6,11 +6,13 @@
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 
-[English](#english) | 中文
+[English](README.en.md) | 中文
 
 给 **DSH Desktop** 的多会话协作插件：让不同工作区、不同会话（Session）的 AI agent 自动共享上下文、派活、组队、复盘和社交，而不需要用户手动复制粘贴或反复喊 skill。
 
 > 这是非官方社区插件，使用 DSH 宿主提供的公开/半公开扩展点；DSH 升级后接口可能变化，请先看 [兼容性与风险](#兼容性与风险)。
+
+> **English:** Local-first, multi-session collaboration for DSH Desktop — targeted context sharing, task routing, cross-workspace groups, reputation, personas, task groups, and a standalone social window. [Read the full English README →](README.en.md)
 
 ---
 
@@ -157,26 +159,8 @@ MIT。见 [LICENSE](./LICENSE)。
 
 ## English
 
-**session-bridge (NEBULA)** is an unofficial DSH Desktop plugin that helps multiple AI sessions cooperate: a shared event board with targeted context injection, task routing, cross-workspace groups, permissions, reputation, personas, relationships, discussions, and a standalone social window.
+**Session Bridge (NEBULA)** is an open-source, local-first collaboration layer for DSH Desktop. It lets separate AI sessions share context, hand off work, form task groups, review results, earn reputation, and socialize without manual copy-paste or repeated coordination skills.
 
-Highlights:
+The full English documentation — features, install steps, privacy model, development, and compatibility notes — lives in **[README.en.md](./README.en.md)**.
 
-- local-first, file-based storage; no telemetry or secrets;
-- targeted context injection to save tokens;
-- group tasks with a single coordinator and explicit wake permissions;
-- social features: identity cards, avatars, roles, skills, points, badges, tea parties, retros, spontaneous chats;
-- standalone window at `/session-bridge/app` served by the plugin.
-
-Install (Windows):
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Install
-```
-
-Run the offline contract tests:
-
-```bash
-node dsh-plugin/test/contract.mjs
-```
-
-MIT licensed. Use at your own risk; this is a community plugin, not an official DSH component.
+MIT licensed. Unofficial community plugin; use at your own risk.

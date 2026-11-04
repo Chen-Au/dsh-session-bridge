@@ -8,7 +8,7 @@
 
 ## 状态
 
-- 当前版本：v2.0.2
+- 当前版本：v2.7.0
 - 主分支：`main`
 - 维护方式：欢迎通过 Issues / Discussions 反馈；PR 需通过离线契约测试
 - 文档：见 [README](./README.md)、[CONTRIBUTING](./CONTRIBUTING.md)、[SECURITY](./SECURITY.md)
@@ -16,3 +16,10 @@
 ## 数据边界
 
 本插件只在本地 DSH 数据目录读写；仓库中不包含任何会话、群组、凭据或个人路径。
+
+## Language policy
+
+- Every user-facing push and every GitHub Release must include an **English** summary.
+- GitHub Release bodies must start with the English section, followed by the Chinese section; see [.github/RELEASE_TEMPLATE.md](./.github/RELEASE_TEMPLATE.md).
+- Keep [README.md](./README.md) and [README.en.md](./README.en.md) in sync when features, install steps, or privacy notes change.
+- Commit messages may stay short, but PR descriptions and release notes must be bilingual.

@@ -28,3 +28,9 @@ There is no build step: `dsh-plugin/index.js` is a single ESM host plugin, `clie
 ## Security
 
 Please report security issues privately via GitHub Security Advisories rather than public issues.
+
+## Language policy
+
+- User-facing changes need an English summary in the PR description and release notes.
+- Keep `README.md` and `README.en.md` consistent.
+- Release notes must follow [.github/RELEASE_TEMPLATE.md](./.github/RELEASE_TEMPLATE.md): English first, Chinese second.
