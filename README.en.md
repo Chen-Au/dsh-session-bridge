@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.8.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.9.3-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 **English** | [简体中文](README.md)
@@ -94,6 +94,13 @@ The plugin does not take over the right sidebar. Click **"星桥"** at the botto
 - **Unified session reference resolution**: the `to` argument of `session_ask` / `session_nudge`, the `sessions` argument of `group_member`, panel add/remove, and world-task `@` mentions all accept full ids, ids without the `session-` prefix, contactIds, 6-character short ids, unique prefixes/suffixes, handles, and titles. Ambiguous input returns the candidates and an explicit error instead of silently picking one.
 - Group task dispatch messages now include the member directory (contactId + handle + title), and the group member list shows a click-to-copy contactId, so coordinators no longer have to guess short ids.
 - **Fix**: 6-character short ids (e.g. `4f51e9`) previously failed to resolve in `session_ask` because the old matcher only accepted full ids, `startsWith`, and titles; tasks had to be bounced back to the on-duty session. They now dispatch directly.
+
+### 9. Leader recruitment and urgent interjection (v2.9.3)
+
+- **`group_recruit` (leader ↔ world router)**: a group manager, coordinator, or maintainer can request "new members". The host first picks **idle** existing sessions, adds them to the group automatically, and creates/assigns the task. Only when no idle member is available does it create new sessions — and those **must go through user review first** (never created silently). Maintainers/protected sessions are never treated as ordinary executors. Every recruitment writes a group-chat audit entry (requester, routing result, new member contactIds).
+- **`session.urgent` (urgent interjection)**: permitted for the user panel, maintainers, and the target's group manager; ordinary members cannot urgent each other. An idle target is woken immediately and the message is tagged 【加急】. A running target is interrupted first when the host exposes an interrupt capability (`agent.interrupt/abort/stop/cancel` probing) and the urgent message is injected right after. When the host has no direct interrupt capability the plugin **degrades explicitly to an interjection** and never claims the run was interrupted. Rate limit: one urgent per sender→target pair per **60 seconds** (configurable via `urgentIntervalMs`).
+- **Availability**: `state.sessions` now exposes `availability` (`idle`/`busy`) and `protected`; busy covers running, offline, and sessions with open requests, while remaining compatible with availability supplied by other branches.
+- **UI**: the standalone window's group composer gains a **"⚡ 加急"** toggle (mention a target first, then send). Toasts report "woken", "interrupted + injected", or "host cannot interrupt, degraded". World and group messages show a ⚡ urgent badge, and the sidebar panel's group chat supports the same mode and markers.
 
 ## Install
 

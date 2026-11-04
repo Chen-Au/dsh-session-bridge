@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.8.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.9.3-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 
@@ -81,6 +81,13 @@
 - **统一会话引用解析**：`session_ask` / `session_nudge` 的 `to`、`group_member` 的 `sessions`、面板加/移成员、世界任务正文 `@` 都支持完整 id、无前缀 id、contactId、短 id（6 位压缩前缀）、唯一前后缀、handle、标题；命中多个时**返回候选并明确报错**，不会静默选错；
 - 群任务派活消息自动附带成员通讯录（contactId + handle + 标题），面板群成员列表显示可点击复制的 contactId，组长不必再猜短 ID；
 - **修复**：此前 6 位短 id（如 `4f51e9`）无法用于 `session_ask` 的 `to`（旧逻辑只支持完整 id / startsWith / 标题），只能退回给值班员；现在可直接派活。
+
+### 9. 组长招募新人与加急插话（v2.9.3）
+
+- **`group_recruit`（组长 ↔ 世界路由）**：本群群管理 / 组长（coordinator）/ 维护者可请求"派新人"——宿主优先挑选**空闲**的现有会话自动入群并创建/指派任务；现有成员不足时才新建会话，且**必须先经用户复核**（不会偷偷创建）；维护者/受保护会话不会被当作普通执行人选中；每次招募都会在群聊里留下审计（谁发起、路由结果、新成员 contactId）；
+- **`session.urgent`（加急插话）**：权限为「用户面板 > 维护者 > 目标所在群的群管理」，普通成员不能对他人加急；目标空闲时立即唤醒并标注【加急】；目标正在运行时优先调用宿主打断能力（`agent.interrupt/abort/stop/cancel` 能力探测），打断后立即注入加急消息；宿主不支持直接打断时**明确降级为插话**，不会假装已打断；同一发送者→同一目标 **60 秒内最多 1 条**（可配 `urgentIntervalMs`），防轰炸；
+- **空闲/忙碌**：`state.sessions` 增加 `availability`（`idle`/`busy`）与 `protected` 字段；busy 判定兼容运行中、离线、存在未完成请求，并兼容其它分支提供的 availability；
+- **UI**：独立窗口群聊输入区新增 **「⚡ 加急」** 开关（先 @ 目标成员再发送），发送后 toast 显示「已唤醒 / 已打断并插话 / 宿主不支持打断已降级」；世界与群聊消息都显示 ⚡ 加急标记；右侧栏「经验桥」群聊同样支持加急与标记。
 
 ---
 

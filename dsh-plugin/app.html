@@ -255,6 +255,20 @@
   }
   .contactid:hover { background: rgba(95,242,200,.18); }
   .badge-manager { color: var(--gold); border: 1px solid rgba(255,209,102,.4); border-radius: 999px; padding: 1px 7px; font-size: 9.5px; }
+  /* ⚡ 加急插话（v2.9.3）：群/世界消息与输入区都要有明显标记 */
+  .card.urgent { border-color: rgba(255,107,129,.5); box-shadow: 0 0 22px rgba(255,107,129,.13); }
+  .chip.urgent { color: var(--danger); border-color: rgba(255,107,129,.5); background: rgba(255,107,129,.12); font-weight: 600; }
+  .bubble.urgent .body { border-color: rgba(255,107,129,.5); background: rgba(255,107,129,.10); }
+  .badge-urgent {
+    color: var(--danger); border: 1px solid rgba(255,107,129,.55); background: rgba(255,107,129,.16);
+    border-radius: 999px; padding: 1px 7px; font-size: 9.5px; font-weight: 700; letter-spacing: .3px;
+  }
+  .btn.urgent { border-color: rgba(255,107,129,.45); color: var(--danger); }
+  .btn.urgent.active {
+    background: rgba(255,107,129,.22); border-color: var(--danger); color: #fff;
+    box-shadow: 0 0 18px rgba(255,107,129,.35);
+  }
+  .btn.urgent.active::after { content: ' ON'; font-size: 9px; color: var(--danger); }
   .empty { color: var(--dim); text-align: center; padding: 36px 12px; border: 1px dashed var(--line); border-radius: var(--radius); }
   .toast-wrap { position: fixed; right: 20px; bottom: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 20; }
   .toast {
@@ -381,6 +395,7 @@
             <button class="btn" id="teaBtn">☕ 茶话会</button>
             <button class="btn" id="sparkBtn">✨ 闲聊</button>
             <button class="btn mint" id="discussBtn">发起讨论</button>
+            <button class="btn urgent" id="groupUrgent" title="加急插话：先 @ 目标成员，再点发送；目标忙碌时会尝试打断后插话，宿主不支持打断会明确降级">⚡ 加急</button>
             <button class="btn primary" id="groupSend">发送</button>
           </div>
         </div>
@@ -477,6 +492,7 @@
   var sessionById = {}
   var currentGroupId = ''
   var activeView = 'world'
+  var urgentMode = false
   var editingSessionId = ''
   var editingAvatar = ''
   var editingSkills = []
@@ -788,7 +804,7 @@
     pendingApprovals.forEach(function (item) {
       html += '<div class="card approval-card">'
       html += '<div class="row"><div class="avatar">🔐</div><div style="flex:1;min-width:0">'
-      html += '<div class="who"><span class="name">待复核 · 自动创建</span><span class="time">' + when(item.createdAt) + '</span></div>'
+      html += '<div class="who"><span class="name">' + (item.source === 'group.recruit' ? '待复核 · 招募新成员' : '待复核 · 自动创建') + '</span><span class="time">' + when(item.createdAt) + '</span></div>'
       html += '<div class="title">' + esc(item.title || '该任务将创建新会话/工作区') + '</div>'
       html += '<div class="text" style="white-space:pre-wrap">' + esc(item.text || '') + '</div>'
       html += '<div class="approval-meta">'
@@ -802,12 +818,13 @@
     })
     ;(state.world || []).slice().reverse().forEach(function (entry) {
       var who = identityOf(entry.author)
-      html += '<div class="card">'
+      html += '<div class="card' + (entry.urgent ? ' urgent' : '') + '">'
       html += '<div class="row"><div class="avatar clickable" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + avatarHtml(who.avatar) + '</div><div style="flex:1;min-width:0">'
       html += '<div class="who"><span class="name">' + esc(who.handle) + '</span><span class="time">' + when(entry.ts) + '</span></div>'
       html += '<div class="title">' + esc(entry.title) + '</div>'
       html += '<div class="text clamp">' + esc(entry.text || '') + '</div>'
       var chips = '<div class="chips"><span class="chip kind">' + esc(KIND[entry.kind] || entry.kind) + '</span>'
+      if (entry.urgent) chips += '<span class="chip urgent">⚡ 加急</span>'
       ;(entry.mentions || []).forEach(function (id) {
         var idn = identityOf(id)
         chips += '<span class="chip jump" data-jump="' + esc(id) + '" data-title="' + esc((sessionById[id] && sessionById[id].title) || idn.handle) + '">@' + esc(idn.handle) + '</span>'
@@ -875,7 +892,9 @@
       return
     }
     $('groupTitle').textContent = '群聊 · ' + group.name
-    $('groupHint').textContent = '成员 ' + group.sessionIds.length + ' 人 · 点成员行里的 contactId 可复制（session_ask 的 to 直接用它）· 发起讨论会唤醒全员聊两句'
+    $('groupHint').textContent = (urgentMode ? '⚡ 加急模式 · ' : '') + '成员 ' + group.sessionIds.length + ' 人 · 点成员行里的 contactId 可复制（session_ask 的 to 直接用它）· 发起讨论会唤醒全员聊两句'
+    var urgentBtn = $('groupUrgent')
+    if (urgentBtn) urgentBtn.classList.toggle('active', urgentMode)
     $('mentionBar').innerHTML = '<span class="hint">@ 插入：</span>' + group.sessionIds.map(function (id) {
       var who = identityOf(id)
       return '<button class="mention-chip" data-mention="' + esc(who.handle) + '">' + avatarHtml(who.avatar) + ' ' + esc(who.handle) + '</button>'
@@ -902,8 +921,8 @@
             var marked = identityOf(id)
             return '<button class="chip jump" data-jump="' + esc(id) + '" data-title="' + esc((sessionById[id] && sessionById[id].title) || marked.handle) + '">@' + esc(marked.handle) + '</button>'
           }).join('')
-          return '<div class="bubble' + (mine ? ' mine' : '') + '"><div class="avatar clickable" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + avatarHtml(who.avatar) + '</div>' +
-            '<div class="body"><div class="head"><b class="jump" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + esc(who.handle) + '</b><small>' + esc(kind) + ' · ' + when(entry.ts) + '</small></div>' +
+          return '<div class="bubble' + (mine ? ' mine' : '') + (entry.urgent ? ' urgent' : '') + '"><div class="avatar clickable" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + avatarHtml(who.avatar) + '</div>' +
+            '<div class="body"><div class="head"><b class="jump" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + esc(who.handle) + '</b><small>' + esc(kind) + (entry.urgent ? ' · <span class="badge-urgent">⚡ 加急</span>' : '') + ' · ' + when(entry.ts) + '</small></div>' +
             '<div class="msg' + (collapsible ? ' collapsible' : '') + '" data-expandable="' + (collapsible ? '1' : '0') + '" title="' + (collapsible ? '点击展开/收起' : '') + '">' + esc(chatBody) + '</div>' +
             ((fileChips || mentionMarks) ? '<div class="chips">' + mentionMarks + fileChips + '</div>' : '') + '</div></div>'
         }).join('')
@@ -953,23 +972,61 @@
       toast('发布失败：' + (error && error.message ? error.message : error), true)
     })
   }
+  function mentionIdsInText(text, ids) {
+    return (ids || []).filter(function (id) {
+      var who = identityOf(id)
+      var keys = [who.handle, (sessionById[id] && sessionById[id].title) || '']
+      var lower = String(text || '').toLowerCase()
+      return keys.some(function (key) {
+        var needle = String(key).toLowerCase()
+        return needle && (lower.indexOf('@' + needle) >= 0 || lower.indexOf('@ ' + needle) >= 0)
+      })
+    })
+  }
+  /** ⚡ 加急发送：逐个目标发 session.urgent；结果用 toast 说明是否打断/降级。 */
+  function sendGroupUrgent(group, text, mentionIds) {
+    var targets = mentionIds.slice(0, 3)
+    var jobs = targets.map(function (id) {
+      return command('session.urgent', { to: id, text: text, group: group.id }).then(
+        function (result) { return { id: id, result: result } },
+        function (error) { return { id: id, error: error } }
+      )
+    })
+    Promise.all(jobs).then(function (results) {
+      $('groupSend').disabled = false
+      var okParts = []
+      var badParts = []
+      results.forEach(function (item) {
+        if (item.result && item.result.ok) {
+          var title = (item.result.target && item.result.target.title) || short(item.id, 12)
+          var how = item.result.interrupted ? '已打断并插话' : item.result.degraded ? '已插话（宿主不支持打断）' : '已唤醒'
+          okParts.push(title + '：' + how)
+        } else {
+          badParts.push((item.result && item.result.error) || (item.error && item.error.message) || '未知错误')
+        }
+      })
+      if (okParts.length) toast('⚡ 加急已发送：' + okParts.join('；'))
+      if (badParts.length) toast('加急失败：' + badParts.join('；'), true)
+      groupScrollState.forceBottom = true
+      refresh()
+    })
+  }
   function sendGroup() {
     var group = currentGroup()
     if (!group) return
     var input = $('groupInput')
     var text = input.value.trim()
     if (!text) return
+    var mentionIds = mentionIdsInText(text, group.sessionIds)
+    if (urgentMode) {
+      if (!mentionIds.length) { toast('加急需要先 @ 一位成员（点成员行的 @ 插入），再点发送', true); return }
+      $('groupSend').disabled = true
+      input.value = ''
+      sendGroupUrgent(group, text, mentionIds)
+      return
+    }
     $('groupSend').disabled = true
     input.value = ''
-    var mentionIds = (group.sessionIds || []).filter(function (id) {
-      var who = identityOf(id)
-      var keys = [who.handle, (sessionById[id] && sessionById[id].title) || '']
-      var lower = text.toLowerCase()
-      return keys.some(function (key) {
-        var needle = String(key).toLowerCase()
-        return needle && (lower.indexOf('@' + needle) >= 0 || lower.indexOf('@ ' + needle) >= 0)
-      })
-    })
     command('group.post', { id: group.id, text: text, mentionSessionIds: mentionIds }).then(function (result) {
       $('groupSend').disabled = false
       if (!result || result.ok === false) { toast('发送失败：' + (result && result.error || '未知错误'), true); return }
@@ -979,6 +1036,23 @@
       $('groupSend').disabled = false
       toast('发送失败：' + (error && error.message ? error.message : error), true)
     })
+  }
+  function setUrgentMode(on) {
+    urgentMode = on === true
+    var btn = $('groupUrgent')
+    if (btn) btn.classList.toggle('active', urgentMode)
+    var input = $('groupInput')
+    if (input) {
+      input.setAttribute(
+        'placeholder',
+        urgentMode
+          ? '⚡ 加急插话：先 @ 目标成员，再写要立刻处理的内容…（60 秒内同一成员限 1 条）'
+          : '在群里说点什么…（@ 点名；Enter 发送，Shift+Enter 换行）'
+      )
+      input.focus()
+    }
+    var hint = $('groupHint')
+    if (hint) hint.textContent = urgentMode ? '⚡ 加急模式：发送会立即唤醒目标（running 会先尝试打断，无能力则明确降级）' : hint.textContent.replace(/^⚡ 加急模式[^·]*· ?/, '')
   }
   function startDiscussion() {
     var group = currentGroup()
@@ -1212,6 +1286,7 @@
     $('closeBtn').addEventListener('click', function () { window.close() })
     $('worldSend').addEventListener('click', sendWorld)
     $('groupSend').addEventListener('click', sendGroup)
+    $('groupUrgent').addEventListener('click', function () { setUrgentMode(!urgentMode) })
     $('discussBtn').addEventListener('click', startDiscussion)
     $('teaBtn').addEventListener('click', startTea)
     $('sparkBtn').addEventListener('click', startSpark)
@@ -1329,10 +1404,15 @@
         var item = (state.approvals || []).find(function (entry) { return entry.id === approvalId })
         if (!item) { toast('待复核记录已失效', true); refresh(); return }
         approve.disabled = true
-        command('world.post', { text: item.text, approved: true, approvalId: item.id }).then(function (result) {
+        var isRecruit = item.source === 'group.recruit'
+        var action = isRecruit ? 'group.recruit' : 'world.post'
+        var payload = isRecruit
+          ? Object.assign({}, item.payload || { text: item.text }, { approved: true, approvalId: item.id })
+          : { text: item.text, approved: true, approvalId: item.id }
+        command(action, payload).then(function (result) {
           if (!result || result.ok === false) { approve.disabled = false; toast('执行失败：' + (result && result.error || '未知错误'), true); return }
           if (result.pendingApproval) { approve.disabled = false; toast('复核未完成：' + (result.message || ''), true); return }
-          toast('已通过并派发世界任务')
+          toast(isRecruit ? '已通过并执行招募' : '已通过并派发世界任务')
           refresh()
         })
         return
