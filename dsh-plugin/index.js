@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.6.1'
+const VERSION = '2.7.0'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -1616,7 +1616,6 @@ export function apply(ctx, config = {}) {
           worldEligible:
             !internal &&
             repNow.closed !== true &&
-            !managerIds.has(record.id) &&
             (Boolean(profilesNow[record.id] && profilesNow[record.id].summary) ||
               groupMemberIds.has(record.id) ||
               record.id === maintainerId),
@@ -3159,14 +3158,47 @@ export function apply(ctx, config = {}) {
       const group = groupRef ? groupStore.find(groupRef, info.cwd) : null
       const replyRef = args && typeof args.replyTo === 'string' ? args.replyTo.trim() : ''
       const replyRequest = replyRef ? findRequestEntry(replyRef) : null
-      const worldReply = Boolean(replyRequest && replyRequest.channel === 'world')
+      const replyGroup = replyRequest && replyRequest.groupId
+        ? groupStore.read().find((item) => item.id === replyRequest.groupId)
+        : null
+      const effectiveGroup = group || replyGroup
+      const replyText = String((args && args.text) || '') + ' ' + String((args && args.title) || '')
+      const looksFinal = /(完成|已完成|已交付|交付完成|通过|验收通过|成功|done|finished|delivered|ready)/i.test(replyText) &&
+        !/(未完成|无法|失败|受阻|进行中|待完成|还没)/i.test(replyText)
+      const gateTask = replyRequest && replyRequest.taskId ? findBoardEntry(replyRequest.taskId) : null
+      const gateIsWorldTask = Boolean(
+        replyRequest &&
+          (replyRequest.channel === 'world' || (gateTask && gateTask.worldTask === true))
+      )
+      const coordinatorGate = Boolean(replyRequest && replyRequest.kind === 'request' && gateIsWorldTask)
+      if (coordinatorGate && !looksFinal) {
+        const progress = addEntry(
+          {
+            title: '进度：' + String((args && args.title) || truncate(replyText, 20)).slice(0, 40),
+            text: String((args && args.text) || ''),
+            kind: 'chat',
+            scope: effectiveGroup ? 'group' : 'workspace',
+            groupId: effectiveGroup ? effectiveGroup.id : '',
+            workspace: info.cwd,
+            author: info.id,
+            files: args && args.files,
+            hiddenFromChat: effectiveGroup ? false : true,
+            skipDedupe: true
+          },
+          'tool'
+        )
+        return progress.ok
+          ? `已把进度记录到${effectiveGroup ? '任务群「' + effectiveGroup.name + '」' : '本地'}（未发布世界，请求保持未完成）。任务真正完成时再用 replyTo=${replyRequest.id} 发【任务完成】汇总。`
+          : `进度记录失败：${progress.reason || ''}`
+      }
+      const worldReply = Boolean(replyRequest && replyRequest.channel === 'world' && !effectiveGroup)
       const result = addEntry(
         {
           title: args && args.title,
           text: args && args.text,
           kind,
-          scope: worldReply ? 'global' : scope,
-          groupId: group ? group.id : '',
+          scope: effectiveGroup ? 'group' : worldReply ? 'global' : scope,
+          groupId: effectiveGroup ? effectiveGroup.id : '',
           channel: worldReply ? 'world' : '',
           workspace: info.cwd,
           author: info.id,
@@ -3243,6 +3275,30 @@ export function apply(ctx, config = {}) {
                     replyNote += ' 未提交成员 -6 积分。'
                   } else {
                     relationStore.bump(info.id, assignee, 1)
+                  }
+                }
+                if (finishedTask.worldTask === true) {
+                  try {
+                    const worldSummary = addEntry(
+                      {
+                        title: '世界任务完成：' + truncate(String(finishedTask.title || request.title || ''), 24),
+                        text: String(result.entry.text || result.entry.title || ''),
+                        kind: 'handoff',
+                        scope: 'global',
+                        channel: 'world',
+                        workspace: info.cwd,
+                        author: info.id,
+                        files: result.entry.files || [],
+                        skipDedupe: true
+                      },
+                      'tool'
+                    )
+                    if (worldSummary.ok) {
+                      scoreSession(info.id, 5, { success: true })
+                      replyNote += ' 已向世界发布完成汇总 +5 积分。'
+                    }
+                  } catch {
+                    /* 世界汇总失败不影响任务完成 */
                   }
                 }
                 const retroGroup = request.groupId
@@ -4819,7 +4875,7 @@ export function apply(ctx, config = {}) {
         }
       }
       let createdGroup = null
-      if (assigned.length >= 2) {
+      if (assigned.length >= 1) {
         try {
           const memberIds = [...new Set(assigned.map((item) => item.id))]
           const baseName = ('协作：' + String(text).replace(/\s+/g, ' ')).slice(0, 24)
@@ -4892,6 +4948,7 @@ export function apply(ctx, config = {}) {
               taskStatus: 'assigned',
               coordinator: autoCoordinatorId,
               assignees,
+              worldTask: true,
               skipDedupe: true
             },
             'panel'
@@ -4965,10 +5022,11 @@ export function apply(ctx, config = {}) {
             title: `@${mentionName} ${truncate(text, 18)}`,
             text,
             kind: 'request',
-            scope: 'global',
+            scope: createdGroup ? 'group' : 'global',
+            groupId: createdGroup ? createdGroup.id : '',
             author: 'panel',
             origin: 'panel',
-            channel: 'world',
+            channel: createdGroup ? '' : 'world',
             requestTo: [item.id],
             mentions: [item.id],
             hiddenFromChat: true,
@@ -4998,7 +5056,7 @@ export function apply(ctx, config = {}) {
                 '',
                 text,
                 '',
-                `请用 session_ask（mode=task）把任务拆给群成员并跟进；成员完成后交给你，最后由你用 session_share（kind=handoff、replyTo=${request.entry.id}、files=文件路径）汇总。`
+                `请用 session_ask（mode=task）把任务拆给群成员并跟进。中间进度只发本任务群（不要 replyTo 世界请求）；全部完成后，用 session_share（kind=handoff、replyTo=${request.entry.id}、files=文件路径）写【任务完成】汇总，系统才会发布到世界并结算积分。`
               ]
                 .filter(Boolean)
                 .join('\n')
@@ -5010,7 +5068,7 @@ export function apply(ctx, config = {}) {
                 '',
                 text,
                 '',
-                `请开始处理；完成后用 session_share（kind=handoff、replyTo=${request.entry.id}、files=文件路径）汇报，结果会出现在世界聊天。`
+                `中间进度不要 replyTo 世界请求（避免刷屏）；全部完成后用 session_share（kind=handoff、replyTo=${request.entry.id}、files=文件路径）写【任务完成】汇报，系统会发布到世界并结算积分。`
               ]
                 .filter(Boolean)
                 .join('\n')
