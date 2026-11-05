@@ -397,6 +397,9 @@
   .group-topline .section-title { margin: 0; white-space: nowrap; }
   .group-fold-summary { flex: 1; min-width: 0; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .group-fold-btn { padding: 5px 10px; font-size: 11px; flex: none; }
+  .mention-bar { display: none !important; }
+  .more-actions { display: inline-flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .more-actions[hidden] { display: none !important; }
   body.group-folded .group-foldable { display: none; }
   body.group-folded .group-topline { margin-bottom: 6px; }
   @media (max-width: 980px) { .aside { display: none; } }
@@ -463,12 +466,15 @@
           <div class="bar">
             <span class="hint" id="groupHint"></span>
             <span class="spacer"></span>
-            <button class="btn" id="reportBugBtn" title="把输入框里的内容作为 BUG 报告投递到「星桥 · 修bug」群，并通知维护者（维护者不接普通任务）">🛡️ 报BUG</button>
-            <button class="btn" id="teaBtn">☕ 茶话会</button>
-            <button class="btn" id="sparkBtn">✨ 闲聊</button>
-            <button class="btn mint" id="discussBtn">发起讨论</button>
+            <button class="btn" id="groupMoreBtn" title="更多群操作">更多</button>
+            <span class="more-actions" id="groupMorePanel" hidden>
+              <button class="btn" id="reportBugBtn" title="把输入框里的内容作为 BUG 报告投递到「星桥 · 修bug」群，并通知维护者（维护者不接普通任务）">🛡️ 报BUG</button>
+              <button class="btn" id="teaBtn">☕ 茶话会</button>
+              <button class="btn" id="sparkBtn">✨ 闲聊</button>
+              <button class="btn mint" id="discussBtn">发起讨论</button>
+              <button class="btn urgent" id="groupUrgent" title="加急插话：先 @ 目标成员，再点发送；目标忙碌时会尝试打断后插话，宿主不支持打断会明确降级">⚡ 加急</button>
+            </span>
             <button class="btn primary" id="taskBtn">发布任务</button>
-            <button class="btn urgent" id="groupUrgent" title="加急插话：先 @ 目标成员，再点发送；目标忙碌时会尝试打断后插话，宿主不支持打断会明确降级">⚡ 加急</button>
             <button class="btn primary" id="groupSend">发送</button>
           </div>
         </div>
@@ -1763,6 +1769,10 @@
       if (event.target === $('taskDetailModal')) $('taskDetailModal').classList.remove('open')
     })
     $('discussBtn').addEventListener('click', startDiscussion)
+    $('groupMoreBtn').addEventListener('click', function () {
+      var panel = $('groupMorePanel')
+      if (panel) panel.hidden = !panel.hidden
+    })
     $('groupFoldBtn').addEventListener('click', function () {
       groupFolded = !groupFolded
       try { localStorage.setItem('nebula.groupFolded', groupFolded ? '1' : '0') } catch (e) {}
@@ -1981,7 +1991,7 @@
   }
   bindEvents()
   loadTheme()
-  try { groupFolded = localStorage.getItem('nebula.groupFolded') === '1' } catch (e) {}
+  try { var savedFold = localStorage.getItem('nebula.groupFolded'); groupFolded = savedFold === null ? true : savedFold === '1' } catch (e) { groupFolded = true }
   applyGroupFold()
   refresh(true)
   setInterval(function () { refresh(false) }, 5000)
