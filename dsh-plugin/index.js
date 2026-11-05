@@ -1790,6 +1790,10 @@ export function apply(ctx, config = {}) {
   const identityStore = createIdentityStore(boardDir)
   const skillStore = createSkillStore(boardDir)
   const activityStore = createActivityStore(boardDir)
+  // 用户在场心跳：只有星桥窗口可见且聚焦时由 app 上报，自动茶话会/自发闲聊必须依赖它。
+  let lastUserPresenceAt = 0
+  const USER_PRESENCE_TTL_MS = 15 * 60 * 1000
+  const userPresent = () => Date.now() - lastUserPresenceAt < USER_PRESENCE_TTL_MS
   const relationStore = createRelationStore(boardDir)
   const maintainerStore = createMaintainerStore(boardDir)
   // ---------------------------------------------------------------- 权限分级（v2.9.1）
@@ -10023,11 +10027,16 @@ export function apply(ctx, config = {}) {
       backupWorkspaceRegistry()
       return { ok: true, ...result }
     }
+    if (action === 'presence.ping') {
+      lastUserPresenceAt = Date.now()
+      return { ok: true, ttlMs: USER_PRESENCE_TTL_MS }
+    }
     if (action === 'activity.spark') {
       const wanted = String(payload.id || '').trim()
       const groups = groupStore.read()
       const group = groups.find((item) => item.id === wanted || item.id.startsWith(wanted))
       if (!group) return { ok: false, error: '找不到群组' }
+      lastUserPresenceAt = Date.now()
       const result = await startSparkForGroup(group, { force: true })
       return result.skipped ? { ok: false, error: result.reason } : result
     }
@@ -10036,6 +10045,7 @@ export function apply(ctx, config = {}) {
       const groups = groupStore.read()
       const group = groups.find((item) => item.id === wanted || item.id.startsWith(wanted))
       if (!group) return { ok: false, error: '找不到群组' }
+      lastUserPresenceAt = Date.now()
       const result = await startTeaParty(group, { force: true })
       return result.skipped ? { ok: false, error: result.reason } : result
     }
@@ -10979,6 +10989,7 @@ export function apply(ctx, config = {}) {
   // 每天 10 点茶话会（每个群每天一次，只有成员≥2 才开）。
   const teaTimer = setInterval(() => {
     try {
+      if (!userPresent()) return
       if (new Date().getHours() !== 10) return
       for (const group of groupStore.read()) {
         void startTeaParty(group, {})
@@ -11000,6 +11011,7 @@ export function apply(ctx, config = {}) {
   // 自发表达：每 4 小时左右挑一位成员“可选闲聊”一次（10:00-22:00）。
   const sparkTimer = setInterval(() => {
     try {
+      if (!userPresent()) return
       const hour = new Date().getHours()
       if (hour < 10 || hour > 22) return
       for (const group of groupStore.read()) {
