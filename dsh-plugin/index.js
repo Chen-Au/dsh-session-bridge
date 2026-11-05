@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.10.1'
+const VERSION = '2.10.2'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -171,7 +171,7 @@ const INSTRUCTIONS = `## 跨会话经验桥（session-bridge，插件自动生�
 
 **空闲看板（availability）**：宿主为每个主会话维护 idle/busy——有「未回答的 request」或「未完成的群任务（组长）」即 busy，交回结果/回答后自动回到 idle。世界任务的非显式匹配、协同扩展只派 idle 成员；显式 @ 某人时仍尊重用户选择（忙也派）。群任务指派组长时也优先空闲成员，若组长忙会在派活消息里提示「可能排队」。
 
-**催收/提醒用插话**：催进度、提醒还差什么，不要用 session_ask（会让对方多开一轮回复）；用 session_nudge（group=群名、to=成员、text=提醒内容），它只在对方下一次处理时注入一次，不唤醒。若用 session_ask 但对方已经提交过，宿主会自动改成插话，不会重复唤醒。
+**催收/提醒用插话**：催进度、提醒还差什么，不要用 session_ask（会让对方多开一轮回复）；用 session_nudge（group=群名、to=成员、text=提醒内容），它只在对方下一次处理时注入一次，不唤醒。若用 session_ask 但对方已经提交过，宿主会自动改成插话，不会重复唤醒。**任务线**：群任务/世界任务会自动带默认 5 阶段清单（接收与确认→拆解与分工→执行→复核→交付）；超过约 25 分钟没有进度更新会自动给组长写一条「任务线催办」插话（不唤醒，最多 3 次）。收到催办时先回一句进度/卡点；已完成就尽快在任务卡标记完成或撤回，避免任务线一直「卡住」。
 
 **维护者保护（v2.9.1）**：维护者（maintainer，如「星桥值班员」）是 **protected/service** 会话，优先保证随时能修 bug：不要把它当普通成员派活——世界任务的自动路由、group.post 指派组长/成员、session_ask/session_nudge 都会拒绝并给出替代路径（不要绕过）。只有用户在正文里显式 @ 维护者才算例外（宿主会提示）。要报 bug 时用 \`session_share\` 的 \`kind=bug\`（会自动投递到「星桥 · 修bug」群并通知维护者），或用 \`session_board action=bugfix\` / 面板「修bug群」按钮一键创建或复用该群；普通任务请派给普通成员。
 
@@ -898,20 +898,164 @@ function createPendingStore(dir) {
   return { file, read, write, upsert }
 }
 
-/** 群任务的串行步骤（轻量：只记录文本与状态，不做 DAG 编辑器）。 */
-function normalizeTaskSteps(value) {
+// ------------------------------------------------------------------ 任务线（task-6 / v2.10.2）
+// 任务 = 一条「任务线」：默认 5 阶段清单 + 实时状态（当前步骤/进度/卡住）+ 卡住自动催办。
+const DEFAULT_TASK_STEPS = ['接收与确认', '拆解与分工', '执行', '复核', '交付']
+/** 任务线超过该时长没有任何进度 → 视为卡住（约 25 分钟）。 */
+const TASK_LINE_STALL_MS = 25 * 60 * 1000
+/** 同一条任务线最多自动催办几次（防止重复轰炸）。 */
+const TASK_LINE_MAX_NUDGES = 3
+/** 后台任务线巡检间隔。 */
+const TASK_LINE_SCAN_MS = 60 * 1000
+const TASK_STEP_STATUSES = new Set(['pending', 'dispatched', 'done', 'canceled'])
+
+/** 默认 5 阶段任务清单（接收与确认 / 拆解与分工 / 执行 / 复核 / 交付）。 */
+function defaultTaskSteps() {
+  return DEFAULT_TASK_STEPS.map((text, index) => ({ i: index + 1, text, status: 'pending', auto: true }))
+}
+
+/**
+ * 群任务的串行步骤（轻量：只记录文本与状态，不做 DAG 编辑器）。
+ * v2.10.2 任务线：没有显式 steps 时自动构建默认 5 阶段清单；显式 steps 保留并归一化
+ * （文本/状态/派发与完成时间都保留），所以同一函数既能建新任务、也能读旧任务。
+ */
+function normalizeTaskSteps(value, options = {}) {
   const list = Array.isArray(value) ? value : value ? [value] : []
-  return list
+  const steps = list
     .map((item, index) => {
-      const text = typeof item === 'string' ? item : item && typeof item.text === 'string' ? item.text : ''
+      const source = typeof item === 'string' ? { text: item } : item && typeof item === 'object' ? item : null
+      if (!source) return null
+      const text = String(source.text || '').replace(/\s+/g, ' ').trim().slice(0, 120)
+      if (!text) return null
+      const dispatchedAt = toNumber(source.dispatchedAt, 0)
+      const doneAt = toNumber(source.doneAt, 0)
       return {
         i: index + 1,
-        text: String(text || '').replace(/\s+/g, ' ').trim().slice(0, 120),
-        status: 'pending'
+        text,
+        status: TASK_STEP_STATUSES.has(source.status) ? source.status : 'pending',
+        ...(dispatchedAt > 0 ? { dispatchedAt } : {}),
+        ...(doneAt > 0 ? { doneAt } : {}),
+        ...(typeof source.requestId === 'string' && source.requestId ? { requestId: source.requestId } : {}),
+        ...(source.auto === true ? { auto: true } : {})
       }
     })
-    .filter((step) => step.text)
+    .filter(Boolean)
     .slice(0, 10)
+  if (!steps.length && options.defaultWhenEmpty !== false) return defaultTaskSteps()
+  return steps
+}
+
+const TASK_LINE_STATUS_RANK = { stalled: 0, active: 1, waiting: 2, done: 3, canceled: 4 }
+
+/**
+ * 从活动看板派生任务线（纯函数，state 与后台巡检共用）。
+ * 一条任务线：标题/所属群/组长/成员/阶段/当前步骤/进度/状态/最近进度时间/催办记录。
+ * options: { now, sessionById(Map), groupNames(Map) }
+ */
+function buildTaskLines(active, options = {}) {
+  const now = toNumber(options.now, Date.now())
+  const sessionById = options.sessionById instanceof Map ? options.sessionById : new Map()
+  const groupNames = options.groupNames instanceof Map ? options.groupNames : new Map()
+  const entries = Array.isArray(active) ? active : []
+  const requestsByTask = new Map()
+  for (const entry of entries) {
+    if (!entry || entry.kind !== 'request' || !entry.taskId) continue
+    if (!requestsByTask.has(entry.taskId)) requestsByTask.set(entry.taskId, [])
+    requestsByTask.get(entry.taskId).push(entry)
+  }
+  const describeSession = (sessionId) => {
+    if (!sessionId) return null
+    const session = sessionById.get(sessionId) || {}
+    return {
+      id: sessionId,
+      title: String(session.title || ''),
+      handle: String(session.handle || ''),
+      contactId: String(session.contactId || contactIdOf(sessionId)),
+      protected: session.protected === true || session.service === true
+    }
+  }
+  const lines = []
+  for (const task of entries) {
+    if (!task || task.kind !== 'task') continue
+    // 被 task.dedupe 合并掉的副本不单独成线；但「取消/撤回」的任务线仍要展示（收口状态）。
+    if (task.mergedInto && String(task.taskStatus || '') !== 'canceled') continue
+    const related = requestsByTask.get(task.id) || []
+    const taskStatus = String(task.taskStatus || 'assigned')
+    const steps = normalizeTaskSteps(Array.isArray(task.steps) ? task.steps : [])
+    // 已完成的任务线：未单独回写的阶段在展示上视为完成（收口一致，进度 100%）；不改写任务数据。
+    if (taskStatus === 'done') {
+      for (const step of steps) if (step.status !== 'done') step.status = 'done'
+    }
+    const doneCount = steps.filter((step) => step.status === 'done').length
+    const current = steps.find((step) => step.status !== 'done') || null
+    const nudgeCount = toNumber(task.lineNudgeCount, 0)
+    const lastNudgeAt = toNumber(task.lineLastNudgeAt, 0)
+    // 最近进度时间：建任务时间、显式回写、步骤派发/完成、关联请求产生/回答，取最大。
+    let lastProgressAt = Math.max(toNumber(task.ts, 0), toNumber(task.lineLastProgressAt, 0))
+    for (const step of steps) {
+      lastProgressAt = Math.max(lastProgressAt, toNumber(step.dispatchedAt, 0), toNumber(step.doneAt, 0))
+    }
+    for (const request of related) {
+      lastProgressAt = Math.max(lastProgressAt, toNumber(request.ts, 0), toNumber(request.answeredAt, 0))
+    }
+    let lineStatus = 'waiting'
+    if (taskStatus === 'canceled') lineStatus = 'canceled'
+    else if (taskStatus === 'done') lineStatus = 'done'
+    else if (lastProgressAt > 0 && now - lastProgressAt > TASK_LINE_STALL_MS) lineStatus = 'stalled'
+    else if (
+      steps.some((step) => step.status === 'dispatched' || step.status === 'done') ||
+      related.some((request) => request.status === 'answered' || request.answeredBy || request.status === 'canceled') ||
+      taskStatus !== 'assigned' ||
+      toNumber(task.lineCurrentStep, 1) > 1
+    ) {
+      lineStatus = 'active'
+    }
+    const progress = taskStatus === 'done' ? 100 : Math.round((doneCount / Math.max(1, steps.length)) * 100)
+    const openRequest = related.find(
+      (request) => request.status !== 'answered' && request.status !== 'canceled' && !request.answeredBy
+    )
+    const leaderId = taskOwnerOf(task)
+    lines.push({
+      title: String(task.title || '未命名任务'),
+      taskId: task.id,
+      groupId: task.groupId || '',
+      groupName: task.groupId ? groupNames.get(task.groupId) || '' : '',
+      worldTask: task.worldTask === true,
+      taskStatus,
+      leaderId,
+      leader: describeSession(leaderId),
+      members: (Array.isArray(task.assignees) ? task.assignees : []).map(describeSession).filter(Boolean),
+      steps,
+      currentStep: current ? current.i : steps.length,
+      currentStepText: current ? current.text : '已完成',
+      progress,
+      lineStatus,
+      lastProgressAt,
+      lastNudgeAt,
+      nudgeCount,
+      stalledSince: lineStatus === 'stalled' ? lastProgressAt + TASK_LINE_STALL_MS : 0,
+      replyRequestId: openRequest ? openRequest.id : (related[0] && related[0].id) || '',
+      taskScope: String(task.taskScope || ''),
+      ts: toNumber(task.ts, 0)
+    })
+  }
+  lines.sort(
+    (a, b) =>
+      (TASK_LINE_STATUS_RANK[a.lineStatus] - TASK_LINE_STATUS_RANK[b.lineStatus]) ||
+      (b.lastProgressAt || 0) - (a.lastProgressAt || 0)
+  )
+  return lines
+}
+
+/** 任务线统计（state 面板顶部/测试用）。 */
+function buildTaskLineStats(lines) {
+  const list = Array.isArray(lines) ? lines : []
+  const stats = { total: list.length, waiting: 0, active: 0, stalled: 0, done: 0, canceled: 0, nudged: 0 }
+  for (const line of list) {
+    if (stats[line.lineStatus] !== undefined) stats[line.lineStatus] += 1
+    stats.nudged += toNumber(line.nudgeCount, 0)
+  }
+  return stats
 }
 
 // ------------------------------------------------------------------ 群组存储
@@ -2529,7 +2673,14 @@ export function apply(ctx, config = {}) {
 
   const stateForUi = async () => {
     const groupNames = groupNameMap()
-    const rules = store.readActive().map((entry) => ({
+    const activeEntriesForState = store.readActive()
+    // task-6：先把「已 answered 的步骤请求」回写成步骤 done，任务线/任务卡/进度才实时（只在有变化时写盘）。
+    try {
+      syncCompletedTaskSteps(activeEntriesForState, Date.now())
+    } catch {
+      /* 步骤回写失败不影响 state 读取 */
+    }
+    const rules = activeEntriesForState.map((entry) => ({
       ...entry,
       groupName: entry.groupId ? groupNames.get(entry.groupId) || null : null
     }))
@@ -2542,7 +2693,6 @@ export function apply(ctx, config = {}) {
     }))
     const profiles = listProfilesOf(boardDir)
     // 空闲/忙碌（v2.9.3）：兼容 task-2 的 availability 字段；没有时本地推导。
-    const activeEntriesForState = store.readActive()
     const openRequestCountBySession = new Map()
     for (const entry of activeEntriesForState) {
       if (!entry || entry.kind !== 'request' || entry.status === 'answered' || entry.answeredBy) continue
@@ -2573,6 +2723,13 @@ export function apply(ctx, config = {}) {
     })
     stateSessionsCache.length = 0
     stateSessionsCache.push(...sessions)
+    // 任务线（task-6）：从活动看板派生，state 每轮轮询实时刷新（不额外写盘）。
+    const taskLines = buildTaskLines(activeEntriesForState, {
+      now: Date.now(),
+      sessionById: new Map(sessions.map((session) => [session.id, session])),
+      groupNames
+    })
+    const taskLineStats = buildTaskLineStats(taskLines)
     const titleById = new Map(sessions.map((session) => [session.id, session.title]))
     const chatCountByAuthor = new Map()
     for (const entry of rules) {
@@ -2731,6 +2888,9 @@ export function apply(ctx, config = {}) {
       skills: skillStore.list(),
       profiles,
       world: worldEntriesOf(),
+      // task-6：任务线看板（自动 5 阶段清单 + 实时状态 + 卡住催办记录）。
+      taskLines,
+      taskLineStats,
       // v2.10.1：重复任务合并建议（只下发建议，UI 不自动删数据）。
       duplicates: collectDuplicateTaskGroups(rules),
       approvals: readApprovals().filter((item) => item && item.status === 'pending'),
@@ -3305,6 +3465,155 @@ export function apply(ctx, config = {}) {
       `发布条目 ${id} [${kind}/${scope}${group ? `/群组:${group.name}` : ''}] ${title}（来自会话 ${shortSid(entry.author)}，origin=${entry.origin}）`
     )
     return { ok: true, entry, group }
+  }
+
+  // ---------------------------------------------------------------- 任务线巡检（task-6 / v2.10.2）
+  /** 回写任务线派生状态（只 patch 变化字段，避免每轮巡检都写盘）。 */
+  const patchTaskLine = (taskId, patch, now = Date.now()) => {
+    if (!taskId || !patch || !Object.keys(patch).length) return false
+    try {
+      appendEvents(boardDir, [{ op: 'task', id: taskId, patch, ts: now }])
+      return true
+    } catch (error) {
+      logger.warn(`任务线状态回写失败：${error && error.message ? error.message : error}`)
+      return false
+    }
+  }
+  /**
+   * 任务线巡检：派生状态回写 + 卡住自动催办。
+   * - 只写看板 nudge（targeted 注入，不唤醒、不打断），复用现有 session_nudge 同一套机制；
+   * - 同一任务线两次催办至少间隔 TASK_LINE_STALL_MS，最多 TASK_LINE_MAX_NUDGES 次；
+   * - 跳过维护者/protected 会话；完成/撤回的任务线不再催办。
+   */
+  const runTaskLineWatch = ({ now = Date.now(), nudge = true, persist = true, source = 'timer' } = {}) => {
+    const report = { source, scanned: 0, stalled: 0, nudged: [], skippedProtected: [], patched: 0, errors: [] }
+    try {
+      const active = store.readActive()
+      // 先同步「已 answered 的步骤请求 → 步骤 done」，再派生任务线，巡检与面板读到的进度一致。
+      try {
+        syncCompletedTaskSteps(active, now)
+      } catch {
+        /* 步骤回写失败不阻塞巡检 */
+      }
+      const sessions = stateSessionsCache.length ? stateSessionsCache : []
+      const lines = buildTaskLines(active, {
+        now,
+        sessionById: new Map(sessions.map((session) => [session.id, session])),
+        groupNames: groupNameMap()
+      })
+      report.scanned = lines.length
+      const byId = new Map(active.map((entry) => [entry.id, entry]))
+      for (const line of lines) {
+        if (!['waiting', 'active', 'stalled'].includes(line.lineStatus)) continue
+        const task = byId.get(line.taskId)
+        if (!task) continue
+        if (line.lineStatus === 'stalled') report.stalled += 1
+        if (!persist) continue
+        // ① 派生状态回写（只在变化时写）：lineStatus / lastProgressAt / currentStep / stalledSince。
+        const patch = {}
+        // 老任务没有 steps（功能上线前创建）→ 首次巡检把自动 5 阶段清单补落盘，之后 taskLines/任务卡一致。
+        if (!Array.isArray(task.steps) || !task.steps.length) patch.steps = line.steps
+        if (String(task.lineStatus || '') !== line.lineStatus) patch.lineStatus = line.lineStatus
+        const prevProgressAt = toNumber(task.lineLastProgressAt, 0)
+        if (line.lastProgressAt > prevProgressAt) {
+          patch.lineLastProgressAt = line.lastProgressAt
+          // 有新进展 → 视为新一轮，催办计数归零（但保留历史 lastNudgeAt 供 UI 展示）。
+          if (toNumber(task.lineNudgeCount, 0) > 0) patch.lineNudgeCount = 0
+        }
+        if (toNumber(task.lineCurrentStep, 0) !== line.currentStep) patch.lineCurrentStep = line.currentStep
+        if (line.lineStatus === 'stalled') {
+          if (line.stalledSince && toNumber(task.lineStalledSince, 0) !== line.stalledSince) {
+            patch.lineStalledSince = line.stalledSince
+          }
+        } else if (toNumber(task.lineStalledSince, 0) > 0) {
+          patch.lineStalledSince = 0
+        }
+        if (Object.keys(patch).length) {
+          if (patchTaskLine(line.taskId, patch, now)) report.patched += 1
+        }
+        // ② 卡住催办：写 nudge（不唤醒），限频 + 上限 + 跳过 protected。
+        if (!nudge || line.lineStatus !== 'stalled') continue
+        const leaderId = line.leaderId || ''
+        if (!leaderId) continue
+        if (isProtectedSession(leaderId)) {
+          report.skippedProtected.push(line.taskId)
+          continue
+        }
+        const count = toNumber(task.lineNudgeCount, line.nudgeCount)
+        if (count >= TASK_LINE_MAX_NUDGES) continue
+        const lastNudgeAt = toNumber(task.lineLastNudgeAt, line.lastNudgeAt)
+        if (lastNudgeAt > 0 && now - lastNudgeAt < TASK_LINE_STALL_MS) continue
+        // 兜底查重：同一任务线最近 25 分钟内已经有过催办条目（可能上次 patch 未落盘）。
+        const duplicateNudge = active.some(
+          (entry) =>
+            entry &&
+            entry.nudge === true &&
+            entry.taskId === line.taskId &&
+            Math.abs(now - toNumber(entry.ts, 0)) < TASK_LINE_STALL_MS
+        )
+        if (duplicateNudge) continue
+        const leader = line.leader || {}
+        const handle = leader.handle || leader.title || shortSid(leaderId)
+        const currentStepText = line.currentStepText || '任务进行中'
+        const staleMinutes = Math.max(1, Math.round((now - (line.lastProgressAt || now)) / 60000))
+        const nudgeText = [
+          '【任务线催办 · 不唤醒，下次处理时看】',
+          `任务：${line.title}${line.groupName ? '（群组「' + line.groupName + '」）' : ''}`,
+          `当前阶段：${currentStepText} · 进度 ${line.progress}%（已完成 ${line.steps.filter((step) => step.status === 'done').length}/${line.steps.length}）`,
+          `已经 ${staleMinutes} 分钟没有进度更新，任务线被标记为「卡住」。`,
+          '请先回一句进度/卡点（有请求可 replyTo 交付）；如果其实已完成，请在任务卡标记完成或撤回，避免继续占用。',
+          line.replyRequestId ? `关联请求：${line.replyRequestId}（回复即视为一次进度）` : ''
+        ]
+          .filter(Boolean)
+          .join('\n')
+        const nudgeEntry = addEntry(
+          {
+            title: '任务线催办：' + truncate(line.title, 18),
+            text: nudgeText,
+            kind: 'note',
+            groupId: line.groupId || '',
+            workspace: (line.groupId ? (groupStore.read().find((group) => group.id === line.groupId) || {}).workspace : '') || String(task.workspace || ''),
+            author: 'panel',
+            origin: 'panel',
+            requestTo: [leaderId],
+            mentions: [leaderId],
+            hiddenFromChat: true,
+            nudge: true,
+            taskId: line.taskId,
+            tags: '@任务线',
+            skipDedupe: true
+          },
+          'panel'
+        )
+        if (!nudgeEntry.ok) {
+          report.errors.push(`${line.taskId}: ${nudgeEntry.reason || 'nudge 写入失败'}`)
+          continue
+        }
+        patchTaskLine(
+          line.taskId,
+          {
+            lineNudgeCount: count + 1,
+            lineLastNudgeAt: now,
+            lineStatus: 'stalled',
+            lineStalledSince: line.stalledSince || line.lastProgressAt + TASK_LINE_STALL_MS
+          },
+          now
+        )
+        report.nudged.push({ taskId: line.taskId, leaderId, count: count + 1 })
+        logger.info(
+          `任务线催办：${line.taskId}（${truncate(line.title, 24)}）→ ${shortSid(leaderId)}，第 ${count + 1}/${TASK_LINE_MAX_NUDGES} 次`
+        )
+      }
+      if (report.nudged.length || report.errors.length) {
+        logger.info(
+          `任务线巡检（${source}）：${report.scanned} 条任务线，卡住 ${report.stalled} 条，催办 ${report.nudged.length} 条${report.errors.length ? '，错误 ' + report.errors.length + ' 条' : ''}`
+        )
+      }
+    } catch (error) {
+      report.errors.push(error && error.message ? error.message : String(error))
+      logger.warn(`任务线巡检失败：${error && error.message ? error.message : error}`)
+    }
+    return report
   }
 
   // ---------------------------------------------------------------- 系统提示词
@@ -4625,6 +4934,30 @@ export function apply(ctx, config = {}) {
       /* ignore */
     }
   }, 4000).unref?.()
+
+  // 任务线巡检定时器（task-6）：回写派生状态 + 对卡住任务线写 nudge（不唤醒，最多 3 次）。
+  // unref 不阻止进程退出；插件卸载时清掉。
+  const taskLineTimer = setInterval(() => {
+    try {
+      runTaskLineWatch({ source: 'timer' })
+    } catch (error) {
+      logger.warn(`任务线巡检定时器失败：${error && error.message ? error.message : error}`)
+    }
+  }, TASK_LINE_SCAN_MS)
+  if (taskLineTimer && typeof taskLineTimer.unref === 'function') taskLineTimer.unref()
+  try {
+    ctx.effect(() => () => clearInterval(taskLineTimer), 'session-bridge: task-line timer')
+  } catch {
+    /* ignore */
+  }
+  // 插件重启后先跑一次（此时看板/会话缓存已就绪），避免卡住任务线要等一整轮。
+  setTimeout(() => {
+    try {
+      runTaskLineWatch({ source: 'boot' })
+    } catch {
+      /* ignore */
+    }
+  }, 8000).unref?.()
 
   // ---------------------------------------------------------------- 申报材料（profile）
   const renderProfileSummary = (sessionId) => {
@@ -5974,6 +6307,8 @@ export function apply(ctx, config = {}) {
         owner: coordinatorId,
         ownerRole: 'coordinator',
         taskScope: normalizeTaskScope('', '招募协作：' + requestText),
+        // task-6：招募任务也自动构建默认 5 阶段任务清单。
+        steps: defaultTaskSteps(),
         tags: '@招募',
         skipDedupe: true
       },
@@ -7978,6 +8313,15 @@ export function apply(ctx, config = {}) {
           `当前会话：contactId=${contactIdOf(info.id) || '?'} · ${info.id || '?'}${info.cwd ? ` · 工作区 ${info.cwd}` : ''}`,
           `通讯录：${sessionsNow.length} 个主会话（contactId 见下，可用 session_directory 查询/过滤；派活用 session_ask 的 to=contactId）`,
           `空闲看板：idle ${sessionsNow.filter((session) => session.availability !== 'busy').length} 个 · busy ${sessionsNow.filter((session) => session.availability === 'busy').length} 个（有未回答 request 或未完成群任务组长任务即为 busy；回答后自动回到 idle）`,
+          `任务线：${(() => {
+            const lines = buildTaskLines(store.readActive(), {
+              now: Date.now(),
+              sessionById: new Map(sessionsNow.map((session) => [session.id, session])),
+              groupNames: groupNameMap()
+            })
+            const stats = buildTaskLineStats(lines)
+            return `共 ${stats.total} 条（等待 ${stats.waiting} / 进行中 ${stats.active} / 卡住 ${stats.stalled} / 完成 ${stats.done} / 已撤回 ${stats.canceled}），累计催办 ${stats.nudged} 次`
+          })()}`,
           `权限分级：维护者=${(() => {
             const maintainerId = maintainerStore.get()
             return maintainerId ? shortSid(maintainerId) + '（protected/service，不接普通任务）' : '未注册'
@@ -8916,6 +9260,8 @@ export function apply(ctx, config = {}) {
               taskScope: worldTaskScope,
               ...(worldScopeWarning ? { scopeWarning: worldScopeWarning } : {}),
               worldTask: true,
+              // task-6：世界任务也自动构建默认 5 阶段任务清单。
+              steps: defaultTaskSteps(),
               skipDedupe: true
             },
             'panel'
@@ -9216,6 +9562,31 @@ export function apply(ctx, config = {}) {
       // 面板/自测用：立即巡检一次串行队列（不等 15 秒定时器）。
       const report = runPendingQueue({ source: 'panel' })
       return { ok: true, report }
+    }
+    if (action === 'task.lines') {
+      // 任务线（task-6）：读状态；可手动触发一次巡检/催办（面板自测/调试用，等价后台定时器的逻辑）。
+      const now = toNumber(payload.now, Date.now())
+      const scanReport =
+        payload.scan === true
+          ? runTaskLineWatch({ now, nudge: payload.nudge !== false, source: 'panel' })
+          : null
+      const stateNow = await stateForUi()
+      // 测试/调试可传 now 按指定时间点派生任务线（否则用 state 的实时派生结果）。
+      let taskLinesNow = stateNow.taskLines
+      if (payload.now !== undefined) {
+        const activeNow = store.readActive()
+        taskLinesNow = buildTaskLines(activeNow, {
+          now,
+          sessionById: new Map((stateNow.sessions || []).map((session) => [session.id, session])),
+          groupNames: groupNameMap()
+        })
+      }
+      return {
+        ok: true,
+        taskLines: taskLinesNow,
+        stats: buildTaskLineStats(taskLinesNow),
+        scan: scanReport
+      }
     }
     if (action === 'pending.cancel') {
       // 取消一条排队中的串行指令（还没发出去的才能取消）。

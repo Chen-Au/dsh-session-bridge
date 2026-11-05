@@ -368,6 +368,31 @@
   .task-detail-meta b { color: var(--text); }
   .task-request { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-top: 8px; font-size: 11.5px; color: var(--muted); }
   .task-request b { color: var(--text); }
+  /* 任务线看板（task-6 / v2.10.2）：默认 5 阶段清单 + 当前步骤 + 进度条 + 卡住 badge + 最近更新 */
+  .tasklines { display: flex; flex-direction: column; gap: 7px; }
+  .taskline {
+    border: 1px solid rgba(120,150,255,.14); border-radius: 11px; padding: 8px 9px;
+    background: rgba(255,255,255,.02); cursor: pointer;
+  }
+  .taskline:hover { border-color: var(--line-strong); }
+  .taskline.stalled { border-color: rgba(255,107,129,.5); background: rgba(255,107,129,.07); }
+  .tl-head { display: flex; align-items: center; gap: 6px; }
+  .tl-title { flex: 1; min-width: 0; font-size: 11.5px; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tl-badge { flex: none; font-size: 9px; border-radius: 999px; padding: 1px 6px; border: 1px solid var(--line); color: var(--muted); }
+  .tl-badge.stalled { color: var(--danger); border-color: rgba(255,107,129,.55); background: rgba(255,107,129,.14); font-weight: 700; }
+  .tl-badge.active { color: var(--mint); border-color: rgba(95,242,200,.4); }
+  .tl-badge.waiting { color: var(--gold); border-color: rgba(255,209,102,.35); }
+  .tl-badge.done { color: var(--dim); }
+  .tl-badge.canceled { color: var(--dim); text-decoration: line-through; }
+  .tl-meta { margin-top: 3px; font-size: 9.5px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 5px; }
+  .tl-steps { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+  .tl-step { font-size: 9px; border: 1px solid var(--line); border-radius: 999px; padding: 0 5px; color: var(--dim); }
+  .tl-step.done { color: var(--mint); border-color: rgba(95,242,200,.35); }
+  .tl-step.dispatched { color: var(--gold); border-color: rgba(255,209,102,.4); }
+  .tl-step.current { box-shadow: 0 0 0 1px rgba(124,92,255,.5) inset; color: #fff; }
+  .tl-progress { margin-top: 6px; height: 5px; border-radius: 999px; background: rgba(120,150,255,.14); overflow: hidden; }
+  .tl-progress > span { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--mint)); }
+  .taskline.stalled .tl-progress > span { background: linear-gradient(90deg, #ff6b81, #ffd166); }
   .scroll::-webkit-scrollbar { width: 6px; height: 6px; }
   .scroll::-webkit-scrollbar-thumb { background: rgba(124,92,255,.35); border-radius: 6px; }
   body[data-theme="forest"] {
@@ -452,6 +477,8 @@
       <aside class="aside scroll">
         <div class="section-title">空闲看板 · IDLE</div>
         <div class="idle-list" id="idleBoard"></div>
+        <div class="section-title" style="margin-top:14px">任务线 · TASK LINES</div>
+        <div class="tasklines" id="taskLinesBoard"></div>
         <div class="section-title" style="margin-top:14px">积分榜 · TOP</div>
         <div class="lb" id="worldLb"></div>
       </aside>
@@ -490,6 +517,8 @@
       <aside class="aside scroll">
         <div class="section-title">群活跃度</div>
         <div class="card" id="activityCard" style="padding:11px 12px"></div>
+        <div class="section-title" style="margin-top:14px">任务线 · TASK LINES</div>
+        <div class="tasklines" id="groupTaskLinesBoard"></div>
         <div class="section-title" style="margin-top:14px">群成员 · 名片</div>
         <div class="members" id="memberList"></div>
       </aside>
@@ -923,9 +952,11 @@
       })
   }
   function render() {
-    $('statLine').innerHTML = 'v' + esc(state.version || '1.0.0') + ' · <b>' + (state.sessions || []).length + '</b> 位 agent · <b>' + (state.world || []).length + '</b> 条世界任务'
+    var tl = state.taskLineStats || {}
+    $('statLine').innerHTML = 'v' + esc(state.version || '1.0.0') + ' · <b>' + (state.sessions || []).length + '</b> 位 agent · <b>' + (state.world || []).length + '</b> 条世界任务 · <b>' + (tl.total || 0) + '</b> 条任务线' + (tl.stalled ? ' · <b style="color:var(--danger)">' + tl.stalled + '</b> 卡住' : '')
     renderWorld()
     renderIdleBoard()
+    renderTaskLines()
     renderGroups()
     renderBoard()
   }
@@ -967,6 +998,64 @@
           '<span class="avail-badge ' + (busy ? 'busy' : 'idle') + '">' + (busy ? '忙' : '空闲') + '</span>' +
           '</div>'
       }).join('')
+  }
+  var TASK_LINE_LABELS = { waiting: '等待', active: '进行中', stalled: '卡住', done: '完成', canceled: '已撤回' }
+  /** 任务线看板（task-6）：阶段勾选、当前步骤、进度条、卡住 badge、最近更新。随既有 state 轮询实时刷新。 */
+  function renderTaskLines() {
+    var board = $('taskLinesBoard')
+    if (!board) return
+    var lines = state.taskLines || []
+    if (!lines.length) {
+      board.innerHTML = '<div class="empty" style="padding:14px 8px">还没有任务线：在群聊里「发布任务」或发世界任务后会自动生成 5 阶段清单。</div>'
+      return
+    }
+    var stats = state.taskLineStats || {}
+    var head = '<div class="idle-meta">共 ' + lines.length + ' 条 · 进行中 <b style="color:var(--mint)">' + (stats.active || 0) + '</b> · 卡住 <b style="color:var(--danger)">' + (stats.stalled || 0) + '</b> · 完成 ' + (stats.done || 0) + '</div>'
+    board.innerHTML = head + lines.slice(0, 12).map(function (line) {
+      var leader = line.leader || {}
+      var leaderName = leader.handle || leader.title || short(leader.id || '', 10) || '未指派'
+      var members = (line.members || []).map(function (item) { return identityOf(item.id).handle }).join('、')
+      var statusLabel = TASK_LINE_LABELS[line.lineStatus] || line.lineStatus
+      var stepChips = (line.steps || []).map(function (step) {
+        var cls = step.status === 'done' ? ' done' : step.status === 'dispatched' ? ' dispatched' : ''
+        var mark = step.status === 'done' ? '✓' : step.status === 'dispatched' ? '◐' : '○'
+        var isCurrent = line.lineStatus !== 'done' && line.lineStatus !== 'canceled' && step.i === line.currentStep
+        return '<span class="tl-step' + cls + (isCurrent ? ' current' : '') + '" title="' + esc(step.text) + '">' + mark + ' ' + esc(short(step.text, 6)) + '</span>'
+      }).join('')
+      var extra = []
+      if (line.nudgeCount > 0) extra.push('已催 ' + line.nudgeCount + ' 次')
+      if (line.stalledSince) extra.push('卡住自 ' + when(line.stalledSince))
+      if (line.groupName) extra.push(line.groupName)
+      var jumpId = leader.id || ''
+      var jumpAttrs = jumpId ? ' data-jump="' + esc(jumpId) + '" data-title="' + esc(leader.title || leaderName) + '"' : ''
+      return '<div class="taskline ' + esc(line.lineStatus) + '"' + jumpAttrs + ' title="' + esc(line.title + ' · 组长：' + leaderName + ' · 最近更新：' + when(line.lastProgressAt)) + '">' +
+        '<div class="tl-head"><span class="tl-title">' + esc(line.title) + '</span><span class="tl-badge ' + esc(line.lineStatus) + '">' + esc(statusLabel) + '</span></div>' +
+        '<div class="tl-meta"><span>组长：' + esc(leaderName) + '</span>' +
+        (members ? '<span>成员：' + esc(short(members, 24)) + '</span>' : '') +
+        '<span>当前：' + esc(short(line.currentStepText || '', 16)) + '</span><span>进度 ' + (line.progress || 0) + '%</span></div>' +
+        '<div class="tl-steps">' + stepChips + '</div>' +
+        '<div class="tl-progress"><span style="width:' + Math.max(0, Math.min(100, line.progress || 0)) + '%"></span></div>' +
+        '<div class="tl-meta"><span>更新 ' + when(line.lastProgressAt) + '</span>' + (extra.length ? '<span>' + esc(extra.join(' · ')) + '</span>' : '') + '</div>' +
+        '</div>'
+    }).join('')
+    // 群聊页也放一份任务线，按当前群过滤；发完任务不用切到「世界」页才能看进度。
+    var groupBoard = $('groupTaskLinesBoard')
+    if (groupBoard) {
+      var group = currentGroup()
+      var groupLines = group ? lines.filter(function (line) { return line.groupId === group.id }) : []
+      groupBoard.innerHTML = groupLines.length ? groupLines.slice(0, 8).map(function (line) {
+        var leader = line.leader || {}
+        var leaderName = leader.handle || leader.title || short(leader.id || '', 10) || '未指派'
+        var statusLabel = TASK_LINE_LABELS[line.lineStatus] || line.lineStatus
+        var jumpId = leader.id || ''
+        var jumpAttrs = jumpId ? ' data-jump="' + esc(jumpId) + '" data-title="' + esc(leader.title || leaderName) + '"' : ''
+        return '<div class="taskline compact ' + esc(line.lineStatus) + '"' + jumpAttrs + ' title="' + esc(line.title + ' · 组长：' + leaderName + ' · 最近更新：' + when(line.lastProgressAt)) + '">' +
+          '<div class="tl-head"><span class="tl-title">' + esc(line.title) + '</span><span class="tl-badge ' + esc(line.lineStatus) + '">' + esc(statusLabel) + '</span></div>' +
+          '<div class="tl-meta"><span>当前：' + esc(short(line.currentStepText || '', 14)) + '</span><span>进度 ' + (line.progress || 0) + '%</span>' + (line.nudgeCount > 0 ? '<span>已催 ' + line.nudgeCount + ' 次</span>' : '') + '</div>' +
+          '<div class="tl-progress"><span style="width:' + Math.max(0, Math.min(100, line.progress || 0)) + '%"></span></div>' +
+          '</div>'
+      }).join('') : '<div class="empty" style="padding:8px 4px">当前群暂无任务线；发布任务后会自动生成 5 阶段清单。</div>'
+    }
   }
   function renderWorld() {
     var html = ''
@@ -1084,6 +1173,7 @@
     if (!group) {
       $('groupChat').innerHTML = '<div class="empty">暂无群组。</div>'
       $('memberList').innerHTML = ''
+      $('groupTaskLinesBoard').innerHTML = ''
       $('groupTitle').textContent = '群聊'
       groupScrollState.groupId = ''
       return
@@ -1159,6 +1249,7 @@
         '<button class="btn small mint" data-like="' + esc(id) + '">👍</button>' +
         '<button class="btn small" data-card="' + esc(id) + '">⋯</button></div></div>'
         }).join('')
+    renderTaskLines()
   }
   function sendWorld() {
     var input = $('worldInput')

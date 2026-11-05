@@ -354,7 +354,7 @@ await check('查重生效（相同内容不重复发布）', async () => {
 
 await check('session_board status 报告版本与注册结果', async () => {
   const result = String(await board.execute({ action: 'status' }, { agent: rootAgent }))
-  assert.match(result, /session-bridge v2\.10\.1/)
+  assert.match(result, /session-bridge v2\.10\.2/)
   assert.match(result, /工具：session_share, session_ask, session_nudge, session_retract, session_interrupt, group_rule, session_like, session_discuss, session_identity, group_member, session_directory, group_skill, session_profile, session_board, group_recruit, session_urgent/)
   assert.match(result, /通讯录：3 个主会话/)
   assert.match(result, /空闲看板：idle \d+ 个 · busy \d+ 个/)
@@ -366,7 +366,7 @@ await check('session_board status 报告版本与注册结果', async () => {
 
 await check('子会话可只读查看经验板（list / status）', async () => {
   const status = String(await board.execute({ action: 'status' }, { agent: subAgent }))
-  assert.match(status, /session-bridge v2\.10\.1/)
+  assert.match(status, /session-bridge v2\.10\.2/)
   const listed = String(await board.execute({ action: 'list' }, { agent: subAgent }))
   assert.match(listed, /跨会话经验板/)
 })
@@ -463,7 +463,7 @@ await check('GET state 返回规则/群组/会话/送达结构', async () => {
   const { res, json } = await callState()
   assert.equal(res.out.status, 200)
   assert.equal(json.ok, true)
-  assert.equal(json.version, '2.10.1')
+  assert.equal(json.version, '2.10.2')
   assert.ok(Array.isArray(json.rules) && json.rules.length >= 1)
   assert.ok(Array.isArray(json.groups))
   assert.ok(Array.isArray(json.sessions) && json.sessions.length >= 2)
@@ -1115,7 +1115,7 @@ await check('面板命令：删除规矩与群组', async () => {
 
 await check('插件启动凭证写入正确（工具/注册/版本/API）', () => {
   const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))
-  assert.equal(receipt.version, '2.10.1')
+  assert.equal(receipt.version, '2.10.2')
   assert.deepEqual(receipt.tools.slice().sort(), ['group_member', 'group_recruit', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_interrupt', 'session_like', 'session_nudge', 'session_profile', 'session_retract', 'session_share', 'session_urgent'])
   assert.deepEqual(receipt.failedTools, [])
   assert.equal(receipt.registration.section, true)
@@ -2712,7 +2712,7 @@ let otherGroupId = ''
 
 await check('v2.9.2：state 暴露撤回/打断能力（探测到宿主 cancel）', async () => {
   const { json } = await callState4()
-  assert.equal(json.version, '2.10.1')
+  assert.equal(json.version, '2.10.2')
   assert.equal(json.capabilities.retract, true)
   assert.equal(json.capabilities.interrupt, 'cancel', '应探测到宿主的 agent.cancel 能力')
   assert.ok(toolByName4.get('session_retract'), '缺少 session_retract 工具')
@@ -4001,8 +4001,8 @@ await (async () => {
   })
 })()
 
-// ---------------------------------------------------------------- N. 任务归属锁 / 范围约束 / 重复任务合并（v2.10.1）
-console.log('== N. 任务归属锁 / 范围约束 / 重复任务合并（v2.10.1）')
+// ---------------------------------------------------------------- N. 任务归属锁 / 范围约束 / 重复任务合并（v2.10.2）
+console.log('== N. 任务归属锁 / 范围约束 / 重复任务合并（v2.10.2）')
 const scopeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-bridge-scope-'))
 const scopeCaptured = { tools: [], routes: [], followups: [] }
 const S_COORD = 'session-c0c0c0c0-1111-4000-8000-aaaaaaaaaaaa'
@@ -4318,6 +4318,516 @@ await check('state/UI：owner、scope、claim、duplicates 与静态文案', asy
 })
 
 fs.rmSync(scopeDir, { recursive: true, force: true })
+
+// ---------------------------------------------------------------- O. 任务线（task-6 / v2.10.2）
+// 群任务/世界任务/单独任命组长 → 自动 5 阶段清单；state.taskLines 实时状态；卡住自动催办（不唤醒、去重、上限 3 次）。
+console.log('== O. 任务线：自动 5 阶段 / 实时状态 / 卡住催办（task-6）')
+
+const taskLineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-bridge-taskline-'))
+const TL_LEAD = 'session-5151eeee-0000-4000-8000-111111111111'
+const TL_M1 = 'session-5252ffff-0000-4000-8000-222222222222'
+const TL_M2 = 'session-5353aaaa-0000-4000-8000-333333333333'
+const DEFAULT_STEPS_EXPECTED = ['接收与确认', '拆解与分工', '执行', '复核', '交付']
+const tlCaptured = { tools: [], sections: [], contexts: [], listeners: [], routes: [], followups: [] }
+const tlAgent = (id) => ({
+  id,
+  status: 'idle',
+  session: { id, header: { cwd: CWD, createdAt: 1 } },
+  followup(message) {
+    tlCaptured.followups.push({ sessionId: this.id, message })
+  }
+})
+const tlLead = tlAgent(TL_LEAD)
+const tlM1 = tlAgent(TL_M1)
+const tlM2 = tlAgent(TL_M2)
+const tlAgents = [tlLead, tlM1, tlM2]
+const tlTitles = { [TL_LEAD]: '任务线组长', [TL_M1]: '任务线成员一', [TL_M2]: '任务线成员二' }
+const fakeSessionQueryTl = {
+  async listSessions() {
+    return tlAgents.map((agent) => ({ header: agent.session.header, live: true, persisted: true, formatStatus: 'current' }))
+  },
+  async readTitleSnapshots(ids) {
+    return ids.map((id) => ({
+      sessionId: id,
+      status: 'fulfilled',
+      value: { session: { id }, ...(tlTitles[id] ? { title: { title: tlTitles[id] } } : {}) }
+    }))
+  }
+}
+fs.writeFileSync(
+  path.join(taskLineDir, 'groups.json'),
+  JSON.stringify(
+    {
+      version: 1,
+      groups: [
+        {
+          id: 'g-tl',
+          name: '任务线组',
+          workspace: CWD,
+          goal: '任务线交付',
+          managerSessionId: TL_LEAD,
+          sessionIds: [TL_LEAD, TL_M1, TL_M2],
+          createdAt: 0,
+          updatedAt: 0
+        }
+      ]
+    },
+    null,
+    2
+  ),
+  'utf8'
+)
+fs.writeFileSync(
+  path.join(taskLineDir, 'permissions.json'),
+  JSON.stringify({ grants: { [TL_LEAD]: [TL_M1, TL_M2] } }, null, 2),
+  'utf8'
+)
+const fakeWebServerTl = {
+  register(route) {
+    tlCaptured.routes.push(route)
+    return () => {}
+  }
+}
+const ctxTl = {
+  tools: {
+    register(definition) {
+      tlCaptured.tools.push(definition)
+      return () => {}
+    }
+  },
+  systemPrompt: {
+    section(options) {
+      tlCaptured.sections.push(options)
+      return () => {}
+    },
+    context(options) {
+      tlCaptured.contexts.push(options)
+      return () => {}
+    }
+  },
+  agents: {
+    roots: () => tlAgents,
+    list: () => tlAgents,
+    get: (id) => tlAgents.find((agent) => agent.id === id)
+  },
+  sessions: { list: () => tlAgents.map((agent) => agent.session) },
+  get(name) {
+    if (name === 'sessionQuery') return fakeSessionQueryTl
+    if (name === 'webServer') return fakeWebServerTl
+    return undefined
+  },
+  effect(callback) {
+    const disposer = callback()
+    return typeof disposer === 'function' ? disposer : () => {}
+  },
+  on() {
+    return () => {}
+  },
+  logger: { info() {}, warn() {}, error() {} }
+}
+plugin.apply(ctxTl, { boardDir: taskLineDir, injectMode: 'broadcast', autoPrompt: false })
+const toolsTl = new Map(tlCaptured.tools.map((tool) => [tool.name, tool]))
+const routeHandlerTl = (p) => tlCaptured.routes.find((route) => route.path === p)?.handler
+const callStateTl = async () => {
+  const res = fakeRes()
+  await routeHandlerTl('/api/session-bridge/state')(fakeReq(), res)
+  return { res, json: JSON.parse(res.out.body) }
+}
+const callCommandTl = async (command) => {
+  const res = fakeRes()
+  await routeHandlerTl('/api/session-bridge/command')(
+    fakeReq({
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-session-bridge-action': '1' },
+      body: JSON.stringify(command)
+    }),
+    res
+  )
+  return { res, json: JSON.parse(res.out.body) }
+}
+const taskLineOfTl = async (taskId) => {
+  const state = await callStateTl()
+  return state.json.taskLines.find((line) => line.taskId === taskId) || null
+}
+const nudgesOfTl = async (taskId) => {
+  const state = await callStateTl()
+  return state.json.rules.filter((entry) => entry.nudge === true && entry.taskId === taskId)
+}
+const tlBoardFile = path.join(taskLineDir, 'board.jsonl')
+const tlT0 = Date.now()
+let tlTaskId = ''
+let tlDoneTaskId = ''
+
+await check('发布群任务自动构建默认 5 阶段清单；显式 steps 保留并归一化', async () => {
+  const res = await callCommandTl({
+    action: 'group.post',
+    payload: { id: 'g-tl', text: '把中期报告第三章补齐并交付', task: true, coordinatorId: TL_LEAD, assigneeIds: [TL_M1] }
+  })
+  assert.equal(res.json.ok, true, JSON.stringify(res.json))
+  tlTaskId = res.json.task.id
+  assert.equal(res.json.task.steps.length, 5, '默认应自动构建 5 阶段')
+  assert.deepEqual(res.json.task.steps.map((step) => step.text), DEFAULT_STEPS_EXPECTED)
+  assert.deepEqual(res.json.task.steps.map((step) => step.i), [1, 2, 3, 4, 5])
+  assert.ok(res.json.task.steps.every((step) => step.status === 'pending'))
+  const listed = (await callStateTl()).json.rules.find((entry) => entry.id === tlTaskId)
+  assert.equal(listed.steps.length, 5, '任务卡应落盘 steps')
+
+  // 显式 steps：保留顺序和文本，不追加默认阶段
+  const explicit = await callCommandTl({
+    action: 'group.post',
+    payload: {
+      id: 'g-tl',
+      text: '先调研再成稿的二次任务',
+      task: true,
+      coordinatorId: TL_LEAD,
+      assigneeIds: [TL_M2],
+      steps: ['先做调研', '再写正文'],
+      allowDuplicate: true
+    }
+  })
+  assert.equal(explicit.json.ok, true, JSON.stringify(explicit.json))
+  assert.deepEqual(explicit.json.task.steps.map((step) => step.text), ['先做调研', '再写正文'])
+  assert.deepEqual(explicit.json.task.steps.map((step) => step.i), [1, 2])
+  assert.ok(explicit.json.task.steps.every((step) => step.status === 'pending'))
+})
+
+await check('世界任务自动构建默认 5 阶段清单', async () => {
+  const res = await callCommandTl({ action: 'world.post', payload: { text: `@${TL_LEAD} 整理一份接口测试报告并交付` } })
+  assert.equal(res.json.ok, true, JSON.stringify(res.json))
+  assert.ok(res.json.createdGroup, '世界任务应自动建协作群')
+  const state = await callStateTl()
+  const worldTask = state.json.rules.find(
+    (entry) => entry.kind === 'task' && entry.worldTask === true && /接口测试报告/.test(String(entry.text || ''))
+  )
+  assert.ok(worldTask, '应创建世界任务卡')
+  assert.equal(worldTask.steps.length, 5)
+  assert.deepEqual(worldTask.steps.map((step) => step.text), DEFAULT_STEPS_EXPECTED)
+})
+
+await check('state.taskLines：字段齐全，任务从 waiting → active 推进', async () => {
+  const state = await callStateTl()
+  assert.ok(Array.isArray(state.json.taskLines), 'state 应下发 taskLines')
+  assert.ok(state.json.taskLineStats && state.json.taskLineStats.total >= 1, 'state 应下发 taskLineStats')
+  let line = state.json.taskLines.find((item) => item.taskId === tlTaskId)
+  assert.ok(line, '应能找到任务线')
+  for (const key of [
+    'title',
+    'taskId',
+    'groupId',
+    'leader',
+    'members',
+    'steps',
+    'currentStep',
+    'progress',
+    'lineStatus',
+    'lastProgressAt',
+    'lastNudgeAt',
+    'nudgeCount',
+    'stalledSince'
+  ]) {
+    assert.ok(key in line, '任务线缺少字段 ' + key)
+  }
+  assert.equal(line.lineStatus, 'waiting')
+  assert.equal(line.currentStep, 1)
+  assert.equal(line.progress, 0)
+  assert.equal(line.leader.id, TL_LEAD)
+  assert.ok(line.members.some((member) => member.id === TL_M1), 'members 应含成员')
+  assert.ok(line.lastProgressAt > 0)
+  assert.equal(line.lastNudgeAt, 0)
+  assert.equal(line.nudgeCount, 0)
+  assert.equal(line.stalledSince, 0)
+
+  // 组长派第 1 步 → 步骤 dispatched，任务线应为 active
+  const ask = toolsTl.get('session_ask')
+  const askOut = String(
+    await ask.execute({ group: '任务线组', to: TL_M1, text: '先做第一步：确认交付范围', mode: 'task', step: 1 }, { agent: tlLead })
+  )
+  assert.match(askOut, /发出任务分配/)
+  line = await taskLineOfTl(tlTaskId)
+  assert.equal(line.steps[0].status, 'dispatched', '派发后步骤应为 dispatched')
+  assert.equal(line.lineStatus, 'active', '已开工的任务线应为 active')
+  assert.equal(line.currentStep, 1)
+
+  // 成员回执 → 步骤 done，进度 20%，当前步骤 2
+  const memberRequest = (await callStateTl()).json.rules.find(
+    (entry) => entry.kind === 'request' && entry.taskId === tlTaskId && entry.taskRole === 'member'
+  )
+  assert.ok(memberRequest, '应有成员请求')
+  const share = toolsTl.get('session_share')
+  await share.execute(
+    { title: '第一步完成', text: '交付范围已确认，继续执行', kind: 'handoff', group: '任务线组', replyTo: memberRequest.id },
+    { agent: tlM1 }
+  )
+  line = await taskLineOfTl(tlTaskId)
+  assert.equal(line.steps[0].status, 'done', 'answered 后步骤应为 done')
+  assert.equal(line.currentStep, 2)
+  assert.equal(line.progress, 20)
+  assert.equal(line.lineStatus, 'active')
+})
+
+await check('任务完成收口：lineStatus=done / progress=100；撤回收口不再出现在任务线', async () => {
+  const state = await callStateTl()
+  const coordinatorRequest = state.json.rules.find(
+    (entry) => entry.kind === 'request' && entry.taskId === tlTaskId && entry.taskRole === 'coordinator'
+  )
+  assert.ok(coordinatorRequest, '应有组长请求')
+  const share = toolsTl.get('session_share')
+  const doneOut = String(
+    await share.execute(
+      { title: '任务完成', text: '报告已完成并交付', kind: 'handoff', group: '任务线组', replyTo: coordinatorRequest.id },
+      { agent: tlLead }
+    )
+  )
+  assert.match(doneOut, /任务已标记为完成/)
+  tlDoneTaskId = tlTaskId
+  let line = await taskLineOfTl(tlTaskId)
+  assert.equal(line.lineStatus, 'done')
+  assert.equal(line.progress, 100)
+  assert.ok(line.steps.every((step) => step.status === 'done'), '已完成任务线的阶段应全部显示完成')
+
+  // 撤回 = 从看板移除（收口）；之后任务线不再出现，也不会被催办
+  const cancelCreated = await callCommandTl({
+    action: 'group.post',
+    payload: {
+      id: 'g-tl',
+      text: '将被撤回的任务线',
+      task: true,
+      coordinatorId: TL_LEAD,
+      assigneeIds: [TL_M2],
+      allowDuplicate: true
+    }
+  })
+  assert.equal(cancelCreated.json.ok, true, JSON.stringify(cancelCreated.json))
+  const cancelTaskId = cancelCreated.json.task.id
+  const retracted = await callCommandTl({ action: 'entry.retract', payload: { id: cancelTaskId, reason: '任务线撤回测试' } })
+  assert.equal(retracted.json.ok, true, JSON.stringify(retracted.json))
+  assert.equal(await taskLineOfTl(cancelTaskId), null, '撤回后任务线应收口（不再出现在 taskLines）')
+  const cancelScan = await callCommandTl({ action: 'task.lines', payload: { scan: true, now: tlT0 + 200 * 60 * 1000 } })
+  assert.ok(!cancelScan.json.scan.nudged.some((item) => item.taskId === cancelTaskId), '已撤回任务线不得催办')
+
+  // dedupe 合并掉的重复任务保留数据但标 canceled → 任务线以 canceled 收口（不再催办）
+  const primary = await callCommandTl({
+    action: 'group.post',
+    payload: { id: 'g-tl', text: '合并测试：清理 Q 盘回收站', task: true, coordinatorId: TL_LEAD, assigneeIds: [TL_M1], allowDuplicate: true }
+  })
+  const duplicate = await callCommandTl({
+    action: 'group.post',
+    payload: {
+      id: 'g-tl',
+      text: '合并测试：清理 Q 盘回收站（重复副本）',
+      task: true,
+      coordinatorId: TL_LEAD,
+      assigneeIds: [TL_M2],
+      allowDuplicate: true
+    }
+  })
+  assert.equal(primary.json.ok, true, JSON.stringify(primary.json))
+  assert.equal(duplicate.json.ok, true, JSON.stringify(duplicate.json))
+  const deduped = await callCommandTl({ action: 'task.dedupe', payload: { apply: true } })
+  assert.equal(deduped.json.ok, true, JSON.stringify(deduped.json))
+  const canceledLine = await taskLineOfTl(duplicate.json.task.id)
+  assert.ok(canceledLine, 'cancelled（dedupe 合并）的任务线应保留在 taskLines')
+  assert.equal(canceledLine.lineStatus, 'canceled')
+  const canceledScan = await callCommandTl({ action: 'task.lines', payload: { scan: true, now: tlT0 + 220 * 60 * 1000 } })
+  assert.ok(!canceledScan.json.scan.nudged.some((item) => item.taskId === duplicate.json.task.id), 'canceled 任务线不得催办')
+})
+
+await check('老任务线没有 steps：自动补默认 5 阶段并随巡检落盘', async () => {
+  const legacyTaskId = 'n-legacy-line'
+  const legacyTs = Date.now() - 5 * 60 * 1000
+  fs.appendFileSync(
+    tlBoardFile,
+    JSON.stringify({
+      op: 'add',
+      id: legacyTaskId,
+      entry: {
+        id: legacyTaskId,
+        kind: 'task',
+        scope: 'group',
+        groupId: 'g-tl',
+        workspace: CWD,
+        author: 'panel',
+        title: '历史任务线（无 steps）',
+        text: '功能上线前创建的老任务，没有 steps 字段',
+        tags: [],
+        files: [],
+        requestTo: [],
+        mentions: [],
+        hiddenFromChat: false,
+        taskId: '',
+        taskRole: '',
+        taskStatus: 'assigned',
+        coordinator: TL_LEAD,
+        assignees: [],
+        owner: TL_LEAD,
+        ownerRole: 'coordinator',
+        claimState: 'assigned',
+        claimedAt: legacyTs,
+        taskScope: '只做历史任务线测试',
+        ts: legacyTs,
+        expiresAt: 0,
+        origin: 'panel'
+      },
+      ts: legacyTs
+    }) + '\n',
+    'utf8'
+  )
+  let line = await taskLineOfTl(legacyTaskId)
+  assert.ok(line, '老任务也应出现在 taskLines')
+  assert.equal(line.steps.length, 5, '老任务应自动补默认 5 阶段')
+  assert.deepEqual(line.steps.map((step) => step.text), DEFAULT_STEPS_EXPECTED)
+  const scan = await callCommandTl({ action: 'task.lines', payload: { scan: true, now: tlT0 + 30 * 60 * 1000 } })
+  assert.equal(scan.json.ok, true, JSON.stringify(scan.json))
+  const listed = (await callStateTl()).json.rules.find((entry) => entry.id === legacyTaskId)
+  assert.equal(listed.steps.length, 5, '巡检应把自动 steps 落盘（任务卡与任务线一致）')
+})
+
+await check('卡住自动催办：写 nudge（不唤醒）、去重、上限 3 次', async () => {
+  const created = await callCommandTl({
+    action: 'group.post',
+    payload: {
+      id: 'g-tl',
+      text: '卡住任务线测试：补齐附录与图注',
+      task: true,
+      coordinatorId: TL_LEAD,
+      assigneeIds: [TL_M1],
+      allowDuplicate: true
+    }
+  })
+  assert.equal(created.json.ok, true, JSON.stringify(created.json))
+  const stalledTaskId = created.json.task.id
+  tlCaptured.followups.length = 0
+
+  // 超过 25 分钟无进度 → 第 1 次催办
+  let scan = await callCommandTl({ action: 'task.lines', payload: { scan: true, now: tlT0 + 26 * 60 * 1000 } })
+  assert.equal(scan.json.ok, true, JSON.stringify(scan.json))
+  assert.ok(Array.isArray(scan.json.scan.nudged), 'scan 应返回 nudged')
+  assert.ok(scan.json.scan.nudged.some((item) => item.taskId === stalledTaskId), '卡住任务线应被催办')
+  let nudges = await nudgesOfTl(stalledTaskId)
+  assert.equal(nudges.length, 1, '应写入 1 条任务线 nudge')
+  assert.deepEqual(nudges[0].requestTo, [TL_LEAD], '催办目标应为组长')
+  assert.equal(nudges[0].hiddenFromChat, true, '催办是插话，不进群聊流')
+  assert.equal(nudges[0].nudge, true)
+  let line = scan.json.taskLines.find((item) => item.taskId === stalledTaskId)
+  assert.ok(line, 'scan 返回的任务线应包含卡住任务')
+  assert.equal(line.lineStatus, 'stalled')
+  assert.equal(line.nudgeCount, 1)
+  assert.ok(line.lastNudgeAt > 0, '应记录 lastNudgeAt')
+  assert.ok(line.stalledSince > 0, '应记录 stalledSince')
+  assert.equal(tlCaptured.followups.length, 0, '催办只写 nudge，不得唤醒会话')
+
+  // 同一时间重复扫描 → 不重复轰炸
+  scan = await callCommandTl({ action: 'task.lines', payload: { scan: true, now: tlT0 + 26 * 60 * 1000 } })
+  assert.equal(scan.json.scan.nudged.length, 0, '间隔不足 25 分钟不应重复催办')
+  assert.equal((await nudgesOfTl(stalledTaskId)).length, 1)
+
+  // 每满一个 25 分钟窗口催一次：第 2、3 次
+  scan = await callCommandTl({ action: 'task.lines', payload: { scan: true, now: tlT0 + 52 * 60 * 1000 } })
+  assert.ok(scan.json.scan.nudged.some((item) => item.taskId === stalledTaskId))
+  assert.equal((await taskLineOfTl(stalledTaskId)).nudgeCount, 2)
+  scan = await callCommandTl({ action: 'task.lines', payload: { scan: true, now: tlT0 + 78 * 60 * 1000 } })
+  assert.ok(scan.json.scan.nudged.some((item) => item.taskId === stalledTaskId))
+  assert.equal((await taskLineOfTl(stalledTaskId)).nudgeCount, 3)
+
+  // 上限 3 次：之后不再催办
+  scan = await callCommandTl({ action: 'task.lines', payload: { scan: true, now: tlT0 + 104 * 60 * 1000 } })
+  assert.ok(!scan.json.scan.nudged.some((item) => item.taskId === stalledTaskId), '超过 3 次不应再催办')
+  assert.equal((await nudgesOfTl(stalledTaskId)).length, 3)
+  assert.equal(tlCaptured.followups.length, 0, '全程不得唤醒')
+
+  // 完成/撤回的任务线不催办
+  const doneScan = await callCommandTl({ action: 'task.lines', payload: { scan: true, now: tlT0 + 140 * 60 * 1000 } })
+  assert.ok(!doneScan.json.scan.nudged.some((item) => item.taskId === tlDoneTaskId), '已完成任务线不应催办')
+})
+
+await check('催办跳过维护者/protected 会话', async () => {
+  // 把 TL_M2 注册为维护者，再手工落一条「老任务线」（组长=维护者）模拟历史卡住任务。
+  fs.writeFileSync(
+    path.join(taskLineDir, 'maintainer.json'),
+    JSON.stringify(
+      { sessionId: TL_M2, handle: '值班员', avatar: '🛰️', protected: true, service: true, protectionLevel: 'maintainer', updatedAt: 1 },
+      null,
+      2
+    ),
+    'utf8'
+  )
+  const protectedTaskId = 'n-protected-line'
+  const oldTs = tlT0 - 40 * 60 * 1000
+  const protectedSteps = DEFAULT_STEPS_EXPECTED.map((text, index) => ({ i: index + 1, text, status: 'pending' }))
+  fs.appendFileSync(
+    tlBoardFile,
+    JSON.stringify({
+      op: 'add',
+      id: protectedTaskId,
+      entry: {
+        id: protectedTaskId,
+        kind: 'task',
+        scope: 'group',
+        groupId: 'g-tl',
+        workspace: CWD,
+        author: 'panel',
+        title: '受保护任务线',
+        text: '不应被催办',
+        tags: [],
+        files: [],
+        requestTo: [],
+        mentions: [],
+        hiddenFromChat: false,
+        taskId: '',
+        taskRole: '',
+        taskStatus: 'assigned',
+        coordinator: TL_M2,
+        assignees: [],
+        owner: TL_M2,
+        ownerRole: 'coordinator',
+        claimState: 'assigned',
+        claimedAt: oldTs,
+        taskScope: '只做受保护任务线测试',
+        steps: protectedSteps,
+        ts: oldTs,
+        expiresAt: 0,
+        origin: 'panel'
+      },
+      ts: oldTs
+    }) + '\n',
+    'utf8'
+  )
+  const state = await callStateTl()
+  const protectedLine = state.json.taskLines.find((item) => item.taskId === protectedTaskId)
+  assert.ok(protectedLine, '受保护任务线应出现在 taskLines')
+  assert.equal(protectedLine.lineStatus, 'stalled')
+  const scan = await callCommandTl({ action: 'task.lines', payload: { scan: true, now: tlT0 } })
+  assert.ok(scan.json.scan.skippedProtected.includes(protectedTaskId), '应跳过 protected 维护者')
+  assert.equal((await nudgesOfTl(protectedTaskId)).length, 0, '维护者任务线不得被催办')
+})
+
+await check('任务线 UI：app.html 增加看板区（阶段/进度/卡住）且不遮挡现有操作（静态检查）', () => {
+  const html = fs.readFileSync(path.join(PLUGIN_DIR, 'app.html'), 'utf8')
+  for (const needle of [
+    'id="taskLinesBoard"',
+    '任务线',
+    'renderTaskLines',
+    'renderTaskLines()',
+    'tl-progress',
+    'tl-badge',
+    'tl-steps',
+    '卡住',
+    'taskLineStats'
+  ]) {
+    assert.ok(html.includes(needle), 'app.html 缺少任务线 UI 标记：' + needle)
+  }
+  // 既有入口仍在（不遮挡发布任务/群聊/空闲看板）
+  for (const needle of ['id="taskBtn"', 'id="groupSend"', 'id="idleBoard"', 'id="worldSend"']) {
+    assert.ok(html.includes(needle), '任务线看板不应移除既有入口：' + needle)
+  }
+  // 只读接口：不带 scan 时不应触发催办写盘
+  const readOnly = fs.readFileSync(path.join(PLUGIN_DIR, 'index.js'), 'utf8')
+  assert.ok(readOnly.includes("action === 'task.lines'"), 'index.js 应提供 task.lines 面板命令')
+  assert.ok(readOnly.includes("'session-bridge: task-line timer'"), 'index.js 应有后台任务线巡检定时器（unref + 可清理）')
+  assert.ok(readOnly.includes('TASK_LINE_STALL_MS'), 'index.js 应有卡住阈值常量')
+})
+
+fs.rmSync(taskLineDir, { recursive: true, force: true })
 
 // ---------------------------------------------------------------- 收尾
 fs.rmSync(targetedDir, { recursive: true, force: true })
