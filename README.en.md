@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.10.0-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.10.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 **English** | [简体中文](README.md)
@@ -152,6 +152,24 @@ When group work has a required order, you no longer have to wake every step at o
 - Permission: only the **group coordinator / maintainer** may queue serial instructions (any member may queue while the group has no coordinator); ordinary members get a clear error.
 - Panel: queued requests show “排队中，依赖 N 项前置” (queued, N prerequisites) in group chat, and task cards show step progress “步骤 1/2（下一步 …）”.
 - `group.post` accepts `steps: ["research first", "then write"]`; the coordinator's wake-up message includes the step list and the serial workflow (step 2 is queued with `dependsOn=<step 1 request id>`).
+
+### 15. Task ownership lock, scope guard, and duplicate-task merge (v2.10.1)
+
+**Full-disk read access is not a task authorization.** A member with broad read access executes only the explicitly assigned scope; it must not fill in another member's A/B side, toolchain, or runbook, and must not silently expand to another drive or a drive-wide inventory.
+
+- **Task fields**: `kind=task` now carries `owner` (the single active owner), `ownerRole`, `claimedAt`, `claimState` (assigned/claimed/released), and `taskScope` (what to do and what not to do). On creation the task gets owner=coordinator/assignee and a scope derived from the text or an explicit `taskScope`; `kind=request` also carries owner and taskScope.
+  - Note: `entry.scope` is already the visibility scope (workspace/global/group), so the work scope uses the equivalent `taskScope` field rather than corrupting routing.
+- **`task.claim` / `task.release`** (HTTP commands; `session_board` actions `task.claim` / `task.release` are equivalent):
+  - only the task's coordinator/assignee may claim; the panel must pass an explicit `owner`;
+  - when another session already owns the task, the call returns the current owner and a refusal reason and **never silently overwrites**; a task has exactly one active owner;
+  - release clears the owner so it can be re-claimed; `task.dedupe` returns merge suggestions (`apply=true` only marks duplicates canceled + `mergedInto`, never deletes data).
+- **`session_share` reply validation for task requests**:
+  - a non-owner reply is recorded as a proposal/suggestion only: it **cannot advance taskStatus or settle completion rewards**, but it wakes the owner to collect it;
+  - only the owner can advance taskStatus/settle;
+  - if the delivery mentions another drive, a drive-wide inventory, runbook/toolchain, or another member's A/B side, the plugin writes `scopeWarning` and asks the owner to confirm instead of auto-expanding scope; the owner can resend with `scopeConfirmed=true` to advance and leave an audit trail.
+- **Dispatch template**: task-mode `session_ask`, `group.post`, and `world.post` messages include “【范围锁】归属：X · 仅做 scope：…（仅做 scope，禁止扩展；全盘读权限不是任务授权）”. `session_ask` gains an optional `scope` argument; when omitted it inherits the task's taskScope or derives one from the text.
+- **24h duplicate-task merge**: before creating a task/group, `world.post` / `group.post` compares active tasks/requests from the last 24 hours in the same group or globally using normalized text similarity, target drive, and action category (same request / same drive / same user need). On a hit it returns `duplicate:true` plus the existing task id and owner and **does not create a second group/task**. `forceNew=true`, text containing “new round / round N / redo”, or `allowDuplicate=true` explicitly marks a distinct new task.
+- **UI**: task cards, group chat, and the idle board show owner, claim state, and “仅 scope”; the world feed and task detail surface duplicate-task merge hints; `state.duplicates` exposes the suggestion list.
 
 ## Install
 
