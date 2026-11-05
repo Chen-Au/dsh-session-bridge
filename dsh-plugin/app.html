@@ -2045,6 +2045,14 @@
       if (event.target === $('identityModal')) $('identityModal').classList.remove('open')
     })
   }
+  function pingPresence() {
+    if (document.visibilityState !== 'visible' || !document.hasFocus()) return
+    command('presence.ping', {}).catch(function () {})
+  }
+  setInterval(pingPresence, 60000)
+  window.addEventListener('focus', pingPresence)
+  document.addEventListener('visibilitychange', pingPresence)
+  pingPresence()
   bindEvents()
   loadTheme()
   try { var savedFold = localStorage.getItem('nebula.groupFolded'); groupFolded = savedFold === null ? true : savedFold === '1' } catch (e) { groupFolded = true }
