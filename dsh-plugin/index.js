@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.10.2'
+const VERSION = '2.10.3'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -2730,6 +2730,32 @@ export function apply(ctx, config = {}) {
       groupNames
     })
     const taskLineStats = buildTaskLineStats(taskLines)
+    // task-7：完成通知数组（供星桥 app 轮询检测；未读由客户端按 lastSeen 时间戳计算）。
+    const completionNotices = rules
+      .filter((entry) => entry && entry.completionNotice === true)
+      .map((entry) => {
+        const authorSession = sessions.find((session) => session.id === entry.author)
+        return {
+          id: entry.id,
+          taskId: entry.taskId || '',
+          groupId: entry.groupId || '',
+          groupName: entry.groupId ? groupNames.get(entry.groupId) || '' : '',
+          title: entry.title || '',
+          text: entry.text || '',
+          author: entry.author || 'panel',
+          authorHandle: authorSession ? authorSession.handle : entry.author === 'panel' ? '用户' : shortSid(entry.author),
+          panelMention: entry.panelMention === true,
+          completionNotice: true,
+          completedAt: toNumber(entry.completedAt, 0) || toNumber(entry.ts, 0),
+          ts: toNumber(entry.ts, 0)
+        }
+      })
+      .sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0))
+      .slice(0, 50)
+    const completionStats = {
+      total: completionNotices.length,
+      latestAt: completionNotices.length ? completionNotices[0].completedAt || completionNotices[0].ts : 0
+    }
     const titleById = new Map(sessions.map((session) => [session.id, session.title]))
     const chatCountByAuthor = new Map()
     for (const entry of rules) {
@@ -2891,6 +2917,9 @@ export function apply(ctx, config = {}) {
       // task-6：任务线看板（自动 5 阶段清单 + 实时状态 + 卡住催办记录）。
       taskLines,
       taskLineStats,
+      // task-7：任务完成通知（组长在群里 @用户）与最新完成时间。
+      completionNotices,
+      completionStats,
       // v2.10.1：重复任务合并建议（只下发建议，UI 不自动删数据）。
       duplicates: collectDuplicateTaskGroups(rules),
       approvals: readApprovals().filter((item) => item && item.status === 'pending'),
@@ -3384,6 +3413,16 @@ export function apply(ctx, config = {}) {
       channel: typeof input.channel === 'string' && input.channel ? input.channel : '',
       // 世界任务标记需要落盘，24h 查重和完成汇总都靠它识别「这是世界任务」。
       ...(input.worldTask === true ? { worldTask: true } : {}),
+      // task-7 任务完成通知：completionNotice 标记 + 用户（panel）提及标记（聊天 @ 只渲染会话，用户需单独标 @你）。
+      ...(input.completionNotice === true
+        ? {
+            completionNotice: true,
+            completedAt: toNumber(input.completedAt, 0) || now,
+            panelMention: input.panelMention !== false
+          }
+        : input.panelMention === true
+          ? { panelMention: true }
+          : {}),
       hiddenFromChat: input.hiddenFromChat === true,
       nudge: input.nudge === true,
       // 加急插话标记（v2.9.3）：UI 用它显示 ⚡ 徽章，urgentTo 便于审计「加急给谁」。
@@ -3465,6 +3504,102 @@ export function apply(ctx, config = {}) {
       `发布条目 ${id} [${kind}/${scope}${group ? `/群组:${group.name}` : ''}] ${title}（来自会话 ${shortSid(entry.author)}，origin=${entry.origin}）`
     )
     return { ok: true, entry, group }
+  }
+
+  // ---------------------------------------------------------------- 任务完成通知（task-7 / v2.10.3）
+  /** 某任务的完成通知条目（幂等判据：completionNotice=true 且 taskId 相同）。 */
+  const completionNoticeOf = (taskId) => {
+    const wanted = String(taskId || '')
+    if (!wanted) return null
+    try {
+      return (
+        store.readActive().find((entry) => entry && entry.completionNotice === true && entry.taskId === wanted) || null
+      )
+    } catch {
+      return null
+    }
+  }
+  /**
+   * 任务 done 时在所属群生成一条「完成通知」：作者=组长/coordinator（无则 owner/panel），
+   * 内容含任务标题/完成时间，并通过 panelMention 在群里 @用户（panel 不是会话，聊天流需要单独标记）。
+   * 幂等：同一 taskId 只生成一条；未完成（非 done）/已撤回不生成。
+   * 无群的世界任务写世界流（channel=world）；既无群也无世界标记则跳过，避免污染工作区经验板。
+   */
+  const ensureTaskCompletionNotice = (taskId, options = {}) => {
+    const task = findBoardEntry(taskId)
+    if (!task || task.kind !== 'task') return { ok: false, reason: 'task-not-found' }
+    if (String(task.taskStatus || '') !== 'done') return { ok: false, reason: 'not-done' }
+    if (task.mergedInto) return { ok: false, reason: 'merged' }
+    const existing = completionNoticeOf(task.id)
+    if (existing) return { ok: true, skipped: true, entry: existing }
+    const ownerId = taskOwnerOf(task)
+    const authorId = ownerId || (typeof task.author === 'string' && task.author !== 'panel' ? task.author : 'panel')
+    let authorName = authorId === 'panel' ? '用户' : shortSid(authorId)
+    if (authorId !== 'panel') {
+      try {
+        const identity = identityOf(authorId, identityTitleOf(authorId))
+        if (identity && identity.handle) authorName = identity.handle
+      } catch {
+        /* identity 读取失败时用短 id */
+      }
+    }
+    const completedAt =
+      toNumber(options.completedAt, 0) || toNumber(task.completedAt, 0) || toNumber(task.doneAt, 0) || Date.now()
+    const group = task.groupId ? groupStore.read().find((item) => item.id === task.groupId) || null : null
+    const isWorldNotice = !group && task.worldTask === true
+    if (!group && !isWorldNotice) {
+      // 没有群、也不是世界任务：没有合适的投递面（避免污染工作区经验板）。
+      return { ok: false, reason: 'no-channel' }
+    }
+    const text = [
+      '🎉 任务完成通知',
+      `任务：${task.title || '未命名任务'}`,
+      `组长：${authorName}${authorId !== 'panel' ? '（contactId=' + contactIdOf(authorId) + '）' : ''}`,
+      `完成时间：${stableStamp(completedAt)}`,
+      ...(group ? [`群组：${group.name}`] : ['（世界任务·无群消息）']),
+      ...(Array.isArray(task.assignees) && task.assignees.length
+        ? [`参与成员：${task.assignees.map((id) => shortSid(id)).join('、')}`]
+        : []),
+      '',
+      '（系统在任务完成时自动生成的完成通知，无需重复回复；点击通知可跳到对应群/组长。）'
+    ].join('\n')
+    const mentionIds = [
+      ...new Set([
+        ...(authorId !== 'panel' ? [authorId] : []),
+        ...(Array.isArray(task.assignees) ? task.assignees : [])
+      ])
+    ].slice(0, 12)
+    const result = addEntry(
+      {
+        title: ('任务完成：' + String(task.title || '群任务')).slice(0, 40),
+        text,
+        kind: 'chat',
+        groupId: group ? group.id : '',
+        ...(group ? {} : { scope: 'global', channel: 'world' }),
+        workspace: (group && group.workspace) || task.workspace || '',
+        author: authorId,
+        origin: authorId === 'panel' ? 'panel' : 'tool',
+        mentions: mentionIds,
+        completionNotice: true,
+        panelMention: true,
+        completedAt,
+        taskId: task.id,
+        tags: '@完成通知',
+        skipDedupe: true
+      },
+      authorId === 'panel' ? 'panel' : 'tool'
+    )
+    if (!result.ok) return { ok: false, reason: result.reason || 'write-failed' }
+    logger.info(
+      `任务完成通知：${task.id}（${truncate(task.title, 24)}）→ ${group ? '群「' + group.name + '」' : '世界流'}，@用户`
+    )
+    return {
+      ok: true,
+      created: true,
+      entry: result.entry,
+      groupId: group ? group.id : '',
+      groupName: group ? group.name : ''
+    }
   }
 
   // ---------------------------------------------------------------- 任务线巡检（task-6 / v2.10.2）
@@ -6818,6 +6953,14 @@ export function apply(ctx, config = {}) {
                   ts: Date.now()
                 }
               ])
+            }
+            // task-7：组长把任务标记完成 → 在群里生成一条来自组长的完成通知并 @用户（幂等，只生成一次）。
+            if (isCoordinator && taskAdvanced) {
+              try {
+                ensureTaskCompletionNotice(request.taskId, { completedAt: Date.now() })
+              } catch (error) {
+                logger.warn(`任务完成通知生成失败：${error && error.message ? error.message : error}`)
+              }
             }
             // 任务刚变成 done：立刻推进以该任务为前置的串行指令。
             if (isCoordinator && taskAdvanced) {

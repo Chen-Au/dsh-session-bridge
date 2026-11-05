@@ -354,7 +354,7 @@ await check('查重生效（相同内容不重复发布）', async () => {
 
 await check('session_board status 报告版本与注册结果', async () => {
   const result = String(await board.execute({ action: 'status' }, { agent: rootAgent }))
-  assert.match(result, /session-bridge v2\.10\.2/)
+  assert.match(result, /session-bridge v2\.10\.3/)
   assert.match(result, /工具：session_share, session_ask, session_nudge, session_retract, session_interrupt, group_rule, session_like, session_discuss, session_identity, group_member, session_directory, group_skill, session_profile, session_board, group_recruit, session_urgent/)
   assert.match(result, /通讯录：3 个主会话/)
   assert.match(result, /空闲看板：idle \d+ 个 · busy \d+ 个/)
@@ -366,7 +366,7 @@ await check('session_board status 报告版本与注册结果', async () => {
 
 await check('子会话可只读查看经验板（list / status）', async () => {
   const status = String(await board.execute({ action: 'status' }, { agent: subAgent }))
-  assert.match(status, /session-bridge v2\.10\.2/)
+  assert.match(status, /session-bridge v2\.10\.3/)
   const listed = String(await board.execute({ action: 'list' }, { agent: subAgent }))
   assert.match(listed, /跨会话经验板/)
 })
@@ -463,7 +463,7 @@ await check('GET state 返回规则/群组/会话/送达结构', async () => {
   const { res, json } = await callState()
   assert.equal(res.out.status, 200)
   assert.equal(json.ok, true)
-  assert.equal(json.version, '2.10.2')
+  assert.equal(json.version, '2.10.3')
   assert.ok(Array.isArray(json.rules) && json.rules.length >= 1)
   assert.ok(Array.isArray(json.groups))
   assert.ok(Array.isArray(json.sessions) && json.sessions.length >= 2)
@@ -1115,7 +1115,7 @@ await check('面板命令：删除规矩与群组', async () => {
 
 await check('插件启动凭证写入正确（工具/注册/版本/API）', () => {
   const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))
-  assert.equal(receipt.version, '2.10.2')
+  assert.equal(receipt.version, '2.10.3')
   assert.deepEqual(receipt.tools.slice().sort(), ['group_member', 'group_recruit', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_interrupt', 'session_like', 'session_nudge', 'session_profile', 'session_retract', 'session_share', 'session_urgent'])
   assert.deepEqual(receipt.failedTools, [])
   assert.equal(receipt.registration.section, true)
@@ -2712,7 +2712,7 @@ let otherGroupId = ''
 
 await check('v2.9.2：state 暴露撤回/打断能力（探测到宿主 cancel）', async () => {
   const { json } = await callState4()
-  assert.equal(json.version, '2.10.2')
+  assert.equal(json.version, '2.10.3')
   assert.equal(json.capabilities.retract, true)
   assert.equal(json.capabilities.interrupt, 'cancel', '应探测到宿主的 agent.cancel 能力')
   assert.ok(toolByName4.get('session_retract'), '缺少 session_retract 工具')
@@ -4001,8 +4001,8 @@ await (async () => {
   })
 })()
 
-// ---------------------------------------------------------------- N. 任务归属锁 / 范围约束 / 重复任务合并（v2.10.2）
-console.log('== N. 任务归属锁 / 范围约束 / 重复任务合并（v2.10.2）')
+// ---------------------------------------------------------------- N. 任务归属锁 / 范围约束 / 重复任务合并（v2.10.3）
+console.log('== N. 任务归属锁 / 范围约束 / 重复任务合并（v2.10.3）')
 const scopeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-bridge-scope-'))
 const scopeCaptured = { tools: [], routes: [], followups: [] }
 const S_COORD = 'session-c0c0c0c0-1111-4000-8000-aaaaaaaaaaaa'
@@ -4319,7 +4319,7 @@ await check('state/UI：owner、scope、claim、duplicates 与静态文案', asy
 
 fs.rmSync(scopeDir, { recursive: true, force: true })
 
-// ---------------------------------------------------------------- O. 任务线（task-6 / v2.10.2）
+// ---------------------------------------------------------------- O. 任务线（task-6 / v2.10.3）
 // 群任务/世界任务/单独任命组长 → 自动 5 阶段清单；state.taskLines 实时状态；卡住自动催办（不唤醒、去重、上限 3 次）。
 console.log('== O. 任务线：自动 5 阶段 / 实时状态 / 卡住催办（task-6）')
 
@@ -4828,6 +4828,279 @@ await check('任务线 UI：app.html 增加看板区（阶段/进度/卡住）�
 })
 
 fs.rmSync(taskLineDir, { recursive: true, force: true })
+
+// ---------------------------------------------------------------- P. 任务完成通知（task-7 / v2.10.3）
+// 任务 done → 群里生成一条来自组长的完成通知并 @用户（panelMention）；幂等；撤回/未完成不生成；
+// app 只在可见+有焦点+非全屏时提示音/toast，否则只留未读 badge。
+console.log('== P. 任务完成通知：组长群里 @用户 + 幂等 + 非全屏提示（task-7）')
+
+const doneDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-bridge-done-'))
+const D_LEAD = 'session-6161aaaa-0000-4000-8000-111111111111'
+const D_M1 = 'session-6262bbbb-0000-4000-8000-222222222222'
+const doneCaptured = { tools: [], routes: [], followups: [] }
+const doneAgent = (id) => ({
+  id,
+  status: 'idle',
+  session: { id, header: { cwd: CWD, createdAt: 1 } },
+  followup(message) {
+    doneCaptured.followups.push({ sessionId: this.id, message })
+  }
+})
+const doneLead = doneAgent(D_LEAD)
+const doneM1 = doneAgent(D_M1)
+const doneAgents = [doneLead, doneM1]
+const doneTitles = { [D_LEAD]: '完成通知组长', [D_M1]: '完成通知成员' }
+const fakeSessionQueryDone = {
+  async listSessions() {
+    return doneAgents.map((agent) => ({ header: agent.session.header, live: true, persisted: true, formatStatus: 'current' }))
+  },
+  async readTitleSnapshots(ids) {
+    return ids.map((id) => ({
+      sessionId: id,
+      status: 'fulfilled',
+      value: { session: { id }, ...(doneTitles[id] ? { title: { title: doneTitles[id] } } : {}) }
+    }))
+  }
+}
+fs.writeFileSync(
+  path.join(doneDir, 'groups.json'),
+  JSON.stringify(
+    {
+      version: 1,
+      groups: [
+        {
+          id: 'g-done',
+          name: '完成通知组',
+          workspace: CWD,
+          goal: '完成通知测试',
+          managerSessionId: D_LEAD,
+          sessionIds: [D_LEAD, D_M1],
+          createdAt: 0,
+          updatedAt: 0
+        }
+      ]
+    },
+    null,
+    2
+  ),
+  'utf8'
+)
+fs.writeFileSync(
+  path.join(doneDir, 'permissions.json'),
+  JSON.stringify({ grants: { [D_LEAD]: [D_M1] } }, null, 2),
+  'utf8'
+)
+// 预置名片：插件的 persona/bootstrap 可能在标题缓存就绪前写兜底 handle，这里固定成可读 handle 便于断言。
+fs.writeFileSync(
+  path.join(doneDir, 'identities.json'),
+  JSON.stringify(
+    {
+      sessions: {
+        [D_LEAD]: { sessionId: D_LEAD, handle: '完成通知组长', avatar: '🦊' },
+        [D_M1]: { sessionId: D_M1, handle: '完成通知成员', avatar: '🐼' }
+      }
+    },
+    null,
+    2
+  ),
+  'utf8'
+)
+const fakeWebServerDone = {
+  register(route) {
+    doneCaptured.routes.push(route)
+    return () => {}
+  }
+}
+const ctxDone = {
+  tools: {
+    register(definition) {
+      doneCaptured.tools.push(definition)
+      return () => {}
+    }
+  },
+  systemPrompt: {
+    section() {
+      return () => {}
+    },
+    context() {
+      return () => {}
+    }
+  },
+  agents: {
+    roots: () => doneAgents,
+    list: () => doneAgents,
+    get: (id) => doneAgents.find((agent) => agent.id === id)
+  },
+  sessions: { list: () => doneAgents.map((agent) => agent.session) },
+  get(name) {
+    if (name === 'sessionQuery') return fakeSessionQueryDone
+    if (name === 'webServer') return fakeWebServerDone
+    return undefined
+  },
+  effect(callback) {
+    const disposer = callback()
+    return typeof disposer === 'function' ? disposer : () => {}
+  },
+  on() {
+    return () => {}
+  },
+  logger: { info() {}, warn() {}, error() {} }
+}
+plugin.apply(ctxDone, { boardDir: doneDir, injectMode: 'broadcast', autoPrompt: false })
+const toolsDone = new Map(doneCaptured.tools.map((tool) => [tool.name, tool]))
+const routeHandlerDone = (p) => doneCaptured.routes.find((route) => route.path === p)?.handler
+const callStateDone = async () => {
+  const res = fakeRes()
+  await routeHandlerDone('/api/session-bridge/state')(fakeReq(), res)
+  return { res, json: JSON.parse(res.out.body) }
+}
+const callCommandDone = async (command) => {
+  const res = fakeRes()
+  await routeHandlerDone('/api/session-bridge/command')(
+    fakeReq({
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-session-bridge-action': '1' },
+      body: JSON.stringify(command)
+    }),
+    res
+  )
+  return { res, json: JSON.parse(res.out.body) }
+}
+const noticesOfDone = async (taskId) => {
+  const state = await callStateDone()
+  return state.json.rules.filter((entry) => entry.completionNotice === true && entry.taskId === taskId)
+}
+/** 建一个「组长 + 成员」的群任务，返回 taskId 与组长请求 id。 */
+const createDoneTask = async (text) => {
+  const created = await callCommandDone({
+    action: 'group.post',
+    payload: { id: 'g-done', text, task: true, coordinatorId: D_LEAD, assigneeIds: [D_M1], allowDuplicate: true }
+  })
+  assert.equal(created.json.ok, true, JSON.stringify(created.json))
+  const taskId = created.json.task.id
+  const state = await callStateDone()
+  const coordinatorRequest = state.json.rules.find(
+    (entry) => entry.kind === 'request' && entry.taskId === taskId && entry.taskRole === 'coordinator'
+  )
+  assert.ok(coordinatorRequest, '应存在组长请求')
+  return { taskId, coordinatorRequestId: coordinatorRequest.id }
+}
+const finishDoneTask = async (taskId, coordinatorRequestId, text) => {
+  const share = toolsDone.get('session_share')
+  const out = String(
+    await share.execute(
+      { title: '任务完成', text: text || '报告已完成并交付', kind: 'handoff', group: '完成通知组', replyTo: coordinatorRequestId },
+      { agent: doneLead }
+    )
+  )
+  assert.match(out, /任务已标记为完成/)
+  const state = await callStateDone()
+  assert.equal(state.json.rules.find((entry) => entry.id === taskId).taskStatus, 'done')
+}
+let doneTaskId = ''
+let doneRequestId = ''
+
+await check('任务转 done → 群里生成完成通知：作者=组长、groupId 正确、@用户（panelMention）', async () => {
+  const created = await createDoneTask('完成通知：整理交付报告')
+  doneTaskId = created.taskId
+  doneRequestId = created.coordinatorRequestId
+  await finishDoneTask(doneTaskId, doneRequestId)
+  const notices = await noticesOfDone(doneTaskId)
+  assert.equal(notices.length, 1, '任务完成应生成且仅生成 1 条完成通知')
+  const notice = notices[0]
+  assert.equal(notice.kind, 'chat')
+  assert.equal(notice.groupId, 'g-done', '完成通知应落在对应群')
+  assert.equal(notice.author, D_LEAD, '完成通知作者应为任务组长/coordinator')
+  assert.equal(notice.panelMention, true, '完成通知应 @ 用户（panelMention）')
+  assert.equal(notice.completionNotice, true)
+  assert.ok(notice.completedAt > 0, '应记录完成时间')
+  assert.match(String(notice.title), /任务完成/)
+  assert.match(String(notice.text), /完成时间/)
+  assert.match(String(notice.text), /完成通知：整理交付报告/)
+  assert.ok(Array.isArray(notice.mentions) && notice.mentions.includes(D_LEAD), 'mentions 应含组长')
+  // state 暴露完成通知数组/统计
+  const state = await callStateDone()
+  assert.ok(Array.isArray(state.json.completionNotices), 'state 应下发 completionNotices')
+  const listed = state.json.completionNotices.find((item) => item.taskId === doneTaskId)
+  assert.ok(listed, 'completionNotices 应包含该完成通知')
+  assert.equal(listed.groupName, '完成通知组')
+  assert.equal(listed.authorHandle, '完成通知组长')
+  assert.equal(listed.panelMention, true)
+  assert.equal(listed.completionNotice, true)
+  assert.ok(listed.completedAt > 0)
+  assert.ok(state.json.completionStats && state.json.completionStats.total >= 1)
+})
+
+await check('幂等：重复标记 done 不会重复生成完成通知', async () => {
+  const before = (await noticesOfDone(doneTaskId)).length
+  assert.equal(before, 1)
+  const share = toolsDone.get('session_share')
+  // 第二次再回执同一个组长请求：任务仍是 done，但完成通知不得重复。
+  const again = String(
+    await share.execute(
+      { title: '任务完成（重申）', text: '报告已完成并交付（重复回执测试）', kind: 'handoff', group: '完成通知组', replyTo: doneRequestId },
+      { agent: doneLead }
+    )
+  )
+  assert.match(again, /经验板|任务已标记为完成|重复/)
+  const after = (await noticesOfDone(doneTaskId)).length
+  assert.equal(after, 1, '重复 done 不得重复生成完成通知')
+  const state = await callStateDone()
+  assert.equal(state.json.completionNotices.filter((item) => item.taskId === doneTaskId).length, 1)
+})
+
+await check('撤回 / 未完成不生成完成通知', async () => {
+  // 未完成：建任务但不回执
+  const unfinished = await createDoneTask('未完成任务：不应有完成通知')
+  assert.equal((await noticesOfDone(unfinished.taskId)).length, 0, '未完成任务不得生成完成通知')
+  // 撤回：建任务后 entry.retract 撤回
+  const canceled = await createDoneTask('撤回任务：不应有完成通知')
+  const retracted = await callCommandDone({ action: 'entry.retract', payload: { id: canceled.taskId, reason: '完成通知撤回测试' } })
+  assert.equal(retracted.json.ok, true, JSON.stringify(retracted.json))
+  assert.equal((await noticesOfDone(canceled.taskId)).length, 0, '撤回任务不得生成完成通知')
+  // 撤回后再回执组长请求：只按普通条目发布，不生成完成通知
+  const share = toolsDone.get('session_share')
+  const afterRetract = String(
+    await share.execute(
+      { title: '任务完成', text: '报告已完成并交付', kind: 'handoff', group: '完成通知组', replyTo: canceled.coordinatorRequestId },
+      { agent: doneLead }
+    )
+  )
+  assert.match(afterRetract, /已被撤回/)
+  assert.equal((await noticesOfDone(canceled.taskId)).length, 0, '撤回请求回执不得生成完成通知')
+})
+
+await check('@用户 渲染：panel 不是会话，UI 用 panelMention 显示「@你」并支持未读 badge', () => {
+  const html = fs.readFileSync(path.join(PLUGIN_DIR, 'app.html'), 'utf8')
+  assert.ok(html.includes('panelMention'), 'app.html 应识别 panelMention')
+  assert.ok(html.includes('@你'), '群聊/世界流应显示「@你」标记')
+  assert.ok(html.includes('chip panel-mention'), '应有 panel-mention 样式 chip')
+  assert.ok(html.includes('id="completionBadge"'), '头部应有完成未读 badge')
+  assert.ok(html.includes('completionBadgeCount'), 'badge 应显示未读计数')
+  assert.ok(html.includes('completionNotices'), 'app 应轮询 state.completionNotices')
+  assert.ok(html.includes('未读'), 'UI 应有未读文案')
+  assert.ok(html.includes('id="completionToastWrap"'), '应有完成通知 toast 容器')
+  assert.ok(html.includes('showCompletionToast') && html.includes('openCompletionTarget'), 'toast 应可点跳群/组长')
+})
+
+await check('提示策略 UI：可见 + 有焦点 + 非全屏才响铃/弹窗，否则只留未读', () => {
+  const html = fs.readFileSync(path.join(PLUGIN_DIR, 'app.html'), 'utf8')
+  assert.ok(html.includes("document.visibilityState === 'visible'"), '应检查 visibilityState')
+  assert.ok(html.includes('document.hasFocus()'), '应检查 hasFocus')
+  assert.ok(html.includes('document.fullscreenElement'), '应检查 fullscreenElement（游戏/全屏不弹）')
+  assert.ok(html.includes('AudioContext'), '应用 Web Audio')
+  assert.ok(html.includes('playCompletionBeep'), '应有短提示音函数')
+  assert.ok(html.includes('notificationEligible'), '应有可见/焦点/全屏统一判断')
+  assert.ok(html.includes('visibilitychange'), '回到页面时应 flush 未读')
+  assert.ok(html.includes('fullscreenchange'), '退出全屏时应 flush 未读')
+  assert.ok(html.includes('focus'), '窗口获得焦点时应 flush 未读')
+  const indexJs = fs.readFileSync(path.join(PLUGIN_DIR, 'index.js'), 'utf8')
+  assert.ok(indexJs.includes('ensureTaskCompletionNotice'), 'index.js 应有完成通知生成函数')
+  assert.ok(indexJs.includes('completionNotices'), 'index.js state 应下发 completionNotices')
+  assert.ok(indexJs.includes('panelMention: true'), '完成通知应带 panelMention')
+})
+
+fs.rmSync(doneDir, { recursive: true, force: true })
 
 // ---------------------------------------------------------------- 收尾
 fs.rmSync(targetedDir, { recursive: true, force: true })
