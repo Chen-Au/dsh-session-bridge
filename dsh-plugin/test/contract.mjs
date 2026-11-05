@@ -354,7 +354,7 @@ await check('查重生效（相同内容不重复发布）', async () => {
 
 await check('session_board status 报告版本与注册结果', async () => {
   const result = String(await board.execute({ action: 'status' }, { agent: rootAgent }))
-  assert.match(result, /session-bridge v3\.0\.0/)
+  assert.match(result, /session-bridge v3\.0\.2/)
   assert.match(result, /工具：session_share, session_ask, session_nudge, session_retract, session_interrupt, group_rule, session_like, session_discuss, session_identity, group_member, session_directory, group_skill, session_profile, session_board, group_recruit, session_urgent/)
   assert.match(result, /通讯录：3 个主会话/)
   assert.match(result, /空闲看板：idle \d+ 个 · busy \d+ 个/)
@@ -366,7 +366,7 @@ await check('session_board status 报告版本与注册结果', async () => {
 
 await check('子会话可只读查看经验板（list / status）', async () => {
   const status = String(await board.execute({ action: 'status' }, { agent: subAgent }))
-  assert.match(status, /session-bridge v3\.0\.0/)
+  assert.match(status, /session-bridge v3\.0\.2/)
   const listed = String(await board.execute({ action: 'list' }, { agent: subAgent }))
   assert.match(listed, /跨会话经验板/)
 })
@@ -463,7 +463,7 @@ await check('GET state 返回规则/群组/会话/送达结构', async () => {
   const { res, json } = await callState()
   assert.equal(res.out.status, 200)
   assert.equal(json.ok, true)
-  assert.equal(json.version, '3.0.0')
+  assert.equal(json.version, '3.0.2')
   assert.ok(Array.isArray(json.rules) && json.rules.length >= 1)
   assert.ok(Array.isArray(json.groups))
   assert.ok(Array.isArray(json.sessions) && json.sessions.length >= 2)
@@ -1115,7 +1115,7 @@ await check('面板命令：删除规矩与群组', async () => {
 
 await check('插件启动凭证写入正确（工具/注册/版本/API）', () => {
   const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))
-  assert.equal(receipt.version, '3.0.0')
+  assert.equal(receipt.version, '3.0.2')
   assert.deepEqual(receipt.tools.slice().sort(), ['group_member', 'group_recruit', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_interrupt', 'session_like', 'session_nudge', 'session_profile', 'session_retract', 'session_share', 'session_urgent'])
   assert.deepEqual(receipt.failedTools, [])
   assert.equal(receipt.registration.section, true)
@@ -2235,24 +2235,44 @@ await check('用户显式 @ 维护者：例外放行 + 提示，且不建维护�
   assert.match(message, /修bug/)
 })
 
-await check('group.post：维护者不能被指派为组长/成员（报错或跳过并提示）', async () => {
+await check('group.post：非 task 显式 @维护者=允许对话/BUG 投递；普通任务仍拒绝派活', async () => {
   permCaptured.followups.length = 0
-  // 只 @ 维护者 + 普通任务 → 明确报错，不唤醒
+  // task-9：不是 task:true 时，用户显式 @维护者 → 允许作为对话送达（不再以"维护者不接普通任务"拒绝）
+  const dialogue = await callCommandPerm({
+    action: 'group.post',
+    payload: { id: 'g-normal', text: '@值班员 麻烦看下这个接口报错 500', mentionSessionIds: [MAINTAINER] }
+  })
+  assert.equal(dialogue.json.ok, true, JSON.stringify(dialogue.json))
+  assert.equal(maintainerFollowups().length, 1, '非 task 的 @维护者 应唤醒维护者作为对话/BUG 投递')
+  assert.match(String(dialogue.json.protectedNotice), /对话|BUG/)
+  const dialogueRequest = dialogue.json.state.rules.find(
+    (entry) => entry.kind === 'request' && Array.isArray(entry.requestTo) && entry.requestTo.includes(MAINTAINER)
+  )
+  assert.ok(dialogueRequest, '应生成发给维护者的对话/BUG 请求')
+  assert.match(String(dialogueRequest.title), /BUG|对话/)
+  assert.equal(dialogueRequest.hiddenFromChat, false, 'BUG 投递请求在群里可见')
+  const dialogueMessage = String(maintainerFollowups()[0].message.content[0].text)
+  assert.match(dialogueMessage, /不是普通任务|BUG 报告/)
+
+  // 普通任务（task:true）仍不得把维护者当组长：只指定维护者 → 明确报错
+  permCaptured.followups.length = 0
   const refused = await callCommandPerm({
     action: 'group.post',
-    payload: { id: 'g-normal', text: '@值班员 请把接口重构实现一下', mentionSessionIds: [MAINTAINER] }
+    payload: { id: 'g-normal', text: '把接口重构实现一下', task: true, coordinatorId: MAINTAINER }
   })
   assert.equal(refused.json.ok, false, JSON.stringify(refused.json))
-  assert.match(String(refused.json.error), /protected\/service/)
-  assert.match(String(refused.json.error), /修bug/)
-  assert.equal(maintainerFollowups().length, 0, '报错时不得唤醒维护者')
+  assert.match(String(refused.json.error), /维护者|protected\/service|受保护/)
+  assert.equal(maintainerFollowups().length, 0, '普通任务拒绝时不得唤醒维护者')
 
-  // 维护者 + 普通成员一起 @ → 过滤维护者，任务照常派给普通成员
+  // 维护者 + 普通成员一起 @（task:true）→ 过滤维护者，任务照常派给普通成员
   const mixed = await callCommandPerm({
     action: 'group.post',
     payload: {
       id: 'g-normal',
       text: '@值班员 @远山 @小北 请一起把接口重构实现一下',
+      task: true,
+      coordinatorId: NORMAL_A,
+      assigneeIds: [NORMAL_B],
       mentionSessionIds: [MAINTAINER, NORMAL_A, NORMAL_B]
     }
   })
@@ -2712,7 +2732,7 @@ let otherGroupId = ''
 
 await check('v2.9.2：state 暴露撤回/打断能力（探测到宿主 cancel）', async () => {
   const { json } = await callState4()
-  assert.equal(json.version, '3.0.0')
+  assert.equal(json.version, '3.0.2')
   assert.equal(json.capabilities.retract, true)
   assert.equal(json.capabilities.interrupt, 'cancel', '应探测到宿主的 agent.cancel 能力')
   assert.ok(toolByName4.get('session_retract'), '缺少 session_retract 工具')
@@ -4001,8 +4021,8 @@ await (async () => {
   })
 })()
 
-// ---------------------------------------------------------------- N. 任务归属锁 / 范围约束 / 重复任务合并（v3.0.0）
-console.log('== N. 任务归属锁 / 范围约束 / 重复任务合并（v3.0.0）')
+// ---------------------------------------------------------------- N. 任务归属锁 / 范围约束 / 重复任务合并（v3.0.2）
+console.log('== N. 任务归属锁 / 范围约束 / 重复任务合并（v3.0.2）')
 const scopeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-bridge-scope-'))
 const scopeCaptured = { tools: [], routes: [], followups: [] }
 const S_COORD = 'session-c0c0c0c0-1111-4000-8000-aaaaaaaaaaaa'
@@ -4319,7 +4339,7 @@ await check('state/UI：owner、scope、claim、duplicates 与静态文案', asy
 
 fs.rmSync(scopeDir, { recursive: true, force: true })
 
-// ---------------------------------------------------------------- O. 任务线（task-6 / v3.0.0）
+// ---------------------------------------------------------------- O. 任务线（task-6 / v3.0.2）
 // 群任务/世界任务/单独任命组长 → 自动 5 阶段清单；state.taskLines 实时状态；卡住自动催办（不唤醒、去重、上限 3 次）。
 console.log('== O. 任务线：自动 5 阶段 / 实时状态 / 卡住催办（task-6）')
 
@@ -4829,7 +4849,7 @@ await check('任务线 UI：app.html 增加看板区（阶段/进度/卡住）�
 
 fs.rmSync(taskLineDir, { recursive: true, force: true })
 
-// ---------------------------------------------------------------- P. 任务完成通知（task-7 / v3.0.0）
+// ---------------------------------------------------------------- P. 任务完成通知（task-7 / v3.0.2）
 // 任务 done → 群里生成一条来自组长的完成通知并 @用户（panelMention）；幂等；撤回/未完成不生成；
 // app 只在可见+有焦点+非全屏时提示音/toast，否则只留未读 badge。
 console.log('== P. 任务完成通知：组长群里 @用户 + 幂等 + 非全屏提示（task-7）')
@@ -5101,6 +5121,408 @@ await check('提示策略 UI：可见 + 有焦点 + 非全屏才响铃/弹窗，
 })
 
 fs.rmSync(doneDir, { recursive: true, force: true })
+
+// ---------------------------------------------------------------- R. task-9：合成任务线收口 / @黏性对话 / @维护者通道
+// 用户实测：任务结束后任务线长期 active；想 @维护者报 bug 被"维护者不接普通任务"拒绝；
+// @ 了谁之后应默认持续和他对话，不 @ 时由群管理/匹配负责人接话。
+console.log('== R. 合成任务线收口 / @黏性对话 / @维护者通道（task-9）')
+
+const focusDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-bridge-focus-'))
+const F_LEAD = 'session-8181aaaa-0000-4000-8000-111111111111'
+const F_M1 = 'session-8282bbbb-0000-4000-8000-222222222222'
+const F_M2 = 'session-8383cccc-0000-4000-8000-333333333333'
+const F_MT = 'session-8484dddd-0000-4000-8000-444444444444'
+const focusCaptured = { tools: [], routes: [], followups: [] }
+const focusAgent = (id) => ({
+  id,
+  status: 'idle',
+  session: { id, header: { cwd: CWD, createdAt: 1 } },
+  followup(message) {
+    focusCaptured.followups.push({ sessionId: this.id, message })
+  }
+})
+const fLead = focusAgent(F_LEAD)
+const fM1 = focusAgent(F_M1)
+const fM2 = focusAgent(F_M2)
+const fMT = focusAgent(F_MT)
+const focusAgents = [fLead, fM1, fM2, fMT]
+const focusTitles = {
+  [F_LEAD]: '群管理负责人',
+  [F_M1]: '审稿专家',
+  [F_M2]: '画图员',
+  [F_MT]: '星桥值班员'
+}
+const fakeSessionQueryFocus = {
+  async listSessions() {
+    return focusAgents.map((agent) => ({ header: agent.session.header, live: true, persisted: true, formatStatus: 'current' }))
+  },
+  async readTitleSnapshots(ids) {
+    return ids.map((id) => ({
+      sessionId: id,
+      status: 'fulfilled',
+      value: { session: { id }, ...(focusTitles[id] ? { title: { title: focusTitles[id] } } : {}) }
+    }))
+  }
+}
+fs.writeFileSync(
+  path.join(focusDir, 'identities.json'),
+  JSON.stringify(
+    {
+      sessions: {
+        [F_LEAD]: { sessionId: F_LEAD, handle: '负责人', avatar: '🦊' },
+        [F_M1]: { sessionId: F_M1, handle: '小审', avatar: '🐼', role: '审稿人', skills: ['审稿'] },
+        [F_M2]: { sessionId: F_M2, handle: '小画', avatar: '🐨', role: '画图', skills: ['画图'] }
+      }
+    },
+    null,
+    2
+  ),
+  'utf8'
+)
+fs.writeFileSync(
+  path.join(focusDir, 'groups.json'),
+  JSON.stringify(
+    {
+      version: 1,
+      groups: [
+        {
+          id: 'g-managed',
+          name: '有管理组',
+          workspace: CWD,
+          goal: '有群管理的协作群',
+          managerSessionId: F_LEAD,
+          sessionIds: [F_LEAD, F_M1, F_M2],
+          createdAt: 0,
+          updatedAt: 0
+        },
+        {
+          id: 'g-free',
+          name: '无管理组',
+          workspace: CWD,
+          goal: '',
+          managerSessionId: '',
+          sessionIds: [F_M1, F_M2],
+          createdAt: 0,
+          updatedAt: 0
+        }
+      ]
+    },
+    null,
+    2
+  ),
+  'utf8'
+)
+const fakeWebServerFocus = {
+  register(route) {
+    focusCaptured.routes.push(route)
+    return () => {}
+  }
+}
+const ctxFocus = {
+  tools: {
+    register(definition) {
+      focusCaptured.tools.push(definition)
+      return () => {}
+    }
+  },
+  systemPrompt: {
+    section() {
+      return () => {}
+    },
+    context() {
+      return () => {}
+    }
+  },
+  agents: {
+    roots: () => focusAgents,
+    list: () => focusAgents,
+    get: (id) => focusAgents.find((agent) => agent.id === id)
+  },
+  sessions: { list: () => focusAgents.map((agent) => agent.session) },
+  get(name) {
+    if (name === 'sessionQuery') return fakeSessionQueryFocus
+    if (name === 'webServer') return fakeWebServerFocus
+    return undefined
+  },
+  effect(callback) {
+    const disposer = callback()
+    return typeof disposer === 'function' ? disposer : () => {}
+  },
+  on() {
+    return () => {}
+  },
+  logger: { info() {}, warn() {}, error() {} }
+}
+plugin.apply(ctxFocus, { boardDir: focusDir, injectMode: 'broadcast', autoPrompt: false })
+const toolsFocus = new Map(focusCaptured.tools.map((tool) => [tool.name, tool]))
+const routeHandlerFocus = (p) => focusCaptured.routes.find((route) => route.path === p)?.handler
+const callStateFocus = async () => {
+  const res = fakeRes()
+  await routeHandlerFocus('/api/session-bridge/state')(fakeReq(), res)
+  return { res, json: JSON.parse(res.out.body) }
+}
+const callCommandFocus = async (command) => {
+  const res = fakeRes()
+  await routeHandlerFocus('/api/session-bridge/command')(
+    fakeReq({
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-session-bridge-action': '1' },
+      body: JSON.stringify(command)
+    }),
+    res
+  )
+  return { res, json: JSON.parse(res.out.body) }
+}
+const groupStateOf = async (groupId) => {
+  const state = await callStateFocus()
+  return {
+    state,
+    group: state.json.groups.find((item) => item.id === groupId),
+    line: state.json.taskLines.find((item) => item.groupId === groupId && item.synthetic === true)
+  }
+}
+const followupsTo = (sessionId) => focusCaptured.followups.filter((item) => item.sessionId === sessionId)
+const shareToolFocus = toolsFocus.get('session_share')
+
+await check('合成任务线：完成信号（收尾/closingStatus）→ done/100%/steps 全 done/不再 active', async () => {
+  await callCommandFocus({ action: 'group.focus', payload: { id: 'g-managed', sessionId: '' } })
+  focusCaptured.followups.length = 0
+  const posted = await callCommandFocus({
+    action: 'group.post',
+    payload: { id: 'g-managed', text: '@小审 请帮我复核这段结论', mentionSessionIds: [F_M1] }
+  })
+  assert.equal(posted.json.ok, true, JSON.stringify(posted.json))
+  const requestId = posted.json.requestIds[0]
+  assert.ok(requestId, '应生成给成员的 request')
+  let snap = await groupStateOf('g-managed')
+  assert.ok(snap.line, '有 request 的群应出现合成任务线')
+  assert.equal(snap.line.synthetic, true)
+  assert.equal(snap.line.lineStatus, 'active', '有 open request 时合成线应为 active')
+  assert.equal(snap.line.progress, 40)
+
+  // 成员用收尾格式回执：状态=完成 → request answered、handoff closingStatus=完成 → 合成线应收口
+  const replyOut = String(
+    await shareToolFocus.execute(
+      {
+        title: '复核完成',
+        text: '复核已完成，结论 OK\n【收尾】状态：完成 · 结果：复核通过，无修改项 · 下一步：无 · 需要用户：否',
+        kind: 'handoff',
+        group: '有管理组',
+        replyTo: requestId
+      },
+      { agent: fM1 }
+    )
+  )
+  assert.match(replyOut, /已发布|回复/)
+  snap = await groupStateOf('g-managed')
+  assert.ok(snap.line, '完成后合成线仍保留展示')
+  assert.equal(snap.line.lineStatus, 'done', '完成信号后合成线应收口为 done')
+  assert.equal(snap.line.progress, 100)
+  assert.equal(snap.line.currentStepText, '已完成')
+  assert.ok(snap.line.steps.every((step) => step.status === 'done'), '收口后所有 steps 应为 done')
+  assert.equal(snap.line.stalledSince, 0)
+  // 已收口：不再催办
+  const scan = await callCommandFocus({ action: 'task.lines', payload: { scan: true, now: Date.now() + 26 * 60 * 1000 } })
+  assert.ok(!scan.json.scan.nudged.some((item) => item.taskId === 'group:g-managed'), '已收口的合成线不得再催办')
+})
+
+await check('合成任务线：无 open request 且 10 分钟无新活动 → 自动收口（不再长期 active）', async () => {
+  await callCommandFocus({ action: 'group.focus', payload: { id: 'g-free', sessionId: '' } })
+  const posted = await callCommandFocus({
+    action: 'group.post',
+    payload: { id: 'g-free', text: '@小画 帮忙整理一下这批数据', mentionSessionIds: [F_M2] }
+  })
+  assert.equal(posted.json.ok, true, JSON.stringify(posted.json))
+  const requestId = posted.json.requestIds[0]
+  // 普通回执（不带完成信号、不带收尾格式）
+  await shareToolFocus.execute(
+    { title: '收到', text: '收到，资料已经整理好了', kind: 'handoff', group: '无管理组', replyTo: requestId },
+    { agent: fM2 }
+  )
+  const realNow = Date.now()
+  let snap = await groupStateOf('g-free')
+  assert.ok(snap.line, '无群管理组也会出现合成任务线')
+  assert.equal(snap.line.synthetic, true)
+  assert.equal(snap.line.lineStatus, 'active', '刚回执、未到 10 分钟时应仍为 active')
+  assert.equal(snap.line.progress, 60)
+  // 时间推进 11 分钟：无 open request + 无新活动 → 自动 done
+  const future = await callCommandFocus({ action: 'task.lines', payload: { now: realNow + 11 * 60 * 1000 } })
+  assert.equal(future.json.ok, true, JSON.stringify(future.json))
+  const lineFuture = future.json.taskLines.find((item) => item.groupId === 'g-free' && item.synthetic === true)
+  assert.ok(lineFuture, '未来时间点仍应看到合成线（2h 窗口内）')
+  assert.equal(lineFuture.lineStatus, 'done', '无 open request 且 10 分钟无活动应自动收口')
+  assert.equal(lineFuture.progress, 100)
+  assert.equal(lineFuture.currentStepText, '已完成')
+  assert.ok(lineFuture.steps.every((step) => step.status === 'done'))
+})
+
+await check('合成任务线：文本完成信号（全部完成/验收通过，无收尾格式）也自动收口', async () => {
+  await callCommandFocus({ action: 'group.focus', payload: { id: 'g-managed', sessionId: '' } })
+  const posted = await callCommandFocus({
+    action: 'group.post',
+    payload: { id: 'g-managed', text: '@小审 再来一轮：核对附录数据', mentionSessionIds: [F_M1] }
+  })
+  assert.equal(posted.json.ok, true, JSON.stringify(posted.json))
+  const requestId = posted.json.requestIds[0]
+  await shareToolFocus.execute(
+    { title: '完成', text: '附录核对完毕，全部完成，验收通过', kind: 'handoff', group: '有管理组', replyTo: requestId },
+    { agent: fM1 }
+  )
+  const snap = await groupStateOf('g-managed')
+  assert.ok(snap.line, '应仍能看到合成线')
+  assert.equal(snap.line.lineStatus, 'done', '文本含完成信号且无 open request 应收口')
+  assert.equal(snap.line.progress, 100)
+  assert.equal(snap.line.currentStepText, '已完成')
+})
+
+await check('@黏性对话：@ 设 focus / 无 @ 沿用 / @ 别人切换 / 清除后回退群管理', async () => {
+  focusCaptured.followups.length = 0
+  // ① @ 成员 → 设置 focus
+  const first = await callCommandFocus({
+    action: 'group.post',
+    payload: { id: 'g-managed', text: '@小审 你好，帮我看下这段逻辑', mentionSessionIds: [F_M1] }
+  })
+  assert.equal(first.json.ok, true, JSON.stringify(first.json))
+  assert.equal(first.json.focusSessionId, F_M1, '响应应返回 focusSessionId')
+  assert.equal(first.json.focusSource, 'mention')
+  let snap = await groupStateOf('g-managed')
+  assert.equal(snap.group.focusSessionId, F_M1, 'groups.json 应持久 focusSessionId')
+  assert.ok(snap.group.focusUpdatedAt > 0, '应记录 focusUpdatedAt')
+
+  // ② 无 @ → 沿用 focus
+  focusCaptured.followups.length = 0
+  const second = await callCommandFocus({ action: 'group.post', payload: { id: 'g-managed', text: '继续说说你的判断' } })
+  assert.equal(second.json.ok, true, JSON.stringify(second.json))
+  assert.ok(second.json.autoTarget, '无 @ 时应返回 autoTarget')
+  assert.equal(second.json.autoTarget.id, F_M1)
+  assert.equal(second.json.autoTarget.source, 'focus')
+  assert.equal(followupsTo(F_M1).length, 1, '无 @ 消息应发给当前对话对象')
+
+  // ③ @ 别人 → 切换 focus
+  const third = await callCommandFocus({
+    action: 'group.post',
+    payload: { id: 'g-managed', text: '@小画 你来画一张示意图', mentionSessionIds: [F_M2] }
+  })
+  assert.equal(third.json.ok, true, JSON.stringify(third.json))
+  assert.equal(third.json.focusSessionId, F_M2)
+  snap = await groupStateOf('g-managed')
+  assert.equal(snap.group.focusSessionId, F_M2, '@ 别人应切换 focus')
+
+  // ④ group.focus 接口设置 + 清除
+  const setFocus = await callCommandFocus({ action: 'group.focus', payload: { id: 'g-managed', sessionId: F_M1 } })
+  assert.equal(setFocus.json.ok, true, JSON.stringify(setFocus.json))
+  assert.equal(setFocus.json.focusSessionId, F_M1)
+  assert.ok(setFocus.json.focus && setFocus.json.focus.handle, 'group.focus 应返回对话对象名片')
+  const cleared = await callCommandFocus({ action: 'group.focus', payload: { id: 'g-managed', sessionId: '' } })
+  assert.equal(cleared.json.ok, true, JSON.stringify(cleared.json))
+  assert.equal(cleared.json.focusSessionId, '')
+  snap = await groupStateOf('g-managed')
+  assert.equal(snap.group.focusSessionId, '', 'group.focus 空 sessionId 应清除 focus')
+
+  // ⑤ 无 focus → 回退群管理
+  focusCaptured.followups.length = 0
+  const fallback = await callCommandFocus({ action: 'group.post', payload: { id: 'g-managed', text: '在吗？帮我看个问题' } })
+  assert.equal(fallback.json.ok, true, JSON.stringify(fallback.json))
+  assert.ok(fallback.json.autoTarget, '无 focus 时应自动路由')
+  assert.equal(fallback.json.autoTarget.id, F_LEAD, '有群管理时应回退群管理')
+  assert.equal(fallback.json.autoTarget.source, 'manager')
+  assert.equal(followupsTo(F_LEAD).length, 1)
+})
+
+await check('无群管理且无 focus：按文本/标题/skills 匹配负责人，并说明“不是新任务”', async () => {
+  await callCommandFocus({ action: 'group.focus', payload: { id: 'g-free', sessionId: '' } })
+  focusCaptured.followups.length = 0
+  const res = await callCommandFocus({
+    action: 'group.post',
+    payload: { id: 'g-free', text: '帮我画图：出一张流程示意图，风格清晰一点' }
+  })
+  assert.equal(res.json.ok, true, JSON.stringify(res.json))
+  assert.ok(res.json.autoTarget, '无群管理无 focus 时应按文本匹配负责人')
+  assert.equal(res.json.autoTarget.id, F_M2, '画图类文本应匹配画图员')
+  assert.equal(res.json.autoTarget.source, 'matched')
+  assert.equal(followupsTo(F_M2).length, 1)
+  const message = String(followupsTo(F_M2)[0].message.content[0].text)
+  assert.match(message, /在和你对话|不是新的任务/)
+  assert.match(message, /不要默认当成新任务|不要建任务线/)
+})
+
+await check('@维护者通道：非 task 显式 @ 允许对话/BUG 投递；普通任务仍拒绝', async () => {
+  const registered = await callCommandFocus({ action: 'maintainer.set', payload: { sessionId: F_MT, handle: '值班员' } })
+  assert.equal(registered.json.ok, true, JSON.stringify(registered.json))
+  focusCaptured.followups.length = 0
+  // BUG 文本：按 BUG 投递（不是 task:true）
+  const bugPost = await callCommandFocus({
+    action: 'group.post',
+    payload: { id: 'g-managed', text: '@值班员 这个按钮点不动，控制台报错 500', mentionSessionIds: [F_MT] }
+  })
+  assert.equal(bugPost.json.ok, true, JSON.stringify(bugPost.json))
+  assert.equal(followupsTo(F_MT).length, 1, '非 task 的 @维护者 应允许送达并唤醒')
+  assert.match(String(bugPost.json.protectedNotice), /BUG|对话/)
+  const bugRequest = bugPost.json.state.rules.find(
+    (entry) => entry.kind === 'request' && Array.isArray(entry.requestTo) && entry.requestTo.includes(F_MT)
+  )
+  assert.ok(bugRequest, '应生成发给维护者的请求')
+  assert.match(String(bugRequest.title), /BUG|对话/)
+  assert.equal(bugRequest.hiddenFromChat, false, 'BUG 投递请求应在群里可见')
+  assert.match(String(followupsTo(F_MT)[0].message.content[0].text), /BUG 报告|不是普通任务/)
+
+  // 普通对话文本（非 bug）：作为用户直接对话送达
+  focusCaptured.followups.length = 0
+  const chatPost = await callCommandFocus({
+    action: 'group.post',
+    payload: { id: 'g-managed', text: '@值班员 在吗，想请教一个架构问题', mentionSessionIds: [F_MT] }
+  })
+  assert.equal(chatPost.json.ok, true, JSON.stringify(chatPost.json))
+  assert.equal(followupsTo(F_MT).length, 1, '普通对话 @维护者 也应允许送达')
+  assert.match(String(chatPost.json.protectedNotice), /对话/)
+
+  // 普通任务（task:true）仍不得把维护者当组长
+  focusCaptured.followups.length = 0
+  const taskAttempt = await callCommandFocus({
+    action: 'group.post',
+    payload: { id: 'g-managed', text: '把接口重构实现一下', task: true, coordinatorId: F_MT }
+  })
+  assert.equal(taskAttempt.json.ok, false, JSON.stringify(taskAttempt.json))
+  assert.match(String(taskAttempt.json.error), /受保护|维护者/)
+  assert.equal(followupsTo(F_MT).length, 0, '普通任务拒绝时不得唤醒维护者')
+
+  // 维护者不会被「无人 @ 自动匹配」选中
+  await callCommandFocus({ action: 'group.focus', payload: { id: 'g-free', sessionId: '' } })
+  const auto = await callCommandFocus({ action: 'group.post', payload: { id: 'g-free', text: '帮我画图：再来一张示意图' } })
+  assert.equal(auto.json.ok, true, JSON.stringify(auto.json))
+  assert.ok(auto.json.autoTarget && auto.json.autoTarget.id !== F_MT, '自动匹配不应选中维护者')
+})
+
+await check('UI：群聊页显示当前对话对象/结束对话，无 @ 时提示自动路由（静态检查）', () => {
+  const html = fs.readFileSync(path.join(PLUGIN_DIR, 'app.html'), 'utf8')
+  for (const needle of [
+    'id="groupFocusBar"',
+    'id="groupFocusText"',
+    'id="groupFocusEnd"',
+    '结束对话',
+    'group.focus',
+    'autoTarget',
+    'autoTarget.source',
+    '当前对话对象',
+    '未 @ 人',
+    '正在和'
+  ]) {
+    assert.ok(html.includes(needle), 'app.html 缺少 @黏性对话/自动路由 UI：' + needle)
+  }
+  const indexJs = fs.readFileSync(path.join(PLUGIN_DIR, 'index.js'), 'utf8')
+  for (const needle of [
+    'focusSessionId',
+    'focusUpdatedAt',
+    'pickMemberForText',
+    "action === 'group.focus'",
+    'SYNTHETIC_IDLE_CLOSE_MS',
+    'completionSignalOf'
+  ]) {
+    assert.ok(indexJs.includes(needle), 'index.js 缺少 task-9 后端实现：' + needle)
+  }
+})
+
+fs.rmSync(focusDir, { recursive: true, force: true })
 
 // ---------------------------------------------------------------- 收尾
 fs.rmSync(targetedDir, { recursive: true, force: true })
