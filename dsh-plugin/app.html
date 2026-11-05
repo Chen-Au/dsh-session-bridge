@@ -627,6 +627,15 @@
   .jump-latest.show { display: inline-flex; align-items: center; gap: 5px; }
   .unread-divider { display: flex; align-items: center; gap: 8px; color: var(--gold); font-size: 10.5px; margin: 4px 0; }
   .unread-divider::before, .unread-divider::after { content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--gold) 45%, transparent); }
+  /* task-9：@黏性对话——当前对话对象 + 结束对话 */
+  .group-focusbar {
+    display: flex; align-items: center; gap: 8px; padding: 5px 10px; margin: 4px 0 6px;
+    border: 1px solid rgba(124,92,255,.3); border-radius: 10px; font-size: 11px; color: #c8d4ef;
+    background: linear-gradient(90deg, rgba(124,92,255,.12), rgba(79,216,255,.05));
+  }
+  .group-focusbar[hidden] { display: none; }
+  .group-focusbar .gf-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .group-focusbar .gf-label b { color: #fff; }
   .bar { position: relative; }
   .send-menu {
     position: absolute; right: 0; bottom: 100%; margin-bottom: 8px; z-index: 12;
@@ -835,6 +844,10 @@
         <div class="chat-wrap">
           <div class="chat scroll" id="groupChat"></div>
           <button class="jump-latest" id="jumpLatestBtn" type="button" title="跳到最新消息">↓ 新消息</button>
+        </div>
+        <div class="group-focusbar" id="groupFocusBar" hidden>
+          <span class="gf-label" id="groupFocusText">💬 未固定对话对象</span>
+          <button class="btn small" id="groupFocusEnd" type="button" hidden title="结束当前对话（之后未 @ 的消息回退群管理/按话题自动匹配）">结束对话</button>
         </div>
         <div class="composer">
           <textarea id="groupInput" placeholder="在群里说点什么…（@ 点名；Enter 发送，Shift+Enter 换行）"></textarea>
@@ -1764,6 +1777,8 @@
       $('memberList').innerHTML = ''
       $('groupTaskLinesBoard').innerHTML = ''
       $('groupTitle').textContent = '群聊'
+      var emptyFocusBar = $('groupFocusBar')
+      if (emptyFocusBar) emptyFocusBar.hidden = true
       var emptySummary = $('groupFoldSummary')
       if (emptySummary) emptySummary.textContent = ''
       groupScrollState.groupId = ''
@@ -1776,7 +1791,27 @@
       var gManager = group.managerSessionId && sessionById[group.managerSessionId] ? sessionById[group.managerSessionId].title : '未设群管理'
       groupSummary.textContent = '成员 ' + group.sessionIds.length + ' 人 · 群管理 ' + gManager
     }
-    $('groupHint').textContent = (urgentMode ? '⚡ 加急模式 · ' : '') + '成员 ' + group.sessionIds.length + ' 人 · 发布任务只唤醒组长 · 加急/报BUG 在「更多」里'
+    // task-9：显示当前 @黏性对话对象；没有时说明无 @ 会回退群管理/自动匹配负责人。
+    var focusBar = $('groupFocusBar')
+    var focusText = $('groupFocusText')
+    var focusEnd = $('groupFocusEnd')
+    var focusSession = group.focusSessionId && sessionById[group.focusSessionId] ? sessionById[group.focusSessionId] : null
+    var focusLabel = group.managerSessionId && sessionById[group.managerSessionId]
+      ? (sessionById[group.managerSessionId].title || identityOf(group.managerSessionId).handle)
+      : ''
+    if (focusBar && focusText && focusEnd) {
+      focusBar.hidden = false
+      if (focusSession) {
+        focusBar.setAttribute('data-focus', focusSession.id)
+        focusText.innerHTML = '💬 正在和 <b>' + esc(focusSession.title || identityOf(focusSession.id).handle) + '</b> 对话 · 未 @ 的消息默认发给他/她'
+        focusEnd.hidden = false
+      } else {
+        focusBar.removeAttribute('data-focus')
+        focusText.innerHTML = '💬 未固定对话对象 · 未 @ 时自动发给' + (focusLabel ? '群管理 <b>' + esc(focusLabel) + '</b>' : '按话题匹配的负责人')
+        focusEnd.hidden = true
+      }
+    }
+    $('groupHint').textContent = (urgentMode ? '⚡ 加急模式 · ' : '') + '成员 ' + group.sessionIds.length + ' 人 · 未 @ 时' + (focusSession ? '默认发给 ' + (focusSession.title || identityOf(focusSession.id).handle) : focusLabel ? '回退群管理 ' + focusLabel : '按话题自动选负责人') + ' · 加急/报BUG 在「更多」里'
     var urgentBtn = $('groupUrgent')
     if (urgentBtn) urgentBtn.classList.toggle('active', urgentMode)
     $('mentionBar').innerHTML = '<span class="hint">@ 插入：</span>' + group.sessionIds.map(function (id) {
@@ -1947,11 +1982,35 @@
     }
     $('groupSend').disabled = true
     input.value = ''
+    // task-9：无 @ 时先提示会发给谁（当前对话对象 / 群管理 / 自动匹配），后端也会返回 autoTarget。
+    var focusSessionNow = group.focusSessionId && sessionById[group.focusSessionId] ? sessionById[group.focusSessionId] : null
+    if (!mentionIds.length) {
+      var hintTarget = focusSessionNow
+        ? '当前对话对象 ' + (focusSessionNow.title || identityOf(focusSessionNow.id).handle)
+        : group.managerSessionId && sessionById[group.managerSessionId]
+          ? '群管理 ' + (sessionById[group.managerSessionId].title || identityOf(group.managerSessionId).handle)
+          : '由后端按话题自动选负责人'
+      toast('未 @ 人：将发给 ' + hintTarget)
+    }
     command('group.post', { id: group.id, text: text, mentionSessionIds: mentionIds }).then(function (result) {
       $('groupSend').disabled = false
       if (!result || result.ok === false) { toast('发送失败：' + (result && result.error || '未知错误'), true); return }
       if (result.duplicate) {
         toast('24h 内已有同类任务，已合并到 ' + ((result.existing && (result.existing.taskId || result.existing.id)) || result.taskId || '').slice(0, 14) + '…（owner：' + ((result.existing && result.existing.owner) || result.owner || '未指定') + '），未再建任务')
+      } else if (result.autoTarget) {
+        // 无 @ 时的自动路由结果：告诉用户这条实际发给了谁
+        var autoName = result.autoTarget.title || result.autoTarget.handle || result.autoTarget.id
+        var autoReason =
+          result.autoTarget.source === 'focus'
+            ? '沿用当前对话对象'
+            : result.autoTarget.source === 'manager'
+              ? '无 @：回退群管理'
+              : '无 @：按话题自动选中'
+        toast('已发给 ' + autoName + '（' + autoReason + '）；之后他/她就是当前对话对象')
+      } else if (!mentionIds.length && result.focusSessionId && sessionById[result.focusSessionId]) {
+        toast('已发给当前对话对象 ' + (sessionById[result.focusSessionId].title || ''))
+      } else if (result.focusSource === 'mention' && result.focusSessionId && sessionById[result.focusSessionId]) {
+        toast('已切换到和 ' + (sessionById[result.focusSessionId].title || identityOf(result.focusSessionId).handle) + ' 对话')
       }
       groupScrollState.forceBottom = true
       refresh()
@@ -2488,6 +2547,18 @@
     $('closeBtn').addEventListener('click', function () { window.close() })
     $('worldSend').addEventListener('click', sendWorld)
     $('groupSend').addEventListener('click', sendGroup)
+    // task-9：结束当前对话（清除 focusSessionId，之后未 @ 消息回退群管理/自动匹配）
+    $('groupFocusEnd').addEventListener('click', function () {
+      var group = currentGroup()
+      if (!group) return
+      command('group.focus', { id: group.id, sessionId: '' }).then(function (result) {
+        if (!result || result.ok === false) { toast('结束对话失败：' + (result && result.error || '未知错误'), true); return }
+        toast('已结束当前对话；之后未 @ 的消息会回退群管理或按话题自动选负责人')
+        refresh()
+      }).catch(function (error) {
+        toast('结束对话失败：' + (error && error.message ? error.message : error), true)
+      })
+    })
     $('bugfixBtn').addEventListener('click', ensureBugfixGroup)
     $('reportBugBtn').addEventListener('click', reportBug)
     $('groupUrgent').addEventListener('click', function () { setUrgentMode(!urgentMode) })

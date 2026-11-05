@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '3.0.0'
+const VERSION = '3.0.2'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -472,6 +472,16 @@ function parseClosingFormat(text) {
     next: nextMatch ? nextMatch[1].trim().slice(0, 120) : '',
     raw: tail.slice(0, 300)
   }
+}
+
+/** 一条 request/handoff 是否带「完成」信号：优先看收尾格式 closingStatus=完成，其次文本（排除进行中/未完成等否定）。 */
+function completionSignalOf(entry) {
+  if (!entry || typeof entry !== 'object') return false
+  if (String(entry.closingStatus || '') === '完成') return true
+  const text = `${entry.title || ''} ${entry.text || ''}`.trim()
+  if (!text) return false
+  if (/(未完成|还没完成|没有完成|未交付|未收尾|进行中|待完成|受阻|失败|有问题|卡住|blocked)/i.test(text)) return false
+  return /(全部完成|已完成|验收通过|收尾完成|任务完成|已交付|交付完成|收口完成|done|finished|completed)/i.test(text)
 }
 
 /** 从正文提取目标盘：X 盘 / x盘 / X:\ / drive X。 */
@@ -1074,12 +1084,16 @@ function buildTaskLines(active, options = {}) {
       ts: toNumber(task.ts, 0)
     })
   }
-  // 兜底：群里已有未完成 request、组长已任命，但没有通过「发布任务」建正式 task 时，
-  // 也让当前工作显示成一条群任务线，避免“任务在跑但看板没有线”。
+  // 兜底：群里已有 request/handoff、但没有通过「发布任务」建正式 task 时，也让当前工作显示成一条合成群任务线。
+  // task-9：合成线必须自动收口——完成信号（收尾 closingStatus=完成/文本完成）或「无 open request 且 10 分钟无新活动」
+  // 都收口为 done（progress 100 / 全部 steps done / 不再 active / 不催办）；卡住只在仍有 open request 且超阈值时出现。
   const groups = Array.isArray(options.groups) ? options.groups : []
+  const SYNTHETIC_IDLE_CLOSE_MS = 10 * 60 * 1000
   const explicitGroupIds = new Set(lines.filter((line) => !line.synthetic && line.groupId).map((line) => line.groupId))
   for (const group of groups) {
-    if (!group || !group.id || !group.managerSessionId || explicitGroupIds.has(group.id)) continue
+    if (!group || !group.id || explicitGroupIds.has(group.id)) continue
+    // 修 bug 群是维护者工单池，不是普通任务线；不要把每条 bug 请求合成“任务线”。
+    if (group.kind === BUGFIX_GROUP_KIND || /修\s*bug/i.test(String(group.name || ''))) continue
     const groupEntries = entries.filter((entry) => entry && entry.groupId === group.id)
     const openRequests = groupEntries.filter(
       (entry) =>
@@ -1095,7 +1109,8 @@ function buildTaskLines(active, options = {}) {
       null
     )
     const recentSignal = Boolean(latestSignal) && now - toNumber(latestSignal.ts, 0) < 2 * 60 * 60 * 1000
-    if (!openRequests.length && !recentSignal) continue
+    const hasOpen = openRequests.length > 0
+    if (!hasOpen && !recentSignal) continue
     const latestOpen =
       (openRequests.length
         ? openRequests.reduce((best, entry) => (entry && (!best || (entry.ts || 0) > (best.ts || 0)) ? entry : best), null)
@@ -1103,44 +1118,65 @@ function buildTaskLines(active, options = {}) {
     if (!latestOpen) continue
     let lastProgressAt = 0
     for (const entry of groupEntries) lastProgressAt = Math.max(lastProgressAt, toNumber(entry.ts, 0), toNumber(entry.answeredAt, 0))
-    const hasOpen = openRequests.length > 0
+    // task-9 收口判定：无 open request 时，完成信号或「10 分钟无新活动」都视为完成。
+    const completedBySignal = !hasOpen && completionSignalOf(latestSignal)
+    const idleClosed =
+      !hasOpen && Boolean(latestSignal) && now - toNumber(latestSignal.ts, 0) >= SYNTHETIC_IDLE_CLOSE_MS
+    const syntheticDone = hasOpen ? false : completedBySignal || idleClosed
     const steps = defaultTaskSteps()
     steps[0].status = 'done'
     steps[1].status = 'done'
-    steps[2].status = hasOpen ? 'dispatched' : 'done'
-    steps[2].dispatchedAt = lastProgressAt || now
-    if (!hasOpen) {
+    if (syntheticDone) {
+      for (const step of steps) {
+        step.status = 'done'
+        step.doneAt = lastProgressAt || now
+      }
+    } else if (hasOpen) {
+      steps[2].status = 'dispatched'
+      steps[2].dispatchedAt = lastProgressAt || now
+    } else {
+      steps[2].status = 'done'
+      steps[2].doneAt = lastProgressAt || now
       steps[3].status = 'dispatched'
       steps[3].dispatchedAt = lastProgressAt || now
     }
-    const stale = lastProgressAt > 0 && now - lastProgressAt > TASK_LINE_STALL_MS
+    // 卡住只在仍有 open request 且超阈值时出现；已收口/无 open 的合成线不再 active/stalled。
+    const stale = hasOpen && lastProgressAt > 0 && now - lastProgressAt > TASK_LINE_STALL_MS
     const baseTitle = String(group.goal || '').trim() || (String(group.name || '').trim() ? `群「${group.name}」当前任务线` : '群当前任务线')
-    const lineTitle = latestOpen.title ? `${baseTitle} · ${String(latestOpen.title).slice(0, 24)}` : baseTitle
+    const lineTitle = syntheticDone
+      ? `${baseTitle} · 已完成`
+      : latestOpen.title
+        ? `${baseTitle} · ${String(latestOpen.title).slice(0, 24)}`
+        : baseTitle
     const members = (Array.isArray(latestOpen.mentions) ? latestOpen.mentions : [])
       .filter((id) => id && id !== 'panel')
       .map(describeSession)
       .filter(Boolean)
-    const currentStep = hasOpen ? 3 : 4
+    const leaderId =
+      group.managerSessionId ||
+      (latestOpen.author && latestOpen.author !== 'panel' ? latestOpen.author : '') ||
+      (members[0] && members[0].id) ||
+      ''
     lines.push({
       title: lineTitle,
       taskId: 'group:' + group.id,
       groupId: group.id,
       groupName: String(group.name || ''),
       worldTask: false,
-      taskStatus: 'working',
+      taskStatus: syntheticDone ? 'done' : 'working',
       synthetic: true,
-      leaderId: group.managerSessionId,
-      leader: describeSession(group.managerSessionId),
+      leaderId,
+      leader: describeSession(leaderId),
       members,
       steps,
-      currentStep,
-      currentStepText: hasOpen ? '执行' : '复核',
-      progress: hasOpen ? 40 : 60,
-      lineStatus: stale ? 'stalled' : 'active',
+      currentStep: syntheticDone ? steps.length : hasOpen ? 3 : 4,
+      currentStepText: syntheticDone ? '已完成' : hasOpen ? '执行' : '复核',
+      progress: syntheticDone ? 100 : hasOpen ? 40 : 60,
+      lineStatus: syntheticDone ? 'done' : stale ? 'stalled' : 'active',
       lastProgressAt,
       lastNudgeAt: 0,
       nudgeCount: 0,
-      stalledSince: stale ? lastProgressAt + TASK_LINE_STALL_MS : 0,
+      stalledSince: !syntheticDone && stale ? lastProgressAt + TASK_LINE_STALL_MS : 0,
       replyRequestId: latestOpen.id || '',
       taskScope: String(group.goal || ''),
       ts: toNumber(latestOpen.ts, 0)
@@ -1187,6 +1223,9 @@ function createGroupStore(dir) {
       goal: typeof group.goal === 'string' ? group.goal.trim().slice(0, 300) : '',
       managerSessionId: typeof group.managerSessionId === 'string' ? group.managerSessionId : '',
       sessionIds: Array.isArray(group.sessionIds) ? [...new Set(group.sessionIds.filter((x) => typeof x === 'string' && x))] : [],
+      // task-9：@黏性对话对象（用户 @ 谁，后续未 @ 的消息默认发给谁）；旧 groups.json 自动补空值。
+      focusSessionId: typeof group.focusSessionId === 'string' ? group.focusSessionId : '',
+      focusUpdatedAt: toNumber(group.focusUpdatedAt, 0),
       createdAt: toNumber(group.createdAt, Date.now()),
       updatedAt: toNumber(group.updatedAt, Date.now())
     }
@@ -3104,6 +3143,39 @@ export function apply(ctx, config = {}) {
       for (let i = 0; i + 1 < segment.length; i += 1) tokens.add(segment.slice(i, i + 2))
     }
     return tokens
+  }
+  /**
+   * task-9：无人 @ 且没有 focus/群管理时，按文本与成员的 title/role/skills/handle 匹配度选对话负责人。
+   * 平局优先 idle、低 openRequestCount；维护者/protected 不作为普通对话对象（用户显式 @ 才例外）。
+   */
+  const pickMemberForText = (text, sessions) => {
+    const tokens = [...titleTokensOf(text)]
+    const candidates = (Array.isArray(sessions) ? sessions : []).filter(
+      (session) => session && session.id && session.protected !== true
+    )
+    if (!candidates.length) return null
+    let best = null
+    let bestScore = Number.NEGATIVE_INFINITY
+    const source = String(text || '')
+    for (const session of candidates) {
+      const identity = identityOf(session.id, session.title)
+      const haystack = [session.title, identity.role, (identity.skills || []).join(' '), identity.handle]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      let score = 0
+      for (const token of tokens) if (token.length >= 2 && haystack.includes(token)) score += 2
+      for (const tag of identity.skills || []) if (tag && source.includes(tag)) score += 3
+      if (identity.handle && source.includes(identity.handle)) score += 4
+      if (session.title && source.includes(String(session.title))) score += 3
+      score += session.availability === 'busy' ? -1 : 1
+      score -= Math.min(3, toNumber(session.openRequestCount, 0)) * 0.5
+      if (score > bestScore) {
+        bestScore = score
+        best = session
+      }
+    }
+    return best
   }
   /** 过于泛化、成组没有信息量的中文二元组（英文要保持小写）。 */
   const SUGGEST_STOP_TOKENS = new Set([
@@ -9972,13 +10044,17 @@ export function apply(ctx, config = {}) {
       const taskSteps = normalizeTaskSteps(payload.steps)
       const stepLines = taskSteps.map((step) => `${step.i}. ${step.text}`)
 
-      // v2.9.1 权限分级：维护者 protected/service —— 不得被 group.post 指派为组长/成员。
-      // 例外：修bug群里的 BUG 报告按「bug 投递」处理（不是任务）；普通群只报错/跳过并提示。
+      // v2.9.1 权限分级 / task-9 调整：
+      // - 普通任务（task:true）仍然不得把维护者当组长/成员：只 @维护者 → 明确报错；混合 → 跳过并提示。
+      // - 用户显式 @维护者但「不是 task:true」：允许作为对话/BUG 投递送达（修复"想 @维护者报 bug 被拒绝"）。
       const maintainerIdNow = maintainerStore.get()
       const bugfixChannel = isBugfixGroup(group)
+      const explicitTaskRequest = payload.task === true || payload.mode === 'task'
+      const explicitMentionIds = mentionAll ? [] : requested.filter((sessionId) => group.sessionIds.includes(sessionId))
       let protectedSkipped = []
       let protectedNotice = ''
       let bugfixDelivery = false
+      let maintainerDialogue = false
       if (mentionAll && maintainerIdNow && targetIds.includes(maintainerIdNow)) {
         targetIds = targetIds.filter((sessionId) => sessionId !== maintainerIdNow)
         protectedSkipped = [maintainerIdNow]
@@ -9988,9 +10064,9 @@ export function apply(ctx, config = {}) {
       const targetProtectedIds = targetIds.filter((sessionId) => sessionId === maintainerIdNow)
       if (targetProtectedIds.length) {
         const remaining = targetIds.filter((sessionId) => sessionId !== maintainerIdNow)
-        const isBugDelivery = bugfixChannel && (textLooksLikeBugReport(text) || !textLooksLikeWork(text))
-        if (!remaining.length) {
-          if (!isBugDelivery) {
+        if (explicitTaskRequest) {
+          // 普通任务：维护者不能当组长/成员（未完成/未派活）。
+          if (!remaining.length) {
             return {
               ok: false,
               error: [
@@ -10002,25 +10078,23 @@ export function apply(ctx, config = {}) {
               ].join('\n')
             }
           }
-          bugfixDelivery = true
-        } else {
           protectedSkipped = targetProtectedIds.slice()
           targetIds = remaining
           protectedNotice =
             '已按保护规则跳过维护者 ' +
             targetProtectedIds.map((sessionId) => titleOf(sessionId)).join('、') +
             '：维护者不接普通任务，也不会担任组长/成员。'
-          if (isBugDelivery) {
-            const bugCopy = await reportBugToMaintainer({
-              text,
-              author: 'panel',
-              workspace: group.workspace,
-              origin: 'panel'
-            })
-            if (bugCopy.ok) {
-              protectedNotice += ' 已同时把这条 BUG 报告投递到修bug群「' + bugCopy.groupName + '」。'
-            }
-          }
+        } else {
+          // 用户显式 @维护者（非 task:true）：按「对话/BUG 投递」送达，不拒绝。
+          maintainerDialogue = true
+          // 只有明确的 bug/故障描述才走 BUG 投递；「请教一个问题」这类普通对话按用户直接对话处理。
+          const looksLikeBugComplaint = /(bug|报错|异常|崩溃|闪退|卡死|卡住|无响应|不能用|没反应|坏了|故障|错误|失败|修复|修一下|修下|修好|缺陷|白屏|黑屏|报障|error|fail|crash|broken|\b(?:400|401|403|404|500|502|503)\b)/i.test(
+            text
+          )
+          bugfixDelivery = bugfixChannel || looksLikeBugComplaint
+          protectedNotice = bugfixDelivery
+            ? '已把这条作为 BUG 报告投递给维护者（不是普通任务派活）；维护者只修 bug，不接普通任务。'
+            : '维护者是 protected/service 会话，但本次是用户显式 @ 的直接对话，已直接送达（不是普通任务派活）。'
         }
       }
 
@@ -10329,6 +10403,71 @@ export function apply(ctx, config = {}) {
 
       const messageTaskScope = normalizeTaskScope(payload.taskScope || payload.scopeText, text)
       const messageScopeWarning = detectScopeExpansion(messageTaskScope, text).join('；')
+      // ---------------------------------------------------------------- @黏性对话 + 无人 @ 默认路由（task-9）
+      // 用户 @ 谁 → 设 focusSessionId；没 @ → 沿用 focus；无 focus 回退群管理；无群管理按文本匹配负责人。
+      let activeFocusId = String(group.focusSessionId || '')
+      let focusValid = Boolean(activeFocusId) && group.sessionIds.includes(activeFocusId) && sessionById.has(activeFocusId)
+      let autoTarget = null
+      let autoSource = ''
+      if (!mentionAll && explicitMentionIds.length) {
+        activeFocusId = explicitMentionIds[0]
+        focusValid = true
+        autoSource = 'mention'
+      } else if (!mentionAll) {
+        if (focusValid) {
+          targetIds = [activeFocusId]
+          autoTarget = sessionById.get(activeFocusId) || null
+          autoSource = 'focus'
+        } else if (
+          group.managerSessionId &&
+          group.sessionIds.includes(group.managerSessionId) &&
+          sessionById.has(group.managerSessionId)
+        ) {
+          targetIds = [group.managerSessionId]
+          autoTarget = sessionById.get(group.managerSessionId) || null
+          autoSource = 'manager'
+        } else {
+          const picked = pickMemberForText(
+            text,
+            group.sessionIds.map((sessionId) => sessionById.get(sessionId)).filter(Boolean)
+          )
+          if (picked) {
+            targetIds = [picked.id]
+            autoTarget = picked
+            autoSource = 'matched'
+          } else {
+            targetIds = []
+          }
+        }
+      }
+      let focusUpdatedAtNow = 0
+      if (autoSource === 'mention' && activeFocusId) {
+        focusUpdatedAtNow = Date.now()
+        try {
+          mutateGroups((list) => {
+            const target = list.find((item) => item.id === group.id)
+            if (target) {
+              target.focusSessionId = activeFocusId
+              target.focusUpdatedAt = focusUpdatedAtNow
+              target.updatedAt = focusUpdatedAtNow
+            }
+            return { ok: true }
+          })
+        } catch {
+          /* focus 落盘失败不影响本条发送 */
+        }
+      } else if (focusValid) {
+        focusUpdatedAtNow = toNumber(group.focusUpdatedAt, 0)
+      }
+      const focusSessionIdEffective = autoSource === 'mention' ? activeFocusId : focusValid ? activeFocusId : ''
+      const autoSourceLabel =
+        autoSource === 'focus'
+          ? '沿用当前对话对象'
+          : autoSource === 'manager'
+            ? '无 @：回退群管理'
+            : autoSource === 'matched'
+              ? '无 @：按话题自动选中'
+              : ''
       const note = addEntry(
         {
           title: text.slice(0, 20),
@@ -10349,9 +10488,16 @@ export function apply(ctx, config = {}) {
       const requests = []
       const woken = []
       for (const sessionId of targetIds) {
+        const isDialogueTarget = Boolean(autoTarget && autoTarget.id === sessionId)
+        const isMaintainerTarget = Boolean(maintainerDialogue && sessionId === maintainerIdNow)
+        const isDialogue = isDialogueTarget || isMaintainerTarget
         const request = addEntry(
           {
-            title: bugfixDelivery ? `BUG：${truncate(text, 18)}` : `@${shortSid(sessionId)} ${truncate(text, 18)}`,
+            title: bugfixDelivery
+              ? `BUG：${truncate(text, 18)}`
+              : isDialogue
+                ? `对话：${truncate(text, 18)}`
+                : `@${shortSid(sessionId)} ${truncate(text, 18)}`,
             text,
             kind: 'request',
             groupId: group.id,
@@ -10361,7 +10507,7 @@ export function apply(ctx, config = {}) {
             hiddenFromChat: bugfixDelivery ? false : true,
             taskScope: messageTaskScope,
             ...(messageScopeWarning ? { scopeWarning: messageScopeWarning } : {}),
-            ...(bugfixDelivery ? { tags: '@bug' } : {}),
+            ...(bugfixDelivery ? { tags: '@bug' } : isDialogue ? { tags: '@对话' } : {}),
             skipDedupe: true
           },
           'panel'
@@ -10376,20 +10522,37 @@ export function apply(ctx, config = {}) {
               `请按影响面处理；修好后用 session_share（kind=handoff、group=${group.name}、replyTo=${request.entry.id}、files=文件路径）回执。`,
               '（维护者 protected/service：这是 bug 投递，不是普通任务派活。）'
             ].join('\n')
-          : [
-              `【群内工作安排 · 用户在群里 @ 你（群组「${group.name}」）】`,
-              text,
-              `【范围锁】归属：${shortSid(sessionId)} · 仅做 scope：${messageTaskScope}（${TASK_SCOPE_DISPATCH_TAIL}）`,
-              messageScopeWarning ? `⚠ 范围提醒：${messageScopeWarning} —— 需 owner 确认后再扩展。` : '',
-              '',
-              `请开始处理。完成后用 session_share 汇报（kind=handoff、group=${group.name}、replyTo=${request.entry.id}、files=文件路径）；无法处理请说明原因。`
-            ].filter(Boolean).join('\n')
+          : isDialogue
+            ? (isMaintainerTarget
+                ? [
+                    '【用户直接和你对话 · 不是普通任务】',
+                    `群组「${group.name}」 · 用户显式 @ 了你（维护者 protected/service 例外）`,
+                    text,
+                    '',
+                    '请直接回应用户：若是 bug 就按修复流程处理并回执；普通任务不要接（可引导到其他成员或修bug群）。不要默认当成本轮新任务。'
+                  ]
+                : [
+                    '【用户在和你对话 · 请直接回应，不要默认当成新任务】',
+                    `群组「${group.name}」 · ${autoSourceLabel || '对话对象：你'}`,
+                    text,
+                    '',
+                    '这不是新的任务派活：不要建任务线、不要回复“请提供更多信息”式套话；直接回答/处理用户的话。若用户是在报 bug，按 bug 修复流程处理并回执。'
+                  ]
+              ).join('\n')
+            : [
+                `【群内工作安排 · 用户在群里 @ 你（群组「${group.name}」）】`,
+                text,
+                `【范围锁】归属：${shortSid(sessionId)} · 仅做 scope：${messageTaskScope}（${TASK_SCOPE_DISPATCH_TAIL}）`,
+                messageScopeWarning ? `⚠ 范围提醒：${messageScopeWarning} —— 需 owner 确认后再扩展。` : '',
+                '',
+                `请开始处理。完成后用 session_share 汇报（kind=handoff、group=${group.name}、replyTo=${request.entry.id}、files=文件路径）；无法处理请说明原因。`
+              ].filter(Boolean).join('\n')
         await ensureSessionLive(sessionId)
         const outcome = wakeSession(sessionId, message, { requestId: request.entry.id })
         if (outcome.ok) woken.push({ sessionId, title: titleById.get(sessionId) || shortSid(sessionId) })
       }
       logger.info(
-        `群「${group.name}」面板发布消息 ${note.entry.id}，@ ${targetIds.length} 人，唤醒 ${woken.length} 人${bugfixDelivery ? '（BUG 投递）' : ''}`
+        `群「${group.name}」面板发布消息 ${note.entry.id}，@ ${targetIds.length} 人，唤醒 ${woken.length} 人${bugfixDelivery ? '（BUG 投递）' : ''}${autoTarget ? `（自动对话对象 ${shortSid(autoTarget.id)} / ${autoSource}）` : ''}`
       )
       return {
         ok: true,
@@ -10400,7 +10563,25 @@ export function apply(ctx, config = {}) {
         wokenTitles: woken.map((item) => item.title),
         bugfix: bugfixDelivery,
         protectedSkipped,
-        protectedNotice
+        protectedNotice,
+        // task-9：@黏性对话信息 + 无人 @ 的自动路由结果（面板用来显示“正在和谁对话”）。
+        focus: {
+          sessionId: focusSessionIdEffective,
+          updatedAt: focusUpdatedAtNow,
+          source: autoSource
+        },
+        focusSessionId: focusSessionIdEffective,
+        focusSource: autoSource,
+        autoTarget: autoTarget
+          ? {
+              id: autoTarget.id,
+              title: autoTarget.title || titleById.get(autoTarget.id) || shortSid(autoTarget.id),
+              handle: identityOf(autoTarget.id, titleById.get(autoTarget.id)).handle,
+              contactId: autoTarget.contactId || contactIdOf(autoTarget.id),
+              source: autoSource
+            }
+          : null,
+        autoMention: autoSource === 'mention' ? { id: activeFocusId, source: 'mention' } : null
       }
     }
     if (action === 'group.create') {
@@ -10885,6 +11066,54 @@ export function apply(ctx, config = {}) {
       logger.info(`群「${group.name}」设置群管理：${shortSid(managerId)}${created ? '（新建）' : ''}${kickoff ? '，已唤醒介入' : ''}`)
       return { ok: true, groupId: group.id, managerSessionId: managerId, created, kickedOff: kickoff }
     }
+    if (action === 'group.focus') {
+      // task-9：@黏性对话——设置/清除「当前对话对象」；传空 sessionId 表示结束对话。
+      const wanted = String(payload.id || '').trim()
+      const wantedSession = String(payload.sessionId || '').trim()
+      const groupsNow = groupStore.read()
+      const target = groupsNow.find((item) => item.id === wanted || (wanted && item.id.startsWith(wanted)))
+      if (!target) return { ok: false, error: '找不到群组' }
+      if (!wantedSession || wantedSession === 'panel' || wantedSession === '-') {
+        const cleared = mutateGroups((list) => {
+          const group = list.find((item) => item.id === target.id)
+          if (!group) return { ok: false, error: '找不到群组' }
+          group.focusSessionId = ''
+          group.focusUpdatedAt = Date.now()
+          group.updatedAt = Date.now()
+          return { ok: true, groupId: group.id }
+        })
+        if (!cleared.ok) return cleared
+        return { ok: true, groupId: target.id, focusSessionId: '', focus: null, cleared: true }
+      }
+      const sessions = await buildSessionIndex()
+      const session = sessions.find((item) => item.id === wantedSession)
+      if (!session || !target.sessionIds.includes(session.id)) {
+        return { ok: false, error: '只能把本群成员设为对话对象；请传完整 sessionId 或先经 session_directory 解析' }
+      }
+      const focusUpdatedAt = Date.now()
+      const result = mutateGroups((list) => {
+        const group = list.find((item) => item.id === target.id)
+        if (!group) return { ok: false, error: '找不到群组' }
+        group.focusSessionId = session.id
+        group.focusUpdatedAt = focusUpdatedAt
+        group.updatedAt = focusUpdatedAt
+        return { ok: true, groupId: group.id }
+      })
+      if (!result.ok) return result
+      return {
+        ok: true,
+        groupId: target.id,
+        focusSessionId: session.id,
+        focusUpdatedAt,
+        focus: {
+          id: session.id,
+          title: session.title || shortSid(session.id),
+          handle: identityOf(session.id, session.title).handle,
+          contactId: session.contactId || contactIdOf(session.id),
+          protected: session.protected === true
+        }
+      }
+    }
     if (action === 'group.update' || action === 'group.rename') {
       const wanted = String(payload.id || '').trim()
       const autoName = action === 'group.rename' && payload.auto === true
@@ -11060,6 +11289,27 @@ export function apply(ctx, config = {}) {
           }
         } catch {
           /* ignore */
+        }
+      }
+      // task-9：被移出群的成员如果正是当前对话对象，顺带清除 focus，避免后续消息发给不在群里的人。
+      if (action === 'group.remove' && result.ok && affectedGroup && removedSessionIds.length) {
+        try {
+          const groupsNow = groupStore.read()
+          const targetGroup = groupsNow.find((item) => item.id === affectedGroup.id)
+          if (targetGroup && targetGroup.focusSessionId && removedSessionIds.includes(targetGroup.focusSessionId)) {
+            mutateGroups((list) => {
+              const group = list.find((item) => item.id === affectedGroup.id)
+              if (group) {
+                group.focusSessionId = ''
+                group.focusUpdatedAt = Date.now()
+                group.updatedAt = Date.now()
+              }
+              return { ok: true }
+            })
+            affectedGroup.focusCleared = true
+          }
+        } catch {
+          /* focus 清理失败不影响移除成员 */
         }
       }
       return result
