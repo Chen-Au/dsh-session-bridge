@@ -393,6 +393,28 @@
   .tl-progress { margin-top: 6px; height: 5px; border-radius: 999px; background: rgba(120,150,255,.14); overflow: hidden; }
   .tl-progress > span { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--mint)); }
   .taskline.stalled .tl-progress > span { background: linear-gradient(90deg, #ff6b81, #ffd166); }
+  /* 任务完成通知（task-7）：头部未读 badge / 通知条 / 群里「@你」标记 */
+  .completion-badge {
+    display: inline-flex; align-items: center; gap: 5px; flex: none; cursor: pointer;
+    border: 1px solid rgba(95,242,200,.45); background: rgba(95,242,200,.12); color: var(--mint);
+    border-radius: 999px; padding: 3px 10px; font-size: 11.5px; font-family: inherit;
+  }
+  .completion-badge[hidden] { display: none; }
+  .completion-badge b { color: #fff; }
+  .completion-badge:hover { border-color: var(--mint); box-shadow: 0 0 14px rgba(95,242,200,.25); }
+  .completion-toast-wrap { position: fixed; top: 66px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 25; max-width: min(390px, 92vw); }
+  .completion-toast {
+    border: 1px solid rgba(95,242,200,.5); border-radius: 13px; padding: 10px 12px; cursor: pointer;
+    background: linear-gradient(135deg, rgba(95,242,200,.16), rgba(124,92,255,.14));
+    box-shadow: 0 14px 36px rgba(0,0,0,.45); animation: toast-in .22s ease-out;
+  }
+  .completion-toast .ct-title { font-size: 12.5px; font-weight: 700; color: #fff; word-break: break-word; }
+  .completion-toast .ct-meta { margin-top: 4px; font-size: 10.5px; color: var(--muted); }
+  .completion-toast .ct-actions { margin-top: 7px; display: flex; gap: 6px; }
+  .chip.panel-mention { color: var(--gold); border-color: rgba(255,209,102,.55); background: rgba(255,209,102,.14); font-weight: 700; }
+  .bubble.completion .body { border-color: rgba(95,242,200,.45); background: linear-gradient(135deg, rgba(95,242,200,.10), rgba(124,92,255,.06)); }
+  .badge-completion { color: var(--mint); border: 1px solid rgba(95,242,200,.5); border-radius: 999px; padding: 1px 7px; font-size: 9.5px; font-weight: 700; }
+  .card.completion-card { border-color: rgba(95,242,200,.45); background: linear-gradient(135deg, rgba(95,242,200,.1), rgba(124,92,255,.05)); }
   .scroll::-webkit-scrollbar { width: 6px; height: 6px; }
   .scroll::-webkit-scrollbar-thumb { background: rgba(124,92,255,.35); border-radius: 6px; }
   body[data-theme="forest"] {
@@ -454,6 +476,7 @@
       <button class="tab" data-view="board">积分榜</button>
     </div>
     <div class="spacer"></div>
+    <button class="completion-badge" id="completionBadge" hidden title="有未读的任务完成通知，点击查看">✅ 完成 <b id="completionBadgeCount">0</b></button>
     <div class="stat" id="statLine">连接中…</div>
     <button class="icon-btn" id="themeBtn" title="主题">🎨</button>
     <button class="icon-btn" id="refreshBtn" title="刷新">↻</button>
@@ -565,6 +588,7 @@
   </div>
 </div>
 <div class="toast-wrap" id="toastWrap"></div>
+<div class="completion-toast-wrap" id="completionToastWrap"></div>
 <div class="modal-mask" id="taskModal">
   <div class="modal" style="width:min(540px,92vw)">
     <h3>发布群任务</h3>
@@ -945,20 +969,187 @@
         if (!currentGroupId && (data.groups || []).length) currentGroupId = data.groups[0].id
         if ((data.groups || []).length && !data.groups.some(function (g) { return g.id === currentGroupId })) currentGroupId = data.groups[0].id
         render()
+        // task-7：轮询检测新的任务完成通知（只在可见+有焦点+非全屏时提醒；否则只保留未读 badge）。
+        detectCompletionNotices()
       })
       .catch(function (error) {
         $('statLine').textContent = '连接失败：' + (error && error.message ? error.message : error)
         if (showError) toast('读取失败：' + (error && error.message ? error.message : error), true)
       })
   }
+  // ---------------------------------------------------------------- 任务完成通知（task-7 / v2.10.3）
+  var COMPLETION_SEEN_KEY = 'nebula.lastSeenCompletionAt'
+  var completionSeenAt = 0
+  try { completionSeenAt = Number(localStorage.getItem(COMPLETION_SEEN_KEY) || 0) || 0 } catch (e) { completionSeenAt = 0 }
+  var completionAudio = null
+  var completionSurfacedIds = {}
+  /** Web Audio 需要在用户手势后 resume；不支持时静默降级。 */
+  function primeCompletionAudio() {
+    if (completionAudio) return
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext
+      if (!Ctx) return
+      completionAudio = new Ctx()
+      if (completionAudio.state === 'suspended' && typeof completionAudio.resume === 'function') completionAudio.resume()
+    } catch (e) { completionAudio = null }
+  }
+  function playCompletionBeep() {
+    try {
+      if (!completionAudio || typeof completionAudio.createOscillator !== 'function') return
+      var ctx = completionAudio
+      if (ctx.state === 'suspended' && typeof ctx.resume === 'function') ctx.resume()
+      var now = ctx.currentTime
+      var osc = ctx.createOscillator()
+      var gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(880, now)
+      osc.frequency.exponentialRampToValueAtTime(1320, now + 0.12)
+      gain.gain.setValueAtTime(0.0001, now)
+      gain.gain.exponentialRampToValueAtTime(0.06, now + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(now)
+      osc.stop(now + 0.2)
+    } catch (e) { /* 静默降级 */ }
+  }
+  function completionNoticesNow() {
+    return (state.completionNotices || []).slice().sort(function (a, b) {
+      return ((b.completedAt || b.ts) || 0) - ((a.completedAt || a.ts) || 0)
+    })
+  }
+  function completionUnreadNotices() {
+    return completionNoticesNow().filter(function (item) {
+      return ((item.completedAt || item.ts) || 0) > completionSeenAt
+    })
+  }
+  function completionUnreadCount() { return completionUnreadNotices().length }
+  function persistCompletionSeen() {
+    try { localStorage.setItem(COMPLETION_SEEN_KEY, String(completionSeenAt)) } catch (e) {}
+  }
+  function markCompletionSeen(notice) {
+    var at = (notice && (notice.completedAt || notice.ts)) || 0
+    var latest = completionNoticesNow().reduce(function (max, item) {
+      return Math.max(max, (item.completedAt || item.ts) || 0)
+    }, 0)
+    completionSeenAt = Math.max(completionSeenAt, at, latest)
+    persistCompletionSeen()
+  }
+  /** 只在「页面可见 + 窗口有焦点 + 没有全屏（游戏/其他全屏页）」时弹窗/响铃。 */
+  function notificationEligible() {
+    try {
+      return document.visibilityState === 'visible' && document.hasFocus() === true && !document.fullscreenElement
+    } catch (e) {
+      return false
+    }
+  }
+  function renderCompletionBadge() {
+    var badge = $('completionBadge')
+    var countEl = $('completionBadgeCount')
+    if (!badge) return
+    var unread = completionUnreadCount()
+    if (countEl) countEl.textContent = String(unread)
+    badge.hidden = unread <= 0
+  }
+  function hideCompletionToast(el) {
+    if (!el || !el.parentNode) return
+    el.style.opacity = '0'
+    el.style.transform = 'translateY(-6px)'
+    el.style.transition = 'opacity .18s ease, transform .18s ease'
+    setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el) }, 200)
+  }
+  function hideAllCompletionToasts() {
+    var wrap = $('completionToastWrap')
+    if (!wrap) return
+    Array.prototype.slice.call(wrap.children).forEach(function (el) {
+      if (el.parentNode) el.parentNode.removeChild(el)
+    })
+  }
+  /** 点通知：跳到对应群（没有群则跳组长会话），并清掉未读。 */
+  function openCompletionTarget(notice) {
+    if (!notice) return
+    var groupExists = notice.groupId && (state.groups || []).some(function (group) { return group.id === notice.groupId })
+    if (groupExists) {
+      currentGroupId = notice.groupId
+      activeView = 'groups'
+      document.querySelectorAll('.tab').forEach(function (tab) {
+        tab.classList.toggle('active', tab.getAttribute('data-view') === 'groups')
+      })
+      document.querySelectorAll('.view').forEach(function (view) {
+        view.classList.toggle('active', view.id === 'view-groups')
+      })
+      hideAllCompletionToasts()
+      markCompletionSeen(notice)
+      render()
+      renderCompletionBadge()
+      return
+    }
+    if (notice.author && notice.author !== 'panel') jumpToSession(notice.author, '')
+    markCompletionSeen(notice)
+    renderCompletionBadge()
+  }
+  function showCompletionToast(notice) {
+    var wrap = $('completionToastWrap')
+    if (!wrap || !notice) return
+    if (completionSurfacedIds[notice.id]) return
+    completionSurfacedIds[notice.id] = true
+    var el = document.createElement('div')
+    el.className = 'completion-toast'
+    el.setAttribute('data-completion-id', notice.id)
+    var groupName = notice.groupName || '世界'
+    el.innerHTML =
+      '<div class="ct-title">✅ 任务完成：' + esc(notice.title || '') + '</div>' +
+      '<div class="ct-meta">' + esc(notice.authorHandle || '组长') + ' 在「' + esc(groupName) + '」@你 · ' + when(notice.completedAt || notice.ts) + '</div>' +
+      '<div class="ct-actions"><button class="btn small primary" data-open-completion="' + esc(notice.id) + '">看群</button>' +
+      '<button class="btn small" data-open-completion-session="' + esc(notice.author || '') + '">找组长</button></div>'
+    el.addEventListener('click', function (event) {
+      var sessionBtn = event.target.closest('[data-open-completion-session]')
+      if (sessionBtn) {
+        hideCompletionToast(el)
+        openCompletionTarget(Object.assign({}, notice, { groupId: '' }))
+        return
+      }
+      var openBtn = event.target.closest('[data-open-completion]')
+      if (openBtn || event.target === el) {
+        hideCompletionToast(el)
+        openCompletionTarget(notice)
+      }
+    })
+    wrap.appendChild(el)
+    setTimeout(function () { hideCompletionToast(el) }, 12000)
+  }
+  /** 轮询到新完成通知：满足条件才提示音+toast；否则保留未读 badge，等回到星桥再提示。 */
+  function detectCompletionNotices() {
+    var unread = completionUnreadNotices()
+    renderCompletionBadge()
+    if (!unread.length) return
+    if (!notificationEligible()) return
+    var latest = unread[0]
+    showCompletionToast(latest)
+    playCompletionBeep()
+    markCompletionSeen(latest)
+    renderCompletionBadge()
+  }
+  function flushCompletionNotices() {
+    if (!notificationEligible()) return
+    detectCompletionNotices()
+  }
+  function openLatestCompletion() {
+    var unread = completionUnreadNotices()
+    var target = unread[0] || completionNoticesNow()[0]
+    if (!target) return
+    openCompletionTarget(target)
+  }
   function render() {
     var tl = state.taskLineStats || {}
-    $('statLine').innerHTML = 'v' + esc(state.version || '1.0.0') + ' · <b>' + (state.sessions || []).length + '</b> 位 agent · <b>' + (state.world || []).length + '</b> 条世界任务 · <b>' + (tl.total || 0) + '</b> 条任务线' + (tl.stalled ? ' · <b style="color:var(--danger)">' + tl.stalled + '</b> 卡住' : '')
+    var completionUnread = completionUnreadCount()
+    $('statLine').innerHTML = 'v' + esc(state.version || '1.0.0') + ' · <b>' + (state.sessions || []).length + '</b> 位 agent · <b>' + (state.world || []).length + '</b> 条世界任务 · <b>' + (tl.total || 0) + '</b> 条任务线' + (tl.stalled ? ' · <b style="color:var(--danger)">' + tl.stalled + '</b> 卡住' : '') + (completionUnread > 0 ? ' · <b style="color:var(--mint)">✅ ' + completionUnread + '</b> 条完成未读' : '')
     renderWorld()
     renderIdleBoard()
     renderTaskLines()
     renderGroups()
     renderBoard()
+    renderCompletionBadge()
   }
   /** 空闲看板（v2.9.0）：idle 在前；busy 显示当前任务与开始时间；点行跳会话。 */
   function renderIdleBoard() {
@@ -1010,7 +1201,7 @@
       return
     }
     var stats = state.taskLineStats || {}
-    var head = '<div class="idle-meta">共 ' + lines.length + ' 条 · 进行中 <b style="color:var(--mint)">' + (stats.active || 0) + '</b> · 卡住 <b style="color:var(--danger)">' + (stats.stalled || 0) + '</b> · 完成 ' + (stats.done || 0) + '</div>'
+    var head = '<div class="idle-meta">共 ' + lines.length + ' 条 · 进行中 <b style="color:var(--mint)">' + (stats.active || 0) + '</b> · 卡住 <b style="color:var(--danger)">' + (stats.stalled || 0) + '</b> · 完成 ' + (stats.done || 0) + (completionUnreadCount() > 0 ? ' · ✅ 完成通知未读 <b style="color:var(--mint)">' + completionUnreadCount() + '</b>' : '') + '</div>'
     board.innerHTML = head + lines.slice(0, 12).map(function (line) {
       var leader = line.leader || {}
       var leaderName = leader.handle || leader.title || short(leader.id || '', 10) || '未指派'
@@ -1095,13 +1286,14 @@
     }
     ;(state.world || []).slice().reverse().forEach(function (entry) {
       var who = identityOf(entry.author)
-      html += '<div class="card' + (entry.urgent ? ' urgent' : '') + '">'
+      html += '<div class="card' + (entry.urgent ? ' urgent' : '') + (entry.completionNotice ? ' completion-card' : '') + '">'
       html += '<div class="row"><div class="avatar clickable" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + avatarHtml(who.avatar) + '</div><div style="flex:1;min-width:0">'
       html += '<div class="who"><span class="name">' + esc(who.handle) + '</span><span class="time">' + when(entry.ts) + '</span></div>'
       html += '<div class="title">' + esc(entry.title) + '</div>'
       html += '<div class="text clamp">' + esc(entry.text || '') + '</div>'
       var chips = '<div class="chips"><span class="chip kind">' + esc(KIND[entry.kind] || entry.kind) + '</span>'
       if (entry.urgent) chips += '<span class="chip urgent">⚡ 加急</span>'
+      if (entry.panelMention === true) chips += '<span class="chip panel-mention" title="这条消息 @ 了你（用户）">@你</span>'
       chips += '<button class="chip retract" data-retract="' + esc(entry.id) + '" title="撤回这条消息（任务会同时取消未完成请求与待复核）">撤回</button>'
       ;(entry.mentions || []).forEach(function (id) {
         var idn = identityOf(id)
@@ -1209,6 +1401,8 @@
             var marked = identityOf(id)
             return '<button class="chip jump" data-jump="' + esc(id) + '" data-title="' + esc((sessionById[id] && sessionById[id].title) || marked.handle) + '">@' + esc(marked.handle) + '</button>'
           }).join('')
+          // panel（用户）不是会话：单独标 @你 标记，普通 @ 只渲染会话。
+          var panelMentionChip = entry.panelMention === true ? '<span class="chip panel-mention" title="这条消息 @ 了你（用户）">@你</span>' : ''
           var taskMeta = ''
           if (entry.kind === 'task') {
             var coordinatorName = entry.coordinator
@@ -1219,11 +1413,11 @@
             }).join('、') || '（无）'
             taskMeta = '<div class="task-meta">🧑‍✈️ 组长：' + esc(coordinatorName) + ' · 成员：' + esc(assigneeNames) + ' · 状态：' + esc(TASK_STATUS[entry.taskStatus] || entry.taskStatus || '已分配') + '</div>'
           }
-          return '<div class="bubble' + (mine ? ' mine' : '') + (entry.urgent ? ' urgent' : '') + '"><div class="avatar clickable" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + avatarHtml(who.avatar) + '</div>' +
-            '<div class="body"><div class="head"><b class="jump" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + esc(who.handle) + '</b><small>' + esc(kind) + (entry.urgent ? ' · <span class="badge-urgent">⚡ 加急</span>' : '') + ' · ' + when(entry.ts) + '</small><button class="msg-retract" data-retract="' + esc(entry.id) + '" title="撤回这条消息/任务">撤回</button></div>' +
+          return '<div class="bubble' + (mine ? ' mine' : '') + (entry.urgent ? ' urgent' : '') + (entry.completionNotice ? ' completion' : '') + '"><div class="avatar clickable" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + avatarHtml(who.avatar) + '</div>' +
+            '<div class="body"><div class="head"><b class="jump" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + esc(who.handle) + '</b><small>' + esc(kind) + (entry.completionNotice ? ' · <span class="badge-completion">✅ 完成通知</span>' : '') + (entry.urgent ? ' · <span class="badge-urgent">⚡ 加急</span>' : '') + ' · ' + when(entry.ts) + '</small><button class="msg-retract" data-retract="' + esc(entry.id) + '" title="撤回这条消息/任务">撤回</button></div>' +
             taskMeta +
             '<div class="msg' + (collapsible ? ' collapsible' : '') + '" data-expandable="' + (collapsible ? '1' : '0') + '" title="' + (collapsible ? '点击展开/收起' : '') + '">' + esc(chatBody) + '</div>' +
-            ((fileChips || mentionMarks) ? '<div class="chips">' + mentionMarks + fileChips + '</div>' : '') + '</div></div>'
+            ((fileChips || mentionMarks || panelMentionChip) ? '<div class="chips">' + panelMentionChip + mentionMarks + fileChips + '</div>' : '') + '</div></div>'
         }).join('')
       : '<div class="empty">群里还很安静，说点什么或发起一个讨论吧。</div>'
     var chatAfter = $('groupChat')
@@ -1883,6 +2077,8 @@
       })
     })
     $('refreshBtn').addEventListener('click', function () { refresh(true) })
+    var completionBadgeBtn = $('completionBadge')
+    if (completionBadgeBtn) completionBadgeBtn.addEventListener('click', openLatestCompletion)
     $('closeBtn').addEventListener('click', function () { window.close() })
     $('worldSend').addEventListener('click', sendWorld)
     $('groupSend').addEventListener('click', sendGroup)
@@ -2145,6 +2341,22 @@
   document.addEventListener('visibilitychange', pingPresence)
   pingPresence()
   bindEvents()
+  // task-7：完成通知的“回到星桥再提示”逻辑——页面隐藏/失焦/全屏时只累积未读，回来才 toast + 提示音。
+  document.addEventListener('pointerdown', primeCompletionAudio, { once: true })
+  document.addEventListener('keydown', primeCompletionAudio, { once: true })
+  window.addEventListener('focus', function () {
+    primeCompletionAudio()
+    flushCompletionNotices()
+  })
+  document.addEventListener('visibilitychange', function () {
+    if (notificationEligible()) {
+      primeCompletionAudio()
+      flushCompletionNotices()
+    }
+  })
+  document.addEventListener('fullscreenchange', function () {
+    if (notificationEligible()) flushCompletionNotices()
+  })
   loadTheme()
   try { var savedFold = localStorage.getItem('nebula.groupFolded'); groupFolded = savedFold === null ? true : savedFold === '1' } catch (e) { groupFolded = true }
   applyGroupFold()
