@@ -457,7 +457,272 @@
   .more-actions[hidden] { display: none !important; }
   body.group-folded .group-foldable { display: none; }
   body.group-folded .group-topline { margin-bottom: 6px; }
-  @media (max-width: 980px) { .aside { display: none; } }
+  /* ================================================================
+     v3.0 首轮：统一 token / 首页 / 任务看板 / 通知 / ⌘K / 响应式
+     ================================================================ */
+  :root {
+    --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px;
+    --card-r: 14px; --card-r-sm: 10px;
+    --dur-1: .12s; --dur-2: .2s; --dur-3: .28s;
+    --shadow-1: 0 10px 30px rgba(0,0,0,.35);
+    --shadow-2: 0 24px 70px rgba(0,0,0,.55);
+    --surface-1: rgba(255,255,255,.03);
+    --surface-2: rgba(255,255,255,.06);
+  }
+  header { padding: 10px 18px; gap: 10px; height: 56px; flex: none; }
+  .brand { min-width: 0; }
+  .brand h1 { font-size: 15px; letter-spacing: 2px; }
+  .brand small { font-size: 9.5px; letter-spacing: 1px; }
+  .logo { width: 34px; height: 34px; font-size: 17px; border-radius: 11px; }
+  .tabs { padding: 3px; gap: 2px; }
+  .tab { padding: 6px 14px; font-size: 12.5px; display: inline-flex; align-items: center; gap: 5px; }
+  .tab .tab-dot { display: none; width: 6px; height: 6px; border-radius: 50%; background: var(--danger); }
+  .tab.has-unread .tab-dot { display: inline-block; }
+  .stat { max-width: 330px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .cmd-trigger {
+    display: inline-flex; align-items: center; gap: 7px; flex: none;
+    border: 1px solid var(--line); background: var(--surface-1); color: var(--muted);
+    border-radius: 10px; padding: 7px 10px; font: inherit; font-size: 12px; cursor: pointer;
+    transition: var(--dur-1);
+  }
+  .cmd-trigger:hover { color: var(--text); border-color: var(--line-strong); }
+  .cmd-trigger kbd { font: 10px/1 ui-monospace, Consolas, monospace; border: 1px solid var(--line); border-radius: 5px; padding: 2px 4px; color: var(--dim); }
+  .icon-btn { position: relative; flex: none; }
+  .bell-badge {
+    position: absolute; top: -5px; right: -5px; min-width: 17px; height: 17px;
+    border-radius: 999px; background: var(--danger); color: #fff; font-size: 10px;
+    line-height: 17px; text-align: center; padding: 0 4px; font-weight: 700;
+  }
+  .bell-badge[hidden] { display: none; }
+  .completion-badge { display: none !important; }
+
+  /* ---------- 首页 ---------- */
+  .home-pane { gap: 14px; }
+  .home-head { display: flex; align-items: center; gap: 10px; flex: none; }
+  .home-head .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .home-grid {
+    flex: 1; min-height: 0; overflow: auto; display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-content: start; padding-right: 4px;
+  }
+  .home-card {
+    border: 1px solid var(--line); border-radius: var(--card-r); background: var(--panel);
+    padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0;
+    backdrop-filter: blur(10px);
+  }
+  .home-card-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); letter-spacing: .4px; }
+  .home-card-head b { color: var(--text); font-size: 13px; }
+  .home-card-head .count { color: var(--danger); font-size: 11px; }
+  .home-link { margin-left: auto; font-size: 11px; color: var(--accent-2); cursor: pointer; }
+  .home-link:hover { text-decoration: underline; }
+  .home-list { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+  .home-item {
+    display: flex; align-items: flex-start; gap: 9px; padding: 8px 9px;
+    border: 1px solid var(--line); border-radius: var(--card-r-sm); background: var(--surface-1);
+    cursor: pointer; transition: var(--dur-1);
+  }
+  .home-item:hover { border-color: var(--line-strong); background: var(--surface-2); }
+  .home-item .hi-icon { flex: none; width: 22px; text-align: center; }
+  .home-item .hi-main { flex: 1; min-width: 0; }
+  .home-item .hi-title { font-size: 12.5px; color: var(--text); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .home-item .hi-sub { font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .home-item .hi-actions { display: flex; gap: 5px; flex: none; }
+  .home-item .hi-actions .btn { padding: 3px 8px; font-size: 10.5px; }
+  .home-empty { font-size: 11px; color: var(--dim); padding: 10px; text-align: center; border: 1px dashed var(--line); border-radius: var(--card-r-sm); }
+  .home-quick { display: flex; flex-wrap: wrap; gap: 8px; }
+  .home-quick .btn { flex: 1 1 120px; text-align: left; }
+  .home-mini-list { display: flex; flex-direction: column; gap: 5px; }
+  .home-mini { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--muted); padding: 5px 7px; border-radius: 9px; cursor: pointer; }
+  .home-mini:hover { background: var(--surface-2); color: var(--text); }
+  .home-mini .dot { width: 6px; height: 6px; }
+  .home-mini b { color: var(--text); font-weight: 500; }
+
+  /* ---------- 任务看板 ---------- */
+  .tasks-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: none; }
+  .filter-chip {
+    border: 1px solid var(--line); background: var(--surface-1); color: var(--muted);
+    border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 11.5px; cursor: pointer;
+    transition: var(--dur-1);
+  }
+  .filter-chip:hover { color: var(--text); border-color: var(--line-strong); }
+  .filter-chip.active { color: #fff; border-color: color-mix(in srgb, var(--accent) 65%, transparent); background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .tasks-board {
+    flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, minmax(220px, 1fr));
+    gap: 12px; overflow: auto; padding-bottom: 6px;
+  }
+  .task-col { border: 1px solid var(--line); border-radius: var(--card-r); background: rgba(255,255,255,.015); display: flex; flex-direction: column; min-width: 0; min-height: 120px; }
+  .task-col-head { display: flex; align-items: center; gap: 6px; padding: 9px 11px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+  .task-col-head b { color: var(--text); }
+  .task-col-head .n { margin-left: auto; font-size: 10.5px; color: var(--dim); }
+  .task-col-body { display: flex; flex-direction: column; gap: 8px; padding: 9px; overflow: auto; }
+  .tl-card { border: 1px solid var(--line); border-radius: 11px; padding: 9px; background: var(--surface-1); display: flex; flex-direction: column; gap: 6px; cursor: pointer; }
+  .tl-card:hover { border-color: var(--line-strong); }
+  .tl-card.stalled { border-color: rgba(255,107,129,.55); background: rgba(255,107,129,.06); }
+  .tl-card .tlc-title { font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tl-card .tlc-sub { font-size: 10px; color: var(--muted); display: flex; gap: 6px; flex-wrap: wrap; }
+  .tl-card .tlc-actions { display: flex; gap: 5px; margin-top: 2px; }
+  .tl-card .tlc-actions .btn { padding: 3px 8px; font-size: 10.5px; }
+  .tasks-empty { color: var(--dim); font-size: 12px; text-align: center; padding: 30px; border: 1px dashed var(--line); border-radius: var(--card-r); }
+
+  /* ---------- 通知中心 / 抽屉 ---------- */
+  .drawer-mask { position: fixed; inset: 0; background: rgba(4,5,12,.5); backdrop-filter: blur(2px); z-index: 24; display: none; }
+  .drawer-mask.open { display: block; }
+  .notif-drawer {
+    position: fixed; top: 0; right: 0; width: min(400px, 92vw); height: 100vh;
+    background: var(--panel-solid); border-left: 1px solid var(--line-strong); z-index: 26;
+    display: flex; flex-direction: column; transform: translateX(103%);
+    transition: transform var(--dur-3) ease; box-shadow: var(--shadow-2);
+  }
+  .notif-drawer.open { transform: none; }
+  .notif-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .notif-head h3 { margin: 0; font-size: 14px; letter-spacing: 1px; }
+  .notif-body { flex: 1; overflow: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .notif-item {
+    display: flex; gap: 9px; padding: 9px 10px; border-radius: 11px;
+    border: 1px solid var(--line); background: var(--surface-1); cursor: pointer;
+  }
+  .notif-item.unread { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .notif-item .ni-icon { flex: none; }
+  .notif-item .ni-main { flex: 1; min-width: 0; }
+  .notif-item .ni-title { font-size: 12px; color: var(--text); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .notif-item .ni-sub { font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .notif-item .ni-time { font-size: 10px; color: var(--dim); flex: none; }
+  .notif-empty { color: var(--dim); font-size: 12px; text-align: center; padding: 30px 10px; }
+
+  /* ---------- 命令面板 ⌘K ---------- */
+  .cmd-overlay {
+    position: fixed; inset: 0; background: rgba(3,4,10,.62); backdrop-filter: blur(3px);
+    z-index: 40; display: none; align-items: flex-start; justify-content: center; padding-top: 12vh;
+  }
+  .cmd-overlay.open { display: flex; }
+  .cmd-panel {
+    width: min(640px, 92vw); max-height: 70vh; background: var(--panel-solid);
+    border: 1px solid var(--line-strong); border-radius: 16px; box-shadow: var(--shadow-2);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .cmd-input { width: 100%; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; padding: 14px 16px; font-size: 14px; color: var(--text); }
+  .cmd-input:focus { box-shadow: none; }
+  .cmd-list { flex: 1; overflow: auto; padding: 6px; }
+  .cmd-group { font-size: 10px; color: var(--dim); padding: 6px 10px 2px; letter-spacing: 1px; text-transform: uppercase; }
+  .cmd-item { display: flex; align-items: center; gap: 9px; padding: 9px 10px; border-radius: 9px; cursor: pointer; border: 1px solid transparent; }
+  .cmd-item.active { background: color-mix(in srgb, var(--accent) 18%, transparent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .cmd-item .ci-main { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cmd-item .ci-sub { font-size: 10.5px; color: var(--muted); }
+  .cmd-item .ci-kind { font-size: 10px; color: var(--dim); flex: none; }
+  .cmd-empty { padding: 22px; text-align: center; color: var(--dim); font-size: 12px; }
+
+  /* ---------- 群聊去噪 ---------- */
+  #groupFoldBtn { display: none !important; }
+  .group-topline { align-items: center; }
+  .group-chips { overflow-x: auto; flex-wrap: nowrap !important; padding-bottom: 4px; }
+  .group-chip { white-space: nowrap; flex: none; }
+  .group-chip .gc-unread { display: inline-block; margin-left: 5px; background: var(--danger); color: #fff; border-radius: 999px; font-size: 9.5px; padding: 0 5px; }
+  .chat-wrap { position: relative; flex: 1; min-height: 0; display: flex; }
+  .chat-wrap .chat { flex: 1; min-height: 0; }
+  .chat { position: relative; }
+  .jump-latest {
+    position: absolute; right: 14px; bottom: 12px; z-index: 3; display: none;
+    border: 1px solid var(--line-strong); background: var(--panel-solid); color: var(--text);
+    border-radius: 999px; padding: 5px 10px; font: inherit; font-size: 11px; cursor: pointer; box-shadow: var(--shadow-1);
+  }
+  .jump-latest.show { display: inline-flex; align-items: center; gap: 5px; }
+  .unread-divider { display: flex; align-items: center; gap: 8px; color: var(--gold); font-size: 10.5px; margin: 4px 0; }
+  .unread-divider::before, .unread-divider::after { content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--gold) 45%, transparent); }
+  .bar { position: relative; }
+  .send-menu {
+    position: absolute; right: 0; bottom: 100%; margin-bottom: 8px; z-index: 12;
+    background: var(--panel-solid); border: 1px solid var(--line-strong); border-radius: 12px;
+    padding: 6px; display: flex; flex-direction: column; gap: 4px; min-width: 176px; box-shadow: var(--shadow-2);
+  }
+  .send-menu[hidden] { display: none; }
+  .send-menu .btn { border: 0; background: transparent; text-align: left; justify-content: flex-start; }
+  .send-menu .btn:hover { background: var(--surface-2); }
+
+  /* ---------- 侧栏抽屉 / 窄窗 ---------- */
+  .aside-toggle { display: none; flex: none; }
+  .aside-mask { position: fixed; inset: 56px 0 0 0; background: rgba(4,5,12,.45); z-index: 23; display: none; }
+  .aside-mask.open { display: block; }
+  .bottom-nav { display: none; }
+  .fab {
+    display: none; position: fixed; right: 16px; bottom: 74px; z-index: 22;
+    width: 48px; height: 48px; border-radius: 50%; border: 0; cursor: pointer;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; font-size: 22px;
+    box-shadow: var(--shadow-1);
+  }
+  .fab-menu {
+    position: fixed; right: 16px; bottom: 130px; z-index: 22; display: none;
+    flex-direction: column; gap: 6px; background: var(--panel-solid);
+    border: 1px solid var(--line-strong); border-radius: 12px; padding: 6px; box-shadow: var(--shadow-2);
+  }
+  .fab-menu.open { display: flex; }
+  .fab-menu .btn { text-align: left; }
+
+  /* ---------- 通用状态 ---------- */
+  .skeleton { position: relative; overflow: hidden; border-radius: 10px; background: rgba(255,255,255,.05); min-height: 46px; }
+  .skeleton::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255,255,255,.08), transparent); animation: sk 1.2s infinite; }
+  @keyframes sk { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+  .error-bar { display: flex; align-items: center; gap: 8px; border: 1px solid rgba(255,107,129,.5); background: rgba(255,107,129,.1); color: var(--danger); border-radius: 10px; padding: 7px 10px; font-size: 11.5px; }
+  .modal { max-height: 88vh; overflow: auto; }
+  .modal-mask.open .modal { animation: modal-in var(--dur-3) ease; }
+  @keyframes modal-in { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+  }
+
+  @media (max-width: 1119px) {
+    .aside { display: none; }
+    .aside-toggle { display: inline-flex; }
+    .stat { display: none; }
+    .home-grid { grid-template-columns: 1fr; }
+    .tasks-board { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
+    body.aside-open .view.active .aside {
+      display: block; position: fixed; right: 0; top: 56px; bottom: 0; width: min(340px, 86vw);
+      z-index: 25; background: var(--panel-solid); border-left: 1px solid var(--line-strong);
+      box-shadow: var(--shadow-2); padding: 18px 16px;
+    }
+  }
+  @media (min-width: 1120px) {
+    .aside-toggle { display: none !important; }
+    body.aside-open .aside, .aside-mask { display: none !important; }
+  }
+  @media (max-width: 900px) {
+    header { padding: 9px 12px; gap: 8px; }
+    .brand small { display: none; }
+    .brand h1 { font-size: 14px; letter-spacing: 1px; }
+    .tabs { gap: 0; }
+    .tab { padding: 6px 10px; font-size: 12px; }
+    .cmd-trigger span, .cmd-trigger kbd { display: none; }
+    .cmd-trigger { padding: 7px 9px; }
+    .icon-btn { width: 32px; height: 32px; border-radius: 10px; }
+    .pane { padding: 14px 14px 16px; gap: 12px; }
+    .home-grid { grid-template-columns: 1fr; gap: 10px; padding-bottom: 64px; }
+    .tasks-board { grid-template-columns: 1fr; padding-bottom: 64px; }
+    .bubble { max-width: 94%; }
+    .bottom-nav {
+      display: flex; position: fixed; left: 0; right: 0; bottom: 0; height: 56px; z-index: 21;
+      background: color-mix(in srgb, var(--panel-solid) 92%, transparent);
+      border-top: 1px solid var(--line); backdrop-filter: blur(12px);
+    }
+    .bn-item {
+      flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+      border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 10.5px; cursor: pointer;
+    }
+    .bn-item.active { color: var(--text); }
+    .bn-item b { font-size: 16px; font-weight: 400; }
+    main { padding-bottom: 56px; }
+    .fab { display: flex; align-items: center; justify-content: center; }
+    .completion-toast-wrap { max-width: calc(100vw - 24px); right: 12px; top: 60px; }
+    .notif-drawer { width: 100vw; }
+    .cmd-overlay { padding-top: 8vh; }
+    .cmd-panel { width: 96vw; }
+  }
+  @media (max-width: 560px) {
+    .brand h1 { display: none; }
+    .brand { gap: 0; }
+    .tab { padding: 6px 8px; font-size: 11.5px; }
+    #themeBtn, #refreshBtn { display: none; }
+    .cmd-trigger { padding: 7px 8px; }
+    .icon-btn { width: 30px; height: 30px; }
+  }
 </style>
 </head>
 <body>
@@ -466,26 +731,74 @@
     <div class="brand">
       <div class="logo">🌌</div>
       <div>
-        <h1>NEBULA</h1>
-        <small>星桥 · AGENT SOCIAL HUB</small>
+        <h1>星桥</h1>
+        <small>NEBULA · AGENT HUB</small>
       </div>
     </div>
-    <div class="tabs">
-      <button class="tab active" data-view="world">世界</button>
-      <button class="tab" data-view="groups">群组</button>
-      <button class="tab" data-view="board">积分榜</button>
+    <div class="tabs" id="mainTabs">
+      <button class="tab active" data-view="home">首页<span class="tab-dot"></span></button>
+      <button class="tab" data-view="world">世界<span class="tab-dot"></span></button>
+      <button class="tab" data-view="groups">群聊<span class="tab-dot"></span></button>
+      <button class="tab" data-view="tasks">任务<span class="tab-dot"></span></button>
     </div>
     <div class="spacer"></div>
+    <button class="cmd-trigger" id="cmdTrigger" title="搜索群 / 会话 / 任务线，或执行命令（Ctrl / ⌘ + K）"><span aria-hidden="true">🔍</span><span>搜索</span><kbd>⌘K</kbd></button>
     <button class="completion-badge" id="completionBadge" hidden title="有未读的任务完成通知，点击查看">✅ 完成 <b id="completionBadgeCount">0</b></button>
+    <button class="icon-btn" id="bellBtn" title="通知中心" aria-label="通知中心">🔔<span class="bell-badge" id="bellBadge" hidden>0</span></button>
     <div class="stat" id="statLine">连接中…</div>
-    <button class="icon-btn" id="themeBtn" title="主题">🎨</button>
-    <button class="icon-btn" id="refreshBtn" title="刷新">↻</button>
-    <button class="icon-btn" id="closeBtn" title="关闭窗口">✕</button>
+    <button class="icon-btn" id="themeBtn" title="主题" aria-label="主题">🎨</button>
+    <button class="icon-btn" id="refreshBtn" title="刷新" aria-label="刷新">↻</button>
+    <button class="icon-btn" id="closeBtn" title="关闭窗口" aria-label="关闭窗口">✕</button>
   </header>
   <main>
-    <section class="view active" id="view-world">
+    <section class="view active" id="view-home">
+      <div class="pane home-pane">
+        <div class="home-head">
+          <div class="section-title">首页 · 今日</div>
+          <span class="hint" id="homeSummary">加载中…</span>
+          <span class="spacer"></span>
+          <button class="btn aside-toggle" data-aside-toggle title="展开右侧详情">详情</button>
+        </div>
+        <div class="home-grid">
+          <div class="home-card" id="homeActionCard">
+            <div class="home-card-head">需要你处理 <b id="homeActionCount">0</b><span class="count" id="homeActionHint"></span></div>
+            <div class="home-list" id="homeActionList"></div>
+          </div>
+          <div class="home-card" id="homeTaskCard">
+            <div class="home-card-head">进行中任务线 <span class="home-link" id="homeTasksMore">全部任务 →</span></div>
+            <div class="home-list" id="homeTaskList"></div>
+          </div>
+          <div class="home-card" id="homeGroupCard">
+            <div class="home-card-head">最近群聊 <span class="home-link" id="homeGroupsMore">全部群聊 →</span></div>
+            <div class="home-list" id="homeGroupList"></div>
+          </div>
+          <div class="home-card" id="homeQuickCard">
+            <div class="home-card-head">快捷操作</div>
+            <div class="home-quick">
+              <button class="btn primary" data-qa="task">＋ 发布任务</button>
+              <button class="btn urgent" data-qa="urgent">⚡ 加急</button>
+              <button class="btn" data-qa="bug">🛡️ 报BUG</button>
+              <button class="btn" data-qa="find">🔍 找成员</button>
+              <button class="btn" data-qa="newgroup">＋ 新建群</button>
+              <button class="btn" data-qa="board">🏆 积分榜</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <aside class="aside scroll">
+        <div class="section-title">在线 / 空闲</div>
+        <div class="home-mini-list" id="homeIdleList"></div>
+        <div class="section-title" style="margin-top:14px">积分榜 · TOP</div>
+        <div class="lb" id="homeLb"></div>
+      </aside>
+    </section>
+    <section class="view" id="view-world">
       <div class="pane">
-        <div class="section-title">世界任务 · 发布即路由</div>
+        <div class="home-head">
+          <div class="section-title">世界任务 · 发布即路由</div>
+          <span class="spacer"></span>
+          <button class="btn aside-toggle" data-aside-toggle title="展开右侧详情">详情</button>
+        </div>
         <div class="feed scroll" id="worldFeed"></div>
         <div class="composer">
           <textarea id="worldInput" placeholder="给世界发任务…（@ 可点名成员；Enter 发送，Shift+Enter 换行）"></textarea>
@@ -511,6 +824,7 @@
         <div class="group-topline">
           <div class="section-title" id="groupTitle">群聊</div>
           <span class="group-fold-summary" id="groupFoldSummary"></span>
+          <button class="btn aside-toggle" data-aside-toggle title="展开群详情 / 成员">详情</button>
           <button class="btn group-fold-btn" id="groupDeleteBtn" title="删除当前群（不删除会话）">删除</button>
           <button class="btn group-fold-btn" id="groupFoldBtn" title="收起/展开群聊头部">收起</button>
         </div>
@@ -518,21 +832,24 @@
           <div class="group-chips" id="groupChips"></div>
           <div class="mention-bar" id="mentionBar"></div>
         </div>
-        <div class="chat scroll" id="groupChat"></div>
+        <div class="chat-wrap">
+          <div class="chat scroll" id="groupChat"></div>
+          <button class="jump-latest" id="jumpLatestBtn" type="button" title="跳到最新消息">↓ 新消息</button>
+        </div>
         <div class="composer">
           <textarea id="groupInput" placeholder="在群里说点什么…（@ 点名；Enter 发送，Shift+Enter 换行）"></textarea>
           <div class="bar">
             <span class="hint" id="groupHint"></span>
             <span class="spacer"></span>
-            <button class="btn" id="groupMoreBtn" title="更多群操作">更多</button>
-            <span class="more-actions" id="groupMorePanel" hidden>
+            <button class="btn" id="groupMoreBtn" title="更多群操作">＋ 更多</button>
+            <span class="send-menu" id="groupMorePanel" hidden>
               <button class="btn" id="reportBugBtn" title="把输入框里的内容作为 BUG 报告投递到「星桥 · 修bug」群，并通知维护者（维护者不接普通任务）">🛡️ 报BUG</button>
+              <button class="btn urgent" id="groupUrgent" title="加急插话：先 @ 目标成员，再点发送；目标忙碌时会尝试打断后插话，宿主不支持打断会明确降级">⚡ 加急</button>
+              <button class="btn mint" id="discussBtn">发起讨论</button>
               <button class="btn" id="teaBtn">☕ 茶话会</button>
               <button class="btn" id="sparkBtn">✨ 闲聊</button>
-              <button class="btn mint" id="discussBtn">发起讨论</button>
-              <button class="btn urgent" id="groupUrgent" title="加急插话：先 @ 目标成员，再点发送；目标忙碌时会尝试打断后插话，宿主不支持打断会明确降级">⚡ 加急</button>
             </span>
-            <button class="btn primary" id="taskBtn">发布任务</button>
+            <button class="btn" id="taskBtn" title="发布群任务：只唤醒组长，成员等派活后才会被唤醒">＋ 任务</button>
             <button class="btn primary" id="groupSend">发送</button>
           </div>
         </div>
@@ -546,9 +863,37 @@
         <div class="members" id="memberList"></div>
       </aside>
     </section>
+    <section class="view" id="view-tasks">
+      <div class="pane">
+        <div class="tasks-toolbar">
+          <div class="section-title">任务看板 · TASK LINES</div>
+          <span class="hint" id="tasksSummary">加载中…</span>
+          <span class="spacer"></span>
+          <select id="taskGroupFilter" aria-label="按群组筛选"></select>
+          <button class="filter-chip active" data-task-status="all">全部</button>
+          <button class="filter-chip" data-task-status="active">进行中</button>
+          <button class="filter-chip" data-task-status="stalled">卡住</button>
+          <button class="filter-chip" data-task-status="waiting">等待</button>
+          <button class="filter-chip" data-task-status="done">完成</button>
+          <button class="btn aside-toggle" data-aside-toggle title="展开统计">统计</button>
+        </div>
+        <div class="tasks-board" id="taskBoard"></div>
+      </div>
+      <aside class="aside scroll">
+        <div class="section-title">任务线统计</div>
+        <div class="home-list" id="tasksAsideStats"></div>
+        <div class="section-title" style="margin-top:14px">说明</div>
+        <div class="card text" style="font-size:12px">阶段由后端任务线自动推进：接收与确认 → 拆解与分工 → 执行 → 复核 → 交付。前端只做展示与催办，不做假拖拽；点卡片可查看详情或跳到对应群。</div>
+      </aside>
+    </section>
     <section class="view" id="view-board">
       <div class="pane">
-        <div class="section-title">积分榜 · 全员</div>
+        <div class="home-head">
+          <div class="section-title">积分榜 · 全员</div>
+          <span class="spacer"></span>
+          <button class="btn" id="boardBackBtn" title="返回首页">← 返回首页</button>
+          <button class="btn aside-toggle" data-aside-toggle title="展开说明">说明</button>
+        </div>
         <div class="feed scroll" id="boardFeed"></div>
       </div>
       <aside class="aside scroll">
@@ -562,6 +907,38 @@
       </aside>
     </section>
   </main>
+</div>
+<div class="aside-mask" id="asideMask"></div>
+<div class="drawer-mask" id="notifMask"></div>
+<div class="notif-drawer" id="notifDrawer" role="dialog" aria-label="通知中心">
+  <div class="notif-head">
+    <h3>通知</h3>
+    <span class="hint" id="notifSummary"></span>
+    <span class="spacer"></span>
+    <button class="btn small" id="notifMarkAll">全部已读</button>
+    <button class="icon-btn" id="notifClose" title="关闭" aria-label="关闭通知">✕</button>
+  </div>
+  <div class="notif-body" id="notifList"></div>
+</div>
+<div class="cmd-overlay" id="cmdOverlay">
+  <div class="cmd-panel" role="dialog" aria-label="搜索与命令">
+    <input class="cmd-input" id="cmdInput" placeholder="搜索群 / 会话 / 任务线，或输入：任务、加急、报BUG、主题、刷新…" autocomplete="off" spellcheck="false" />
+    <div class="cmd-list" id="cmdList"></div>
+  </div>
+</div>
+<nav class="bottom-nav" id="bottomNav" aria-label="主导航">
+  <button class="bn-item active" data-view="home"><b>🏠</b>首页</button>
+  <button class="bn-item" data-view="world"><b>🌍</b>世界</button>
+  <button class="bn-item" data-view="groups"><b>💬</b>群聊</button>
+  <button class="bn-item" data-view="tasks"><b>🧭</b>任务</button>
+</nav>
+<button class="fab" id="fabBtn" title="快捷操作" aria-label="快捷操作">＋</button>
+<div class="fab-menu" id="fabMenu">
+  <button class="btn" data-qa="task">＋ 发布任务</button>
+  <button class="btn urgent" data-qa="urgent">⚡ 加急</button>
+  <button class="btn" data-qa="bug">🛡️ 报BUG</button>
+  <button class="btn" data-qa="find">🔍 找成员</button>
+  <button class="btn" data-qa="newgroup">＋ 新建群</button>
 </div>
 <div class="mention-pop" id="mentionPop"></div>
 <div class="modal-mask" id="themeModal">
@@ -672,7 +1049,7 @@
   var state = { rules: [], groups: [], sessions: [], world: [], reputation: [], config: {}, profiles: {}, deliveries: {} }
   var sessionById = {}
   var currentGroupId = ''
-  var activeView = 'world'
+  var activeView = 'home'
   var urgentMode = false
   var editingSessionId = ''
   var editingAvatar = ''
@@ -683,6 +1060,18 @@
   var taskDraft = { coordinator: '', members: [] }
   var editingStyle = ''
   var editingPersona = ''
+  // ---------------- v3.0 首轮状态 ----------------
+  var NOTIF_READ_KEY = 'nebula.notif.read'
+  var GROUP_SEEN_KEY = 'nebula.groupSeen'
+  var notifReadIds = {}
+  var groupSeen = {}
+  var groupSeenInited = false
+  var palette = { open: false, items: [], index: 0 }
+  var taskFilter = { group: '', status: 'all' }
+  var notifOpen = false
+  var lastError = ''
+  try { notifReadIds = JSON.parse(localStorage.getItem(NOTIF_READ_KEY) || '{}') || {} } catch (e) { notifReadIds = {} }
+  try { groupSeen = JSON.parse(localStorage.getItem(GROUP_SEEN_KEY) || '{}') || {} } catch (e) { groupSeen = {} }
 
   function $(id) { return document.getElementById(id) }
   function esc(value) {
@@ -968,12 +1357,16 @@
         ;(data.sessions || []).forEach(function (s) { sessionById[s.id] = s })
         if (!currentGroupId && (data.groups || []).length) currentGroupId = data.groups[0].id
         if ((data.groups || []).length && !data.groups.some(function (g) { return g.id === currentGroupId })) currentGroupId = data.groups[0].id
+        lastError = ''
+        initGroupSeenBaseline()
         render()
         // task-7：轮询检测新的任务完成通知（只在可见+有焦点+非全屏时提醒；否则只保留未读 badge）。
         detectCompletionNotices()
       })
       .catch(function (error) {
+        lastError = '状态读取失败：' + (error && error.message ? error.message : error)
         $('statLine').textContent = '连接失败：' + (error && error.message ? error.message : error)
+        if (activeView === 'home') renderHome()
         if (showError) toast('读取失败：' + (error && error.message ? error.message : error), true)
       })
   }
@@ -1071,15 +1464,9 @@
     var groupExists = notice.groupId && (state.groups || []).some(function (group) { return group.id === notice.groupId })
     if (groupExists) {
       currentGroupId = notice.groupId
-      activeView = 'groups'
-      document.querySelectorAll('.tab').forEach(function (tab) {
-        tab.classList.toggle('active', tab.getAttribute('data-view') === 'groups')
-      })
-      document.querySelectorAll('.view').forEach(function (view) {
-        view.classList.toggle('active', view.id === 'view-groups')
-      })
       hideAllCompletionToasts()
       markCompletionSeen(notice)
+      switchView('groups')
       render()
       renderCompletionBadge()
       return
@@ -1142,13 +1529,22 @@
   }
   function render() {
     var tl = state.taskLineStats || {}
-    var completionUnread = completionUnreadCount()
-    $('statLine').innerHTML = 'v' + esc(state.version || '1.0.0') + ' · <b>' + (state.sessions || []).length + '</b> 位 agent · <b>' + (state.world || []).length + '</b> 条世界任务 · <b>' + (tl.total || 0) + '</b> 条任务线' + (tl.stalled ? ' · <b style="color:var(--danger)">' + tl.stalled + '</b> 卡住' : '') + (completionUnread > 0 ? ' · <b style="color:var(--mint)">✅ ' + completionUnread + '</b> 条完成未读' : '')
+    var sessions = (state.sessions || []).filter(function (s) { return s && s.internal !== true })
+    var idleCount = sessions.filter(function (s) { return s.availability !== 'busy' }).length
+    var stat = $('statLine')
+    if (stat) {
+      stat.innerHTML = '<b>' + sessions.length + '</b> 会话 · <b style="color:var(--mint)">' + idleCount + '</b> 空闲 · <b>' + (tl.total || 0) + '</b> 任务线' + (tl.stalled ? ' · <b style="color:var(--danger)">' + tl.stalled + '</b> 卡住' : '')
+      stat.title = 'v' + (state.version || '1.0.0') + ' · ' + (state.world || []).length + ' 条世界任务 · ' + Object.keys(state.profiles || {}).length + ' 份申报 · 5 秒自动刷新'
+    }
     renderWorld()
     renderIdleBoard()
     renderTaskLines()
     renderGroups()
     renderBoard()
+    renderHome()
+    renderTasks()
+    renderNotifications()
+    renderBadges()
     renderCompletionBadge()
   }
   /** 空闲看板（v2.9.0）：idle 在前；busy 显示当前任务与开始时间；点行跳会话。 */
@@ -1358,7 +1754,8 @@
     var groupAddBtn = '<button class="group-chip group-add" id="groupAddBtn" title="新建群聊">＋ 新建群</button>'
     $('groupChips').innerHTML = (groups.length
       ? groups.map(function (group) {
-          return '<button class="group-chip' + (group.id === currentGroupId ? ' active' : '') + '" data-group="' + esc(group.id) + '">' + esc(group.name) + '</button>'
+          var unread = groupUnreadCount(group)
+          return '<button class="group-chip' + (group.id === currentGroupId ? ' active' : '') + '" data-group="' + esc(group.id) + '" title="' + esc((group.managerSessionId ? '群管理：' + ((sessionById[group.managerSessionId] && sessionById[group.managerSessionId].title) || '') : '未设群管理')) + '">' + esc(group.name) + (unread > 0 ? '<span class="gc-unread">' + unread + '</span>' : '') + '</button>'
         }).join('')
       : '<div class="hint">还没有群组，点右边「＋ 新建群」。</div>') + groupAddBtn
     var group = currentGroup()
@@ -1367,11 +1764,19 @@
       $('memberList').innerHTML = ''
       $('groupTaskLinesBoard').innerHTML = ''
       $('groupTitle').textContent = '群聊'
+      var emptySummary = $('groupFoldSummary')
+      if (emptySummary) emptySummary.textContent = ''
       groupScrollState.groupId = ''
+      updateJumpLatest()
       return
     }
     $('groupTitle').textContent = '群聊 · ' + group.name
-    $('groupHint').textContent = (urgentMode ? '⚡ 加急模式 · ' : '') + '成员 ' + group.sessionIds.length + ' 人 · 维护者只观察、不接普通任务（bug 点「报BUG」投递到修bug群）· 点成员行里的 contactId 可复制 · 发布任务只唤醒组长 · 发起讨论只聊天、不触发任务'
+    var groupSummary = $('groupFoldSummary')
+    if (groupSummary) {
+      var gManager = group.managerSessionId && sessionById[group.managerSessionId] ? sessionById[group.managerSessionId].title : '未设群管理'
+      groupSummary.textContent = '成员 ' + group.sessionIds.length + ' 人 · 群管理 ' + gManager
+    }
+    $('groupHint').textContent = (urgentMode ? '⚡ 加急模式 · ' : '') + '成员 ' + group.sessionIds.length + ' 人 · 发布任务只唤醒组长 · 加急/报BUG 在「更多」里'
     var urgentBtn = $('groupUrgent')
     if (urgentBtn) urgentBtn.classList.toggle('active', urgentMode)
     $('mentionBar').innerHTML = '<span class="hint">@ 插入：</span>' + group.sessionIds.map(function (id) {
@@ -1384,9 +1789,16 @@
     var previousScroll = chatEl.scrollTop
     var stickToBottom = !sameGroup || groupScrollState.forceBottom || wasNearBottom
     var entries = groupEntries(group)
+    var seenAt = groupSeenAt(group.id)
+    var dividerPending = seenAt > 0 && activeView === 'groups'
     $('groupChat').innerHTML = entries.length
       ? entries.map(function (entry) {
-          if (entry.kind === 'task') return renderTaskCard(entry)
+          var dividerHtml = ''
+          if (dividerPending && entry.author !== 'panel' && (entry.ts || 0) > seenAt) {
+            dividerHtml = '<div class="unread-divider">以下是新消息</div>'
+            dividerPending = false
+          }
+          if (entry.kind === 'task') return dividerHtml + renderTaskCard(entry)
           var who = identityOf(entry.author)
           var mine = entry.author === 'panel'
           var kind = KIND[entry.kind] || entry.kind
@@ -1413,7 +1825,7 @@
             }).join('、') || '（无）'
             taskMeta = '<div class="task-meta">🧑‍✈️ 组长：' + esc(coordinatorName) + ' · 成员：' + esc(assigneeNames) + ' · 状态：' + esc(TASK_STATUS[entry.taskStatus] || entry.taskStatus || '已分配') + '</div>'
           }
-          return '<div class="bubble' + (mine ? ' mine' : '') + (entry.urgent ? ' urgent' : '') + (entry.completionNotice ? ' completion' : '') + '"><div class="avatar clickable" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + avatarHtml(who.avatar) + '</div>' +
+          return dividerHtml + '<div class="bubble' + (mine ? ' mine' : '') + (entry.urgent ? ' urgent' : '') + (entry.completionNotice ? ' completion' : '') + '"><div class="avatar clickable" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + avatarHtml(who.avatar) + '</div>' +
             '<div class="body"><div class="head"><b class="jump" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + esc(who.handle) + '</b><small>' + esc(kind) + (entry.completionNotice ? ' · <span class="badge-completion">✅ 完成通知</span>' : '') + (entry.urgent ? ' · <span class="badge-urgent">⚡ 加急</span>' : '') + ' · ' + when(entry.ts) + '</small><button class="msg-retract" data-retract="' + esc(entry.id) + '" title="撤回这条消息/任务">撤回</button></div>' +
             taskMeta +
             '<div class="msg' + (collapsible ? ' collapsible' : '') + '" data-expandable="' + (collapsible ? '1' : '0') + '" title="' + (collapsible ? '点击展开/收起' : '') + '">' + esc(chatBody) + '</div>' +
@@ -1425,6 +1837,8 @@
     else chatAfter.scrollTop = previousScroll
     groupScrollState.groupId = group.id
     groupScrollState.forceBottom = false
+    if (activeView === 'groups' && !document.hidden) markGroupSeen(group.id)
+    updateJumpLatest()
     renderActivity(group)
     $('memberList').innerHTML = group.sessionIds.map(function (id) {
       var who = identityOf(id)
@@ -2067,15 +2481,7 @@
     $('themeModal').classList.add('open')
   }
   function bindEvents() {
-    document.querySelectorAll('.tab').forEach(function (tab) {
-      tab.addEventListener('click', function () {
-        activeView = tab.getAttribute('data-view')
-        document.querySelectorAll('.tab').forEach(function (item) { item.classList.toggle('active', item === tab) })
-        document.querySelectorAll('.view').forEach(function (view) {
-          view.classList.toggle('active', view.id === 'view-' + activeView)
-        })
-      })
-    })
+    // v3.0：主导航统一在 bindV3Events() 里用 switchView() 绑定（含底部 tab / 未读点）。
     $('refreshBtn').addEventListener('click', function () { refresh(true) })
     var completionBadgeBtn = $('completionBadge')
     if (completionBadgeBtn) completionBadgeBtn.addEventListener('click', openLatestCompletion)
@@ -2239,34 +2645,9 @@
       var retract = event.target.closest('[data-retract]')
       if (retract) { retractEntry(retract.getAttribute('data-retract'), retract); return }
       var approve = event.target.closest('[data-approval]')
-      if (approve) {
-        var approvalId = approve.getAttribute('data-approval')
-        var item = (state.approvals || []).find(function (entry) { return entry.id === approvalId })
-        if (!item) { toast('待复核记录已失效', true); refresh(); return }
-        approve.disabled = true
-        var isRecruit = item.source === 'group.recruit'
-        var action = isRecruit ? 'group.recruit' : 'world.post'
-        var payload = isRecruit
-          ? Object.assign({}, item.payload || { text: item.text }, { approved: true, approvalId: item.id })
-          : { text: item.text, approved: true, approvalId: item.id }
-        command(action, payload).then(function (result) {
-          if (!result || result.ok === false) { approve.disabled = false; toast('执行失败：' + (result && result.error || '未知错误'), true); return }
-          if (result.pendingApproval) { approve.disabled = false; toast('复核未完成：' + (result.message || ''), true); return }
-          toast(isRecruit ? '已通过并执行招募' : '已通过并派发世界任务')
-          refresh()
-        })
-        return
-      }
+      if (approve) { approveApproval(approve.getAttribute('data-approval'), approve); return }
       var reject = event.target.closest('[data-reject]')
-      if (reject) {
-        reject.disabled = true
-        command('approval.reject', { id: reject.getAttribute('data-reject') }).then(function (result) {
-          if (!result || result.ok === false) { reject.disabled = false; toast('驳回失败：' + (result && result.error || '未知错误'), true); return }
-          toast('已驳回该任务')
-          refresh()
-        })
-        return
-      }
+      if (reject) { rejectApproval(reject.getAttribute('data-reject'), reject); return }
       var file = event.target.closest('[data-file]')
       if (file) { previewFile(file.getAttribute('data-file')); return }
       var jump = event.target.closest('[data-jump]')
@@ -2332,6 +2713,793 @@
       if (event.target === $('identityModal')) $('identityModal').classList.remove('open')
     })
   }
+  // ================================================================
+  // v3.0 首轮：首页 / 通知中心 / 任务看板 / 全局搜索 / 响应式
+  // 全部复用 /api/session-bridge/state 与 command，不改后端。
+  // ================================================================
+  function persistNotifRead() { try { localStorage.setItem(NOTIF_READ_KEY, JSON.stringify(notifReadIds)) } catch (e) {} }
+  function persistGroupSeen() { try { localStorage.setItem(GROUP_SEEN_KEY, JSON.stringify(groupSeen)) } catch (e) {} }
+  function groupNameOf(groupId) {
+    var group = (state.groups || []).find(function (item) { return item.id === groupId })
+    return group ? group.name : ''
+  }
+  function latestGroupTs(group) {
+    var entries = groupEntries(group)
+    return entries.length ? (entries[entries.length - 1].ts || 0) : 0
+  }
+  function groupSeenAt(groupId) { return Number(groupSeen[groupId] || 0) || 0 }
+  function markGroupSeen(groupId) {
+    if (!groupId) return
+    var group = (state.groups || []).find(function (item) { return item.id === groupId })
+    if (!group) return
+    var latest = groupEntries(group).reduce(function (max, entry) {
+      return entry.author === 'panel' ? max : Math.max(max, entry.ts || 0)
+    }, 0)
+    if (latest > groupSeenAt(groupId)) { groupSeen[groupId] = latest; persistGroupSeen() }
+  }
+  function groupUnreadCount(group) {
+    if (!group) return 0
+    var seen = groupSeenAt(group.id)
+    if (!seen) return 0
+    return groupEntries(group).filter(function (entry) {
+      return entry.author !== 'panel' && (entry.ts || 0) > seen
+    }).length
+  }
+  function groupUnreadTotal() {
+    return (state.groups || []).reduce(function (sum, group) { return sum + groupUnreadCount(group) }, 0)
+  }
+  /** 首次打开窗口时，把「历史消息」当已读基线，只对之后的新消息显示未读。 */
+  function initGroupSeenBaseline() {
+    var changed = false
+    ;(state.groups || []).forEach(function (group) {
+      if (groupSeen[group.id]) return
+      var latest = groupEntries(group).reduce(function (max, entry) {
+        return entry.author === 'panel' ? max : Math.max(max, entry.ts || 0)
+      }, 0)
+      if (latest) { groupSeen[group.id] = latest; changed = true }
+    })
+    if (changed) persistGroupSeen()
+  }
+  function updateJumpLatest() {
+    var btn = $('jumpLatestBtn')
+    var chat = $('groupChat')
+    if (!btn || !chat) return
+    var far = chat.scrollHeight - chat.scrollTop - chat.clientHeight > 220
+    btn.classList.toggle('show', activeView === 'groups' && far)
+  }
+
+  // ---------------- 通知派生 ----------------
+  function approvalNotices() {
+    return (state.approvals || []).filter(function (item) { return item && item.status === 'pending' }).map(function (item) {
+      return {
+        id: 'approval:' + item.id,
+        kind: 'approval',
+        icon: '🔐',
+        title: '待复核：' + short(String(item.title || item.text || ''), 36),
+        sub: (item.source === 'group.recruit' ? '招募新成员' : '自动创建会话') + ' · ' + when(item.createdAt),
+        ts: item.createdAt || 0,
+        groupId: item.groupId || '',
+        approvalId: item.id
+      }
+    })
+  }
+  function completionNoticeItems() {
+    return completionNoticesNow().map(function (notice) {
+      return {
+        id: 'completion:' + notice.id,
+        kind: 'completion',
+        icon: '✅',
+        title: '任务完成：' + short(String(notice.title || ''), 36),
+        sub: (notice.authorHandle || '组长') + ' · ' + (notice.groupName || '世界') + ' · ' + when(notice.completedAt || notice.ts),
+        ts: notice.completedAt || notice.ts || 0,
+        groupId: notice.groupId || '',
+        notice: notice
+      }
+    })
+  }
+  function stalledNotices() {
+    return (state.taskLines || []).filter(function (line) {
+      return line && (line.lineStatus === 'stalled' || (line.stalledSince && line.lineStatus !== 'done' && line.lineStatus !== 'canceled'))
+    }).map(function (line) {
+      var leader = line.leader || {}
+      return {
+        id: 'stalled:' + (line.taskId || line.title || ''),
+        kind: 'stalled',
+        icon: '⛔',
+        title: '任务卡住：' + short(String(line.title || ''), 36),
+        sub: (line.groupName || '') + ' · 当前 ' + (line.currentStepText || '') + ' · 卡住自 ' + when(line.stalledSince || line.lastProgressAt),
+        ts: line.stalledSince || line.lastProgressAt || 0,
+        groupId: line.groupId || '',
+        line: line,
+        leaderId: leader.id || ''
+      }
+    })
+  }
+  function mentionNotices() {
+    var out = []
+    var seen = {}
+    ;(state.rules || []).forEach(function (entry) {
+      if (!entry || entry.panelMention !== true || entry.hiddenFromChat === true || seen[entry.id]) return
+      seen[entry.id] = true
+      out.push({
+        id: 'mention:' + entry.id,
+        kind: 'mention',
+        icon: '📣',
+        title: '有人 @ 你：' + short(String(entry.title || entry.text || ''), 36),
+        sub: (entry.groupId ? groupNameOf(entry.groupId) || '群聊' : '世界') + ' · ' + identityOf(entry.author).handle + ' · ' + when(entry.ts),
+        ts: entry.ts || 0,
+        groupId: entry.groupId || '',
+        entry: entry
+      })
+    })
+    return out
+  }
+  function noticesAll() {
+    return approvalNotices()
+      .concat(completionNoticeItems())
+      .concat(stalledNotices())
+      .concat(mentionNotices())
+      .sort(function (a, b) { return (b.ts || 0) - (a.ts || 0) })
+  }
+  function noticeIsRead(notice) {
+    if (!notice) return true
+    // 通知中心的完成通知未读独立于旧「完成 toast」的 seen 时间：toast 自动弹过也算未读，
+    // 直到用户在通知中心/首页点过它（这样回到星桥还能看到「完成」待办）。
+    return notifReadIds[notice.id] === true
+  }
+  function noticesUnread() {
+    return noticesAll().filter(function (notice) { return !noticeIsRead(notice) })
+  }
+  function findNoticeById(id) {
+    return noticesAll().find(function (notice) { return notice.id === id }) || null
+  }
+  function renderBadges() {
+    var unread = noticesUnread()
+    var bell = $('bellBadge')
+    if (bell) { bell.textContent = String(unread.length); bell.hidden = unread.length <= 0 }
+    var bellBtn = $('bellBtn')
+    if (bellBtn) bellBtn.title = unread.length ? unread.length + ' 条未读通知' : '通知中心'
+    document.querySelectorAll('.tab').forEach(function (tab) {
+      var view = tab.getAttribute('data-view')
+      var n = 0
+      if (view === 'home' || view === 'groups') n = unread.length
+      else if (view === 'world') n = unread.filter(function (item) { return item.kind === 'approval' || (item.kind === 'mention' && !item.groupId) }).length
+      else if (view === 'tasks') n = unread.filter(function (item) { return item.kind === 'stalled' }).length
+      tab.classList.toggle('has-unread', n > 0)
+    })
+    var groupsTabDot = groupUnreadTotal()
+    var groupsTab = document.querySelector('.tab[data-view="groups"]')
+    if (groupsTab && !groupsTab.classList.contains('has-unread') && groupsTabDot > 0) groupsTab.classList.add('has-unread')
+    document.title = (unread.length ? '(' + unread.length + ') ' : '') + 'NEBULA · 星桥'
+  }
+  function markNoticeRead(notice) {
+    if (!notice) return
+    if (notice.kind === 'completion' && notice.notice) markCompletionSeen(notice.notice)
+    notifReadIds[notice.id] = true
+    persistNotifRead()
+    renderBadges()
+    renderHome()
+    renderNotifications()
+    renderCompletionBadge()
+  }
+  function markAllNotifsRead() {
+    noticesAll().forEach(function (notice) {
+      if (notice.kind === 'completion' && notice.notice) markCompletionSeen(notice.notice)
+      notifReadIds[notice.id] = true
+    })
+    persistNotifRead()
+    renderBadges()
+    renderHome()
+    renderNotifications()
+    renderCompletionBadge()
+    toast('通知已全部标记为已读')
+  }
+  function actOnNotice(notice) {
+    if (!notice) return
+    markNoticeRead(notice)
+    if (notice.kind === 'completion' && notice.notice) { openCompletionTarget(notice.notice); closeNotifications(); return }
+    closeNotifications()
+    if (notice.groupId) {
+      currentGroupId = notice.groupId
+      switchView('groups')
+      return
+    }
+    if (notice.kind === 'approval') { switchView('world'); return }
+    if (notice.kind === 'stalled' && notice.line) { openTaskLine(notice.line); return }
+    if (notice.kind === 'mention' && notice.entry) {
+      if (notice.entry.groupId) { currentGroupId = notice.entry.groupId; switchView('groups') }
+      else switchView('world')
+    }
+  }
+
+  // ---------------- 首页 ----------------
+  function homeActionHtml(notice) {
+    var actions = notice.kind === 'approval'
+      ? '<button class="btn small primary" data-home-approve="' + esc(notice.approvalId) + '">通过</button><button class="btn small" data-home-reject="' + esc(notice.approvalId) + '">驳回</button>'
+      : '<button class="btn small" data-notif-open="' + esc(notice.id) + '">查看</button>'
+    return '<div class="home-item" data-notif-open="' + esc(notice.id) + '">' +
+      '<span class="hi-icon">' + notice.icon + '</span>' +
+      '<div class="hi-main"><div class="hi-title">' + esc(notice.title) + '</div><div class="hi-sub">' + esc(notice.sub) + '</div></div>' +
+      '<span class="hi-actions">' + actions + '</span></div>'
+  }
+  function renderHome() {
+    var actions = noticesUnread().slice(0, 8)
+    var tl = state.taskLineStats || {}
+    var sessions = (state.sessions || []).filter(function (session) { return session && session.internal !== true })
+    var idleCount = sessions.filter(function (session) { return session.availability !== 'busy' }).length
+    var countEl = $('homeActionCount')
+    if (countEl) countEl.textContent = String(actions.length)
+    var hintEl = $('homeActionHint')
+    if (hintEl) hintEl.textContent = lastError ? ' · 连接异常' : ''
+    var summary = $('homeSummary')
+    if (summary) summary.textContent = '待处理 ' + actions.length + ' · 任务线 ' + (tl.active || 0) + ' 进行 / ' + (tl.stalled || 0) + ' 卡住 · 空闲 ' + idleCount + ' 位'
+    var actionList = $('homeActionList')
+    if (actionList) {
+      var parts = []
+      if (lastError) {
+        parts.push('<div class="error-bar">⚠ ' + esc(lastError) + '<span class="spacer"></span><button class="btn small" data-home-retry>重试</button></div>')
+      }
+      if (!state.version && !lastError) {
+        parts.push('<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>')
+      } else if (!actions.length) {
+        parts.push('<div class="home-empty">✅ 当前没有需要你处理的事项</div>')
+      } else {
+        actions.forEach(function (notice) { parts.push(homeActionHtml(notice)) })
+      }
+      actionList.innerHTML = parts.join('')
+    }
+    var taskList = $('homeTaskList')
+    if (taskList) {
+      var openLines = (state.taskLines || []).filter(function (line) {
+        var status = lineStatusOf(line)
+        return status === 'active' || status === 'stalled' || status === 'waiting'
+      })
+      taskList.innerHTML = openLines.length ? openLines.slice(0, 4).map(function (line) {
+        var index = state.taskLines.indexOf(line)
+        var status = lineStatusOf(line)
+        var leader = line.leader || {}
+        var nudge = leader.id ? '<button class="btn small urgent" data-home-nudge="' + index + '" title="给组长发加急插话催进度">⚡ 催</button>' : ''
+        return '<div class="home-item" data-home-line="' + index + '">' +
+          '<span class="hi-icon">' + (status === 'stalled' ? '⛔' : '🧭') + '</span>' +
+          '<div class="hi-main"><div class="hi-title">' + esc(line.title || '任务线') + '</div>' +
+          '<div class="hi-sub">' + esc((line.groupName || '') + ' · ' + (line.currentStepText || '') + ' · ' + (line.progress || 0) + '%' + (status === 'stalled' ? ' · 卡住' : '')) + '</div>' +
+          '<div class="tl-progress" style="margin-top:4px"><span style="width:' + Math.max(0, Math.min(100, line.progress || 0)) + '%"></span></div></div>' +
+          '<span class="hi-actions">' + nudge + '</span></div>'
+      }).join('') : '<div class="home-empty">还没有进行中的任务线。在群聊里「发布任务」会自动生成 5 阶段清单。</div>'
+    }
+    var groupList = $('homeGroupList')
+    if (groupList) {
+      var groups = (state.groups || []).slice().sort(function (a, b) {
+        var ua = groupUnreadCount(a)
+        var ub = groupUnreadCount(b)
+        if (ua !== ub) return ub - ua
+        return latestGroupTs(b) - latestGroupTs(a)
+      })
+      groupList.innerHTML = groups.length ? groups.slice(0, 5).map(function (group) {
+        var unread = groupUnreadCount(group)
+        var entries = groupEntries(group)
+        var last = entries.length ? entries[entries.length - 1] : null
+        var who = last ? identityOf(last.author).handle : ''
+        return '<div class="home-item" data-home-group="' + esc(group.id) + '">' +
+          '<span class="hi-icon">💬</span><div class="hi-main">' +
+          '<div class="hi-title">' + esc(group.name) + (unread > 0 ? ' <span class="gc-unread">' + unread + '</span>' : '') + '</div>' +
+          '<div class="hi-sub">' + esc(last ? who + '：' + String(last.title || last.text || '').slice(0, 30) : '暂无消息') + '</div></div>' +
+          '<span class="hi-time" style="font-size:10px;color:var(--dim);flex:none">' + (last ? when(last.ts) : '') + '</span></div>'
+      }).join('') : '<div class="home-empty">还没有群聊。点「＋ 新建群」或发布世界任务会自动建群。</div>'
+    }
+    var idleList = $('homeIdleList')
+    if (idleList) {
+      var sorted = sessions.slice().sort(function (a, b) {
+        return (a.availability === 'busy' ? 1 : 0) - (b.availability === 'busy' ? 1 : 0) || (b.points || 0) - (a.points || 0)
+      })
+      idleList.innerHTML = sorted.length ? sorted.slice(0, 10).map(function (session) {
+        var who = identityOf(session.id)
+        var busy = session.availability === 'busy'
+        return '<div class="home-mini" data-home-session="' + esc(session.id) + '" data-title="' + esc(session.title || who.handle) + '" title="' + esc(session.title || '') + '">' +
+          '<span class="dot ' + (busy ? 'busy' : 'idle') + '"></span><b>' + esc(who.handle) + '</b>' +
+          '<span style="margin-left:auto;font-size:10px">' + (busy ? '忙' : '空闲') + '</span></div>'
+      }).join('') : '<div class="home-empty">还没有会话。</div>'
+    }
+    renderLeaderboard($('homeLb'), 5)
+  }
+
+  // ---------------- 任务看板 ----------------
+  function lineStatusOf(line) {
+    var status = String((line && line.lineStatus) || '')
+    if (status === 'done' || status === 'canceled' || status === 'waiting') return status
+    if ((line && line.stalledSince) || status === 'stalled') return 'stalled'
+    return 'active'
+  }
+  function taskLineCardHtml(line) {
+    var index = state.taskLines.indexOf(line)
+    var status = lineStatusOf(line)
+    var leader = line.leader || {}
+    var leaderName = leader.handle || leader.title || '未指派'
+    var steps = (line.steps || []).map(function (step) {
+      var cls = step.status === 'done' ? ' done' : step.status === 'dispatched' ? ' dispatched' : ''
+      var mark = step.status === 'done' ? '✓' : step.status === 'dispatched' ? '◐' : '○'
+      var current = line.lineStatus !== 'done' && line.lineStatus !== 'canceled' && step.i === line.currentStep
+      return '<span class="tl-step' + cls + (current ? ' current' : '') + '" title="' + esc(step.text) + '">' + mark + ' ' + esc(short(step.text || '', 4)) + '</span>'
+    }).join('')
+    var meta = []
+    if (line.groupName) meta.push(line.groupName)
+    if (line.nudgeCount) meta.push('已催 ' + line.nudgeCount + ' 次')
+    if (line.stalledSince) meta.push('卡住自 ' + when(line.stalledSince))
+    return '<div class="tl-card' + (status === 'stalled' ? ' stalled' : '') + '" data-line-index="' + index + '">' +
+      '<div class="tlc-title" title="' + esc(line.title || '') + '">' + esc(line.title || '任务线') + '</div>' +
+      '<div class="tlc-sub"><span>组长 ' + esc(leaderName) + '</span><span>当前 ' + esc(line.currentStepText || '-') + '</span><span>' + (line.progress || 0) + '%</span></div>' +
+      '<div class="tl-steps">' + steps + '</div>' +
+      '<div class="tl-progress"><span style="width:' + Math.max(0, Math.min(100, line.progress || 0)) + '%"></span></div>' +
+      '<div class="tlc-sub">' + (meta.length ? '<span>' + esc(meta.join(' · ')) + '</span>' : '') + '<span style="margin-left:auto">更新 ' + when(line.lastProgressAt) + '</span></div>' +
+      '<div class="tlc-actions"><button class="btn small" data-line-open="' + index + '">详情</button>' +
+      (leader.id ? '<button class="btn small urgent" data-line-nudge="' + index + '">⚡ 催</button>' : '') +
+      '<button class="btn small" data-line-goto="' + index + '">去群里</button></div></div>'
+  }
+  function renderTasks() {
+    var board = $('taskBoard')
+    if (!board) return
+    var lines = state.taskLines || []
+    var groupFilter = $('taskGroupFilter')
+    if (groupFilter) {
+      groupFilter.innerHTML = '<option value="">全部群组</option>' + (state.groups || []).map(function (group) {
+        return '<option value="' + esc(group.id) + '">' + esc(group.name) + '</option>'
+      }).join('')
+      groupFilter.value = taskFilter.group
+    }
+    var stats = state.taskLineStats || {}
+    var summary = $('tasksSummary')
+    if (summary) summary.textContent = '进行 ' + (stats.active || 0) + ' · 等待 ' + (stats.waiting || 0) + ' · 卡住 ' + (stats.stalled || 0) + ' · 完成 ' + (stats.done || 0)
+    var filtered = lines.filter(function (line) {
+      if (taskFilter.group && line.groupId !== taskFilter.group) return false
+      if (taskFilter.status !== 'all' && lineStatusOf(line) !== taskFilter.status) return false
+      return true
+    })
+    var columns = [
+      { key: 'waiting', label: '等待' },
+      { key: 'active', label: '进行中' },
+      { key: 'stalled', label: '卡住' },
+      { key: 'done', label: '完成' }
+    ]
+    var previousScrollTop = board.scrollTop
+    board.innerHTML = columns.map(function (column) {
+      var columnLines = filtered.filter(function (line) { return lineStatusOf(line) === column.key })
+      return '<div class="task-col"><div class="task-col-head"><b>' + column.label + '</b><span class="n">' + columnLines.length + '</span></div>' +
+        '<div class="task-col-body">' + (columnLines.length ? columnLines.map(taskLineCardHtml).join('') : '<div class="home-empty">暂无</div>') + '</div></div>'
+    }).join('')
+    board.scrollTop = previousScrollTop
+    var aside = $('tasksAsideStats')
+    if (aside) {
+      aside.innerHTML = '<div class="home-mini"><b>全部任务线</b><span style="margin-left:auto">' + lines.length + '</span></div>' +
+        '<div class="home-mini"><span class="dot idle"></span><b>进行中</b><span style="margin-left:auto">' + (stats.active || 0) + '</span></div>' +
+        '<div class="home-mini"><span class="dot busy"></span><b>等待</b><span style="margin-left:auto">' + (stats.waiting || 0) + '</span></div>' +
+        '<div class="home-mini"><b style="color:var(--danger)">卡住</b><span style="margin-left:auto;color:var(--danger)">' + (stats.stalled || 0) + '</span></div>' +
+        '<div class="home-mini"><b>已完成</b><span style="margin-left:auto">' + (stats.done || 0) + '</span></div>'
+    }
+  }
+  function lineByIndex(index) {
+    var lines = state.taskLines || []
+    var line = lines[Number(index)]
+    return line || null
+  }
+  function openTaskLine(line) {
+    if (!line) return
+    if (line.taskId) {
+      var task = (state.rules || []).find(function (item) { return item.kind === 'task' && item.id === line.taskId })
+      if (task) { openTaskDetail(task.id); return }
+    }
+    if (line.groupId) {
+      currentGroupId = line.groupId
+      switchView('groups')
+      toast('已跳到任务所在群：' + (line.groupName || '') + '（' + (line.currentStepText || '') + '）')
+      return
+    }
+    toast('任务详情暂不可用：' + (line.title || ''), true)
+  }
+  function nudgeTaskLine(line) {
+    if (!line) return
+    var leader = line.leader || {}
+    if (!leader.id) { toast('这条任务线还没有组长，无法催办', true); return }
+    var group = line.groupId ? (state.groups || []).find(function (item) { return item.id === line.groupId }) : null
+    var payload = {
+      to: leader.id,
+      text: '【任务线催办】' + (line.title || '') + ' 当前阶段：' + (line.currentStepText || '未开始') + '（进度 ' + (line.progress || 0) + '%）。请更新进度或说明卡点；已完成请提交交付。'
+    }
+    if (group) payload.group = group.id
+    command('session.urgent', payload).then(function (result) {
+      if (!result || result.ok === false) { toast('催办失败：' + (result && result.error || '未知错误'), true); return }
+      toast('⚡ 已加急催办组长 ' + (leader.handle || identityOf(leader.id).handle))
+      refresh()
+    }).catch(function (error) {
+      toast('催办失败：' + (error && error.message ? error.message : error), true)
+    })
+  }
+
+  // ---------------- 通知抽屉 / 侧栏抽屉 / 视图切换 ----------------
+  function openNotifications() {
+    notifOpen = true
+    renderNotifications()
+    $('notifDrawer').classList.add('open')
+    $('notifMask').classList.add('open')
+  }
+  function closeNotifications() {
+    notifOpen = false
+    $('notifDrawer').classList.remove('open')
+    $('notifMask').classList.remove('open')
+  }
+  function renderNotifications() {
+    var list = $('notifList')
+    if (!list) return
+    var notices = noticesAll()
+    var unread = notices.filter(function (notice) { return !noticeIsRead(notice) })
+    var summary = $('notifSummary')
+    if (summary) summary.textContent = unread.length ? unread.length + ' 条未读' : '全部已读'
+    if (!notices.length) {
+      list.innerHTML = '<div class="notif-empty">暂时没有通知。<br/>待复核、任务完成、卡住任务线和 @你 都会出现在这里。</div>'
+      return
+    }
+    var previousScrollTop = list.scrollTop
+    list.innerHTML = notices.slice(0, 80).map(function (notice) {
+      return '<div class="notif-item' + (noticeIsRead(notice) ? '' : ' unread') + '" data-notif-id="' + esc(notice.id) + '">' +
+        '<span class="ni-icon">' + notice.icon + '</span>' +
+        '<div class="ni-main"><div class="ni-title">' + esc(notice.title) + '</div><div class="ni-sub">' + esc(notice.sub) + '</div></div>' +
+        '<span class="ni-time">' + when(notice.ts) + '</span></div>'
+    }).join('')
+    list.scrollTop = previousScrollTop
+  }
+  function toggleAside(force) {
+    var open = typeof force === 'boolean' ? force : !document.body.classList.contains('aside-open')
+    document.body.classList.toggle('aside-open', open)
+    var mask = $('asideMask')
+    if (mask) mask.classList.toggle('open', open)
+  }
+  function closeFabMenu() {
+    var menu = $('fabMenu')
+    if (menu) menu.classList.remove('open')
+    document.body.classList.remove('fab-open')
+  }
+  function toggleFabMenu() {
+    var menu = $('fabMenu')
+    if (!menu) return
+    var open = !menu.classList.contains('open')
+    menu.classList.toggle('open', open)
+    document.body.classList.toggle('fab-open', open)
+  }
+  function closeTopModal() {
+    var opened = document.querySelectorAll('.modal-mask.open')
+    if (!opened.length) return false
+    var top = opened[opened.length - 1]
+    top.classList.remove('open')
+    return true
+  }
+  function switchView(name) {
+    if (!name) return
+    activeView = name
+    document.querySelectorAll('.tab').forEach(function (tab) {
+      tab.classList.toggle('active', tab.getAttribute('data-view') === name)
+    })
+    document.querySelectorAll('.bn-item').forEach(function (item) {
+      item.classList.toggle('active', item.getAttribute('data-view') === name)
+    })
+    document.querySelectorAll('.view').forEach(function (view) {
+      view.classList.toggle('active', view.id === 'view-' + name)
+    })
+    toggleAside(false)
+    closeFabMenu()
+    if (name === 'groups') { renderGroups(); updateJumpLatest() }
+    if (name === 'tasks') renderTasks()
+    if (name === 'home') renderHome()
+    if (name === 'world') renderWorld()
+  }
+  function focusComposer() {
+    var target = activeView === 'world' ? $('worldInput') : activeView === 'groups' ? $('groupInput') : null
+    if (!target) { switchView('groups'); target = $('groupInput') }
+    if (target) target.focus()
+  }
+
+  // ---------------- 全局搜索 / 命令面板 ----------------
+  function paletteActions() {
+    return [
+      { kind: '动作', icon: '＋', label: '发布群任务', sub: '当前群 → 打开任务编辑', run: function () { if (!currentGroup()) { toast('先选择一个群聊', true); return } switchView('groups'); openTaskModal() } },
+      { kind: '动作', icon: '💬', label: '新建群聊', sub: '创建群并拉成员', run: function () { openGroupModal() } },
+      { kind: '动作', icon: '🛡️', label: '报 BUG', sub: '投递到「星桥 · 修bug」群', run: function () { ensureBugfixGroup() } },
+      { kind: '动作', icon: '⚡', label: '开启加急模式', sub: '群聊输入区 ⚡ 加急（先 @ 目标成员）', run: function () { if (!currentGroup()) { toast('先选择一个群聊', true); return } switchView('groups'); setUrgentMode(true) } },
+      { kind: '动作', icon: '🧭', label: '任务看板', sub: '所有任务线 · 5 阶段', run: function () { switchView('tasks') } },
+      { kind: '动作', icon: '🏆', label: '积分榜', sub: '全员信誉排行', run: function () { switchView('board') } },
+      { kind: '动作', icon: '🎨', label: '主题工坊', sub: '切换预设 / 自定义主题', run: function () { openThemeModal() } },
+      { kind: '动作', icon: '↻', label: '刷新状态', sub: '立即拉取最新 state', run: function () { refresh(true) } }
+    ]
+  }
+  function paletteItems() {
+    var items = []
+    ;(state.groups || []).forEach(function (group) {
+      var unread = groupUnreadCount(group)
+      items.push({
+        kind: '群聊', icon: '💬', label: group.name,
+        sub: '成员 ' + group.sessionIds.length + ' 人' + (unread ? ' · ' + unread + ' 条未读' : ''),
+        run: function () { currentGroupId = group.id; switchView('groups') }
+      })
+    })
+    ;(state.sessions || []).filter(function (session) { return session && session.internal !== true }).slice(0, 80).forEach(function (session) {
+      var who = identityOf(session.id)
+      items.push({
+        kind: '会话', icon: '👤', label: who.handle, sub: (session.title || '') + ' · ' + contactIdFor(session.id) + ' · ' + (session.availability === 'busy' ? '忙' : '空闲'),
+        run: function () { jumpToSession(session.id, session.title || who.handle) }
+      })
+    })
+    ;(state.taskLines || []).forEach(function (line) {
+      items.push({
+        kind: '任务线', icon: '🧭', label: line.title || '任务线',
+        sub: (line.groupName || '') + ' · ' + (line.currentStepText || '') + ' · ' + (line.progress || 0) + '%',
+        run: function () { openTaskLine(line) }
+      })
+    })
+    return items.concat(paletteActions())
+  }
+  function renderPalette() {
+    var list = $('cmdList')
+    if (!list) return
+    var input = $('cmdInput')
+    var query = String((input && input.value) || '').trim().toLowerCase()
+    var items = palette.items.filter(function (item) {
+      return !query || (item.label + ' ' + item.kind + ' ' + (item.sub || '')).toLowerCase().indexOf(query) >= 0
+    })
+    palette.current = items
+    if (!items.length) {
+      palette.index = 0
+      list.innerHTML = '<div class="cmd-empty">没有匹配结果。试试：群名 / 会话名 / 任务线 / 任务 / 加急 / 报BUG</div>'
+      return
+    }
+    if (palette.index >= items.length) palette.index = items.length - 1
+    if (palette.index < 0) palette.index = 0
+    list.innerHTML = items.map(function (item, index) {
+      return '<div class="cmd-item' + (index === palette.index ? ' active' : '') + '" data-cmd-index="' + index + '">' +
+        '<span>' + item.icon + '</span><div class="ci-main">' + esc(item.label) + '</div>' +
+        '<span class="ci-sub">' + esc(short(item.sub || '', 42)) + '</span><span class="ci-kind">' + esc(item.kind) + '</span></div>'
+    }).join('')
+    var active = list.querySelector('.cmd-item.active')
+    if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest' })
+  }
+  function openPalette(query) {
+    palette.open = true
+    palette.items = paletteItems()
+    palette.index = 0
+    palette.current = []
+    $('cmdOverlay').classList.add('open')
+    var input = $('cmdInput')
+    input.value = String(query || '')
+    renderPalette()
+    setTimeout(function () { input.focus(); input.select() }, 20)
+  }
+  function closePalette() {
+    palette.open = false
+    $('cmdOverlay').classList.remove('open')
+  }
+  function runPaletteIndex() {
+    var item = (palette.current || [])[palette.index]
+    if (!item) return
+    closePalette()
+    try { item.run() } catch (error) { toast('命令执行失败：' + (error && error.message ? error.message : error), true) }
+  }
+  function runQuickAction(kind) {
+    closeFabMenu()
+    if (kind === 'task') {
+      if (!currentGroup()) { switchView('groups'); toast('先选择或新建一个群聊，再发布任务', true); return }
+      switchView('groups')
+      openTaskModal()
+      return
+    }
+    if (kind === 'urgent') {
+      if (!currentGroup()) { switchView('groups'); toast('先选择一个群聊', true); return }
+      switchView('groups')
+      setUrgentMode(true)
+      toast('⚡ 加急模式：先 @ 目标成员再发送（60 秒内同一成员限 1 条）')
+      return
+    }
+    if (kind === 'bug') { ensureBugfixGroup(); return }
+    if (kind === 'find') { openPalette(''); return }
+    if (kind === 'newgroup') { openGroupModal(); return }
+    if (kind === 'board') { switchView('board'); return }
+  }
+
+  // ---------------- 复核操作（首页/世界共用） ----------------
+  function approveApproval(approvalId, button) {
+    var item = (state.approvals || []).find(function (entry) { return entry.id === approvalId })
+    if (!item) { toast('待复核记录已失效', true); refresh(); return }
+    if (button) button.disabled = true
+    var isRecruit = item.source === 'group.recruit'
+    var action = isRecruit ? 'group.recruit' : 'world.post'
+    var payload = isRecruit
+      ? Object.assign({}, item.payload || { text: item.text }, { approved: true, approvalId: item.id })
+      : { text: item.text, approved: true, approvalId: item.id }
+    command(action, payload).then(function (result) {
+      if (!result || result.ok === false) { if (button) button.disabled = false; toast('执行失败：' + (result && result.error || '未知错误'), true); return }
+      if (result.pendingApproval) { if (button) button.disabled = false; toast('复核未完成：' + (result.message || ''), true); return }
+      notifReadIds['approval:' + item.id] = true
+      persistNotifRead()
+      toast(isRecruit ? '已通过并执行招募' : '已通过并派发世界任务')
+      refresh()
+    }).catch(function (error) {
+      if (button) button.disabled = false
+      toast('执行失败：' + (error && error.message ? error.message : error), true)
+    })
+  }
+  function rejectApproval(approvalId, button) {
+    if (button) button.disabled = true
+    command('approval.reject', { id: approvalId }).then(function (result) {
+      if (!result || result.ok === false) { if (button) button.disabled = false; toast('驳回失败：' + (result && result.error || '未知错误'), true); return }
+      notifReadIds['approval:' + approvalId] = true
+      persistNotifRead()
+      toast('已驳回该任务')
+      refresh()
+    }).catch(function (error) {
+      if (button) button.disabled = false
+      toast('驳回失败：' + (error && error.message ? error.message : error), true)
+    })
+  }
+
+  // ---------------- 新 UI 事件 ----------------
+  function onHomeActionClick(event) {
+    var retry = event.target.closest('[data-home-retry]')
+    if (retry) { refresh(true); return }
+    var approve = event.target.closest('[data-home-approve]')
+    if (approve) { approveApproval(approve.getAttribute('data-home-approve'), approve); return }
+    var reject = event.target.closest('[data-home-reject]')
+    if (reject) { rejectApproval(reject.getAttribute('data-home-reject'), reject); return }
+    var noticeEl = event.target.closest('[data-notif-open]')
+    if (noticeEl) {
+      var notice = findNoticeById(noticeEl.getAttribute('data-notif-open'))
+      if (notice) actOnNotice(notice)
+    }
+  }
+  function onHomeTaskClick(event) {
+    var nudge = event.target.closest('[data-home-nudge]')
+    if (nudge) { nudgeTaskLine(lineByIndex(nudge.getAttribute('data-home-nudge'))); return }
+    var item = event.target.closest('[data-home-line]')
+    if (item) { openTaskLine(lineByIndex(item.getAttribute('data-home-line'))); return }
+  }
+  function onTaskBoardClick(event) {
+    var nudge = event.target.closest('[data-line-nudge]')
+    if (nudge) { nudgeTaskLine(lineByIndex(nudge.getAttribute('data-line-nudge'))); return }
+    var goto = event.target.closest('[data-line-goto]')
+    if (goto) {
+      var line = lineByIndex(goto.getAttribute('data-line-goto'))
+      if (line && line.groupId) { currentGroupId = line.groupId; switchView('groups') }
+      else toast('这条任务线没有关联群组', true)
+      return
+    }
+    var open = event.target.closest('[data-line-open]') || event.target.closest('[data-line-index]')
+    if (open) { openTaskLine(lineByIndex(open.getAttribute('data-line-index') || open.getAttribute('data-line-open'))); return }
+  }
+  function handleGlobalKey(event) {
+    var target = event.target
+    var tag = String((target && target.tagName) || '').toLowerCase()
+    var typing = tag === 'input' || tag === 'textarea' || tag === 'select' || (target && target.isContentEditable)
+    var mod = event.ctrlKey || event.metaKey
+    if (mod && String(event.key).toLowerCase() === 'k') {
+      event.preventDefault()
+      if (palette.open) closePalette()
+      else openPalette('')
+      return
+    }
+    if (mod && /^[1-4]$/.test(String(event.key))) {
+      event.preventDefault()
+      switchView(['home', 'world', 'groups', 'tasks'][Number(event.key) - 1])
+      return
+    }
+    if (event.key === 'Escape') {
+      if (palette.open) { closePalette(); return }
+      if (notifOpen) { closeNotifications(); return }
+      if (document.body.classList.contains('aside-open')) { toggleAside(false); return }
+      var morePanel = $('groupMorePanel')
+      if (morePanel && !morePanel.hidden) { morePanel.hidden = true; return }
+      if (document.body.classList.contains('fab-open')) { closeFabMenu(); return }
+      if (urgentMode) { setUrgentMode(false); return }
+      closeTopModal()
+      return
+    }
+    if (!typing && event.key === '/') {
+      event.preventDefault()
+      focusComposer()
+    }
+  }
+  function bindV3Events() {
+    // 主导航 / 底部导航
+    document.querySelectorAll('#mainTabs .tab').forEach(function (tab) {
+      tab.addEventListener('click', function () { switchView(tab.getAttribute('data-view')) })
+    })
+    document.querySelectorAll('.bn-item').forEach(function (item) {
+      item.addEventListener('click', function () { switchView(item.getAttribute('data-view')) })
+    })
+    // 搜索 / 命令面板
+    $('cmdTrigger').addEventListener('click', function () { openPalette('') })
+    $('cmdOverlay').addEventListener('click', function (event) { if (event.target === $('cmdOverlay')) closePalette() })
+    $('cmdInput').addEventListener('input', function () { palette.index = 0; renderPalette() })
+    $('cmdInput').addEventListener('keydown', function (event) {
+      if (event.key === 'ArrowDown') { event.preventDefault(); palette.index += 1; renderPalette(); return }
+      if (event.key === 'ArrowUp') { event.preventDefault(); palette.index -= 1; renderPalette(); return }
+      if (event.key === 'Enter') { event.preventDefault(); runPaletteIndex(); return }
+      if (event.key === 'Escape') { event.preventDefault(); closePalette() }
+    })
+    $('cmdList').addEventListener('click', function (event) {
+      var item = event.target.closest('[data-cmd-index]')
+      if (!item) return
+      palette.index = Number(item.getAttribute('data-cmd-index'))
+      runPaletteIndex()
+    })
+    // 通知
+    $('bellBtn').addEventListener('click', openNotifications)
+    $('notifClose').addEventListener('click', closeNotifications)
+    $('notifMask').addEventListener('click', closeNotifications)
+    $('notifMarkAll').addEventListener('click', markAllNotifsRead)
+    $('notifList').addEventListener('click', function (event) {
+      var item = event.target.closest('[data-notif-id]')
+      if (!item) return
+      var notice = findNoticeById(item.getAttribute('data-notif-id'))
+      if (notice) actOnNotice(notice)
+    })
+    // 侧栏抽屉（900–1119 / <900 不丢内容）
+    document.querySelectorAll('[data-aside-toggle]').forEach(function (button) {
+      button.addEventListener('click', function () { toggleAside() })
+    })
+    $('asideMask').addEventListener('click', function () { toggleAside(false) })
+    // 首页
+    $('homeActionList').addEventListener('click', onHomeActionClick)
+    $('homeTaskList').addEventListener('click', onHomeTaskClick)
+    $('homeGroupList').addEventListener('click', function (event) {
+      var item = event.target.closest('[data-home-group]')
+      if (!item) return
+      currentGroupId = item.getAttribute('data-home-group')
+      switchView('groups')
+    })
+    $('homeIdleList').addEventListener('click', function (event) {
+      var item = event.target.closest('[data-home-session]')
+      if (item) jumpToSession(item.getAttribute('data-home-session'), item.getAttribute('data-title') || '')
+    })
+    $('homeLb').addEventListener('click', function (event) {
+      var jump = event.target.closest('[data-jump]')
+      if (jump) jumpToSession(jump.getAttribute('data-jump'), jump.getAttribute('data-title'))
+    })
+    $('homeTasksMore').addEventListener('click', function () { switchView('tasks') })
+    $('homeGroupsMore').addEventListener('click', function () { switchView('groups') })
+    $('boardBackBtn').addEventListener('click', function () { switchView('home') })
+    // 快捷操作（首页快捷卡 + 窄窗 FAB）
+    document.querySelectorAll('[data-qa]').forEach(function (button) {
+      button.addEventListener('click', function () { runQuickAction(button.getAttribute('data-qa')) })
+    })
+    $('fabBtn').addEventListener('click', function (event) { event.stopPropagation(); toggleFabMenu() })
+    // 任务看板
+    $('taskBoard').addEventListener('click', onTaskBoardClick)
+    $('taskGroupFilter').addEventListener('change', function (event) {
+      taskFilter.group = event.target.value
+      renderTasks()
+    })
+    document.querySelectorAll('[data-task-status]').forEach(function (chip) {
+      chip.addEventListener('click', function () {
+        taskFilter.status = chip.getAttribute('data-task-status')
+        document.querySelectorAll('[data-task-status]').forEach(function (item) { item.classList.toggle('active', item === chip) })
+        renderTasks()
+      })
+    })
+    // 群聊：跳到最新 / 滚动态
+    $('jumpLatestBtn').addEventListener('click', function () {
+      var chat = $('groupChat')
+      if (chat) chat.scrollTop = chat.scrollHeight
+      updateJumpLatest()
+    })
+    $('groupChat').addEventListener('scroll', updateJumpLatest)
+    // 点击空白处收起浮层
+    document.addEventListener('click', function (event) {
+      var morePanel = $('groupMorePanel')
+      if (morePanel && !morePanel.hidden && !event.target.closest('#groupMorePanel') && !event.target.closest('#groupMoreBtn')) morePanel.hidden = true
+      if (document.body.classList.contains('fab-open') && !event.target.closest('#fabMenu') && !event.target.closest('#fabBtn')) closeFabMenu()
+    })
+    document.addEventListener('keydown', handleGlobalKey)
+    window.addEventListener('resize', function () {
+      if (window.innerWidth >= 1120) toggleAside(false)
+      if (window.innerWidth > 900) closeFabMenu()
+    })
+  }
+
   function pingPresence() {
     if (document.visibilityState !== 'visible' || !document.hasFocus()) return
     command('presence.ping', {}).catch(function () {})
@@ -2358,8 +3526,10 @@
     if (notificationEligible()) flushCompletionNotices()
   })
   loadTheme()
-  try { var savedFold = localStorage.getItem('nebula.groupFolded'); groupFolded = savedFold === null ? true : savedFold === '1' } catch (e) { groupFolded = true }
+  // v3.0：群聊头部默认展开（旧折叠按钮保留在 DOM 但隐藏），避免「窄窗丢内容」。
+  groupFolded = false
   applyGroupFold()
+  bindV3Events()
   refresh(true)
   setInterval(function () { refresh(false) }, 5000)
 })()

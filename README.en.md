@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.10.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-3.0.0-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 **English** | [简体中文](README.md)
@@ -228,6 +228,12 @@ install.ps1         # install / uninstall / verify
 ```
 
 The plugin is ESM with no third-party runtime dependencies. The host injects services such as `tools`, `systemPrompt`, `agents`, and `webServer` through `ctx`.
+
+### 16. v3.0 UI redesign (3.0.0)
+
+- New home: needs-attention, active task lines, recent groups, quick actions
+- Notification center with unread state; dedicated task board; Cmd/Ctrl+K search and commands; quieter group chat; three responsive layouts
+- All existing features and contract tests preserved
 
 ## Compatibility & risks
 

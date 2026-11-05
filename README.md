@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.10.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-3.0.0-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 
@@ -226,6 +226,12 @@ install.ps1         # 安装/卸载/验证脚本
 插件使用 ESM，无第三方运行时依赖；宿主通过 `ctx` 注入 `tools`、`systemPrompt`、`agents`、`webServer` 等服务。
 
 ---
+
+### 16. v3.0 界面改版（3.0.0）
+
+- 新首页：需要你处理、进行中任务线、最近群聊、快捷操作
+- 通知中心 + 未读；独立任务看板（等待/进行中/卡住/完成）；⌘K 搜索与命令；群聊去噪；三档响应式
+- 保留原有全部功能与契约测试
 
 ## 兼容性与风险
 
