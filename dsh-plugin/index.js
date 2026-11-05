@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.10.3'
+const VERSION = '2.10.4'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -1037,6 +1037,78 @@ function buildTaskLines(active, options = {}) {
       replyRequestId: openRequest ? openRequest.id : (related[0] && related[0].id) || '',
       taskScope: String(task.taskScope || ''),
       ts: toNumber(task.ts, 0)
+    })
+  }
+  // 兜底：群里已有未完成 request、组长已任命，但没有通过「发布任务」建正式 task 时，
+  // 也让当前工作显示成一条群任务线，避免“任务在跑但看板没有线”。
+  const groups = Array.isArray(options.groups) ? options.groups : []
+  const explicitGroupIds = new Set(lines.filter((line) => !line.synthetic && line.groupId).map((line) => line.groupId))
+  for (const group of groups) {
+    if (!group || !group.id || !group.managerSessionId || explicitGroupIds.has(group.id)) continue
+    const groupEntries = entries.filter((entry) => entry && entry.groupId === group.id)
+    const openRequests = groupEntries.filter(
+      (entry) =>
+        entry.kind === 'request' &&
+        entry.status !== 'answered' &&
+        entry.status !== 'canceled' &&
+        !entry.answeredBy
+    )
+    // 没有正式 task 时，群里的 request/handoff 就是当前工作线：有未完成 request，或最近 2 小时还在交接/派活。
+    const signalEntries = groupEntries.filter((entry) => entry.kind === 'request' || entry.kind === 'handoff')
+    const latestSignal = signalEntries.reduce(
+      (best, entry) => (entry && (!best || (entry.ts || 0) > (best.ts || 0)) ? entry : best),
+      null
+    )
+    const recentSignal = Boolean(latestSignal) && now - toNumber(latestSignal.ts, 0) < 2 * 60 * 60 * 1000
+    if (!openRequests.length && !recentSignal) continue
+    const latestOpen =
+      (openRequests.length
+        ? openRequests.reduce((best, entry) => (entry && (!best || (entry.ts || 0) > (best.ts || 0)) ? entry : best), null)
+        : latestSignal) || latestSignal
+    if (!latestOpen) continue
+    let lastProgressAt = 0
+    for (const entry of groupEntries) lastProgressAt = Math.max(lastProgressAt, toNumber(entry.ts, 0), toNumber(entry.answeredAt, 0))
+    const hasOpen = openRequests.length > 0
+    const steps = defaultTaskSteps()
+    steps[0].status = 'done'
+    steps[1].status = 'done'
+    steps[2].status = hasOpen ? 'dispatched' : 'done'
+    steps[2].dispatchedAt = lastProgressAt || now
+    if (!hasOpen) {
+      steps[3].status = 'dispatched'
+      steps[3].dispatchedAt = lastProgressAt || now
+    }
+    const stale = lastProgressAt > 0 && now - lastProgressAt > TASK_LINE_STALL_MS
+    const baseTitle = String(group.goal || '').trim() || (String(group.name || '').trim() ? `群「${group.name}」当前任务线` : '群当前任务线')
+    const lineTitle = latestOpen.title ? `${baseTitle} · ${String(latestOpen.title).slice(0, 24)}` : baseTitle
+    const members = (Array.isArray(latestOpen.mentions) ? latestOpen.mentions : [])
+      .filter((id) => id && id !== 'panel')
+      .map(describeSession)
+      .filter(Boolean)
+    const currentStep = hasOpen ? 3 : 4
+    lines.push({
+      title: lineTitle,
+      taskId: 'group:' + group.id,
+      groupId: group.id,
+      groupName: String(group.name || ''),
+      worldTask: false,
+      taskStatus: 'working',
+      synthetic: true,
+      leaderId: group.managerSessionId,
+      leader: describeSession(group.managerSessionId),
+      members,
+      steps,
+      currentStep,
+      currentStepText: hasOpen ? '执行' : '复核',
+      progress: hasOpen ? 40 : 60,
+      lineStatus: stale ? 'stalled' : 'active',
+      lastProgressAt,
+      lastNudgeAt: 0,
+      nudgeCount: 0,
+      stalledSince: stale ? lastProgressAt + TASK_LINE_STALL_MS : 0,
+      replyRequestId: latestOpen.id || '',
+      taskScope: String(group.goal || ''),
+      ts: toNumber(latestOpen.ts, 0)
     })
   }
   lines.sort(
@@ -2727,7 +2799,8 @@ export function apply(ctx, config = {}) {
     const taskLines = buildTaskLines(activeEntriesForState, {
       now: Date.now(),
       sessionById: new Map(sessions.map((session) => [session.id, session])),
-      groupNames
+      groupNames,
+      groups
     })
     const taskLineStats = buildTaskLineStats(taskLines)
     // task-7：完成通知数组（供星桥 app 轮询检测；未读由客户端按 lastSeen 时间戳计算）。
@@ -3634,7 +3707,8 @@ export function apply(ctx, config = {}) {
       const lines = buildTaskLines(active, {
         now,
         sessionById: new Map(sessions.map((session) => [session.id, session])),
-        groupNames: groupNameMap()
+        groupNames: groupNameMap(),
+        groups: groupStore.read()
       })
       report.scanned = lines.length
       const byId = new Map(active.map((entry) => [entry.id, entry]))
@@ -8460,7 +8534,8 @@ export function apply(ctx, config = {}) {
             const lines = buildTaskLines(store.readActive(), {
               now: Date.now(),
               sessionById: new Map(sessionsNow.map((session) => [session.id, session])),
-              groupNames: groupNameMap()
+              groupNames: groupNameMap(),
+              groups: groupStore.read()
             })
             const stats = buildTaskLineStats(lines)
             return `共 ${stats.total} 条（等待 ${stats.waiting} / 进行中 ${stats.active} / 卡住 ${stats.stalled} / 完成 ${stats.done} / 已撤回 ${stats.canceled}），累计催办 ${stats.nudged} 次`
@@ -9721,7 +9796,8 @@ export function apply(ctx, config = {}) {
         taskLinesNow = buildTaskLines(activeNow, {
           now,
           sessionById: new Map((stateNow.sessions || []).map((session) => [session.id, session])),
-          groupNames: groupNameMap()
+          groupNames: groupNameMap(),
+          groups: groupStore.read()
         })
       }
       return {
