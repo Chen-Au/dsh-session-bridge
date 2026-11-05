@@ -345,6 +345,14 @@
   .task-status { font-size: 9.5px; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--line-strong); color: var(--mint); }
   .task-status.done { color: var(--dim); border-color: var(--line); }
   .task-status.delegating, .task-status.collecting { color: var(--gold); border-color: rgba(255,209,102,.4); }
+  /* v2.10.1 任务归属锁 / 范围约束 / 重复合并提示 */
+  .task-lock { margin: 6px 0 2px; padding: 7px 9px; border: 1px solid rgba(79,216,255,.26); border-radius: 9px; background: rgba(79,216,255,.06); font-size: 11px; line-height: 1.65; color: #c8d4ef; word-break: break-word; }
+  .task-lock b { color: #fff; }
+  .task-lock .scope-warn { color: var(--gold); }
+  .dedupe-card { border-color: rgba(255,209,102,.42); background: linear-gradient(135deg, rgba(255,209,102,.1), rgba(255,255,255,.02)); }
+  .dedupe-card .title { color: var(--gold); }
+  .dedupe-list { margin: 6px 0 8px; padding-left: 18px; font-size: 11.5px; line-height: 1.7; color: var(--muted); }
+  .dedupe-list b { color: var(--text); }
   .task-actions { margin-top: 8px; }
   .task-members { display: flex; flex-direction: column; gap: 5px; max-height: 190px; overflow: auto; margin-bottom: 4px; }
   .task-member { display: flex; align-items: center; gap: 8px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 9px; cursor: pointer; font-size: 12px; }
@@ -601,7 +609,7 @@
   ]
   var currentTheme = { name: 'nebula', custom: null }
   var KIND = { note:'经验', handoff:'交接', lesson:'教训', decision:'约定', request:'请求', command:'命令', task:'任务', chat:'交流' }
-    var TASK_STATUS = { assigned: '已分配', delegating: '已派发', collecting: '收集中', done: '已完成', canceled: '已撤回', cancelled: '已取消' }
+    var TASK_STATUS = { assigned: '已分配', claimed: '已认领', released: '已释放', delegating: '已派发', collecting: '收集中', done: '已完成', canceled: '已撤回', cancelled: '已取消' }
   var state = { rules: [], groups: [], sessions: [], world: [], reputation: [], config: {}, profiles: {}, deliveries: {} }
   var sessionById = {}
   var currentGroupId = ''
@@ -941,10 +949,15 @@
         var busy = s.availability === 'busy'
         var task = busy && s.currentTask ? String(s.currentTask.title || '') : ''
         var since = busy && s.currentTask && s.currentTask.since ? when(s.currentTask.since) : ''
-        var sub = busy ? (task ? task + (since ? ' · ' + since : '') : '忙碌中') : (s.title || '')
-        return '<div class="idle-row" data-jump="' + esc(s.id) + '" data-title="' + esc(s.title || who.handle) + '" title="' + esc((s.title || '') + (busy && task ? ' · 当前：' + task : '')) + '">' +
+        var owner = busy && s.currentTask && s.currentTask.owner ? identityOf(s.currentTask.owner).handle : ''
+        var scope = busy && s.currentTask ? String(s.currentTask.taskScope || '') : ''
+        var lock = busy && (owner || scope)
+          ? ' · 归属：' + (owner || '未认领') + ' / 仅 scope：' + short(scope || '（未写）', 42)
+          : ''
+        var sub = busy ? (task ? task + (since ? ' · ' + since : '') : '忙碌中') + lock : (s.title || '')
+        return '<div class="idle-row" data-jump="' + esc(s.id) + '" data-title="' + esc(s.title || who.handle) + '" title="' + esc((s.title || '') + (busy && task ? ' · 当前：' + task + lock : '')) + '">' +
           '<span class="dot ' + (busy ? 'busy' : 'idle') + '"></span>' +
-          '<div class="meta"><b>' + esc(who.handle) + '</b><small>' + esc(short(sub, 34)) + '</small></div>' +
+          '<div class="meta"><b>' + esc(who.handle) + '</b><small>' + esc(short(sub, 58)) + '</small></div>' +
           '<span class="avail-badge ' + (busy ? 'busy' : 'idle') + '">' + (busy ? '忙' : '空闲') + '</span>' +
           '</div>'
       }).join('')
@@ -967,6 +980,24 @@
       html += '<div class="chips"><button class="btn primary" data-approval="' + esc(item.id) + '">通过并执行</button><button class="btn" data-reject="' + esc(item.id) + '">驳回</button><button class="btn danger" data-retract="' + esc(item.id) + '" title="撤回这条待复核记录（不会创建会话/工作区）">撤回</button></div>'
       html += '</div></div></div>'
     })
+    // v2.10.1：重复任务合并建议（不自动删数据）。
+    var duplicateGroups = state.duplicates || []
+    if (duplicateGroups.length) {
+      html += '<div class="card dedupe-card">'
+      html += '<div class="row"><div class="avatar">🧩</div><div style="flex:1;min-width:0">'
+      html += '<div class="who"><span class="name">发现 ' + duplicateGroups.length + ' 组疑似重复任务</span><span class="time">仅建议</span></div>'
+      html += '<div class="text">同一目标盘/同请求/同用户需求的任务不会自动删数据；确认后用 task.dedupe（面板/命令）合并，或在派活时加「新一轮」区分为新任务。</div>'
+      html += '<ul class="dedupe-list">'
+      duplicateGroups.slice(0, 5).forEach(function (group) {
+        var primary = group.primary || {}
+        html += '<li>保留 <b>' + esc(primary.title || primary.id) + '</b> · owner：' + esc(primary.owner ? identityOf(primary.owner).handle : '未指定') + '<br/>重复：'
+        html += (group.duplicates || []).map(function (dup) {
+          return esc(dup.title || dup.id) + (dup.owner ? '（' + esc(identityOf(dup.owner).handle) + '）' : '')
+        }).join('、')
+        html += '</li>'
+      })
+      html += '</ul></div></div></div>'
+    }
     ;(state.world || []).slice().reverse().forEach(function (entry) {
       var who = identityOf(entry.author)
       html += '<div class="card' + (entry.urgent ? ' urgent' : '') + '">'
@@ -1132,6 +1163,11 @@
     command('world.post', { text: text }).then(function (result) {
       $('worldSend').disabled = false
       if (!result || result.ok === false) { toast('发布失败：' + (result && result.error || '未知错误'), true); return }
+      if (result.duplicate) {
+        toast('24h 内已有同类任务，已合并到 ' + ((result.existing && (result.existing.taskId || result.existing.id)) || result.taskId || '').slice(0, 14) + '…（owner：' + ((result.existing && result.existing.owner) || result.owner || '未指定') + '），未再建群/任务')
+        refresh()
+        return
+      }
       var notes = []
       if (result.createdSessions && result.createdSessions.length) {
         notes.push('新成员：' + result.createdSessions.map(function (item) { return item.title }).join('、'))
@@ -1209,6 +1245,9 @@
     command('group.post', { id: group.id, text: text, mentionSessionIds: mentionIds }).then(function (result) {
       $('groupSend').disabled = false
       if (!result || result.ok === false) { toast('发送失败：' + (result && result.error || '未知错误'), true); return }
+      if (result.duplicate) {
+        toast('24h 内已有同类任务，已合并到 ' + ((result.existing && (result.existing.taskId || result.existing.id)) || result.taskId || '').slice(0, 14) + '…（owner：' + ((result.existing && result.existing.owner) || result.owner || '未指定') + '），未再建任务')
+      }
       groupScrollState.forceBottom = true
       refresh()
     }).catch(function (error) {
@@ -1313,11 +1352,17 @@
           return '<button class="task-chip jump" data-jump="' + esc(id) + '" data-title="' + esc(taskSessionTitle(id)) + '">@' + esc(identityOf(id).handle) + '</button>'
         }).join('')
       : '<span class="task-chip">无成员（组长独立完成）</span>'
+    var owner = typeof entry.owner === 'string' ? entry.owner : (entry.coordinator || '')
+    var claimLabel = ({ assigned: '已指派', claimed: '已认领', released: '已释放', unclaimed: '未认领' }[entry.claimState] || entry.claimState || '未认领')
+    var lockHtml = '<div class="task-lock">归属：<b>' + esc(owner ? identityOf(owner).handle : '未认领') + '</b>（' + esc(claimLabel) + '） / 仅 scope：' + esc(short(entry.taskScope || '（任务未写 scope）', 140)) +
+      (entry.scopeWarning ? '<br/><span class="scope-warn">⚠ 超出 scope：' + esc(entry.scopeWarning) + '（需 owner 确认，不自动扩展）</span>' : '') +
+      (entry.proposalCount ? '<br/>proposal：' + Number(entry.proposalCount) + ' 条（非 owner，未结算）' : '') + '</div>'
     var who = identityOf(entry.author)
     return '<div class="bubble task-bubble"><div class="avatar clickable" data-jump="' + esc(entry.author) + '" data-title="' + esc(taskSessionTitle(entry.author)) + '">' + avatarHtml(who.avatar) + '</div>' +
       '<div class="body"><div class="head"><b>' + esc(who.handle) + '</b><small>任务 · ' + when(entry.ts) + '</small><span class="task-status ' + esc(status) + '">' + esc(taskStatusLabel(status)) + '</span></div>' +
       '<div class="task-card-title">' + esc(entry.title || entry.text || '群任务') + '</div>' +
       '<div class="task-card-text">' + esc(entry.text || '') + '</div>' +
+      lockHtml +
       '<div class="task-meta">' + coordinatorHtml + memberHtml + '</div>' +
       '<div class="task-actions"><button class="btn small" data-task-detail="' + esc(entry.id) + '">查看任务请求 / 状态</button></div>' +
       '</div></div>'
@@ -1445,6 +1490,11 @@
       $('taskModal').classList.remove('open')
       if ($('groupInput').value.trim() === text) $('groupInput').value = ''
       groupScrollState.forceBottom = true
+      if (result.duplicate) {
+        toast('24h 内已有同类任务，已合并到 ' + ((result.existing && (result.existing.taskId || result.existing.id)) || result.taskId || '').slice(0, 14) + '…（owner：' + ((result.existing && result.existing.owner) || result.owner || '未指定') + '），未再建任务')
+        refresh()
+        return
+      }
       var task = result.task || {}
       var coordinator = task.coordinator || { id: coordinatorId }
       toast('任务已发布：组长 ' + (coordinator.title || identityOf(coordinatorId).handle) + ' · 成员 ' + ((task.assignees || []).length) + ' 人')
@@ -1460,8 +1510,14 @@
     var requests = (state.rules || []).filter(function (item) { return item.kind === 'request' && item.taskId === task.id })
     var coordinator = task.coordinator || ''
     var assignees = Array.isArray(task.assignees) ? task.assignees : []
+    var taskOwner = typeof task.owner === 'string' ? task.owner : (coordinator || '')
+    var claimLabel = ({ assigned: '已指派', claimed: '已认领', released: '已释放', unclaimed: '未认领' }[task.claimState] || task.claimState || '未认领')
     var html = '<div class="task-detail-meta">' +
       '<div>状态：<b>' + esc(taskStatusLabel(task.taskStatus || 'assigned')) + '</b> · 组长：<b>' + esc(coordinator ? identityOf(coordinator).handle : '未指定') + '</b></div>' +
+      '<div>归属：<b>' + esc(taskOwner ? identityOf(taskOwner).handle : '未认领') + '</b> · 认领状态：<b>' + esc(claimLabel) + '</b>' + (task.claimedAt ? ' · ' + when(task.claimedAt) : '') + '</div>' +
+      '<div>仅 scope：<b>' + esc(short(task.taskScope || '（任务未写 scope）', 180)) + '</b></div>' +
+      (task.scopeWarning ? '<div class="scope-warn" style="color:var(--gold)">⚠ 超出 scope：' + esc(task.scopeWarning) + '（需 owner 确认，不自动扩展；确认是新要求时用 scopeConfirmed=true 重发）</div>' : '') +
+      (task.proposalCount ? '<div>proposal：<b>' + Number(task.proposalCount) + '</b> 条（非 owner，未结算）</div>' : '') +
       '<div>成员：<b>' + esc(assignees.length ? assignees.map(function (id) { return identityOf(id).handle }).join('、') : '无（组长独立完成）') + '</b></div>' +
       '<div>创建：' + when(task.ts) + ' · 任务 id：' + esc(task.id) + '</div>' +
       '</div>' +

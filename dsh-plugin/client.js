@@ -257,6 +257,17 @@ window.__ModuleLoader__.load({
           .filter(function (sessionId) {
             return sessionId !== ''
           }),
+        // v2.10.1 任务归属锁 + 范围约束：owner/claimState/taskScope 由 state 原样下发。
+        owner: asString(src.owner),
+        ownerRole: asString(src.ownerRole),
+        claimedAt: asTimestamp(src.claimedAt),
+        claimState: asString(src.claimState),
+        taskScope: asString(src.taskScope),
+        scopeWarning: asString(src.scopeWarning),
+        proposal: src.proposal === true,
+        taskVerdict: asString(src.taskVerdict),
+        proposalCount: asNumber(src.proposalCount, 0),
+        lastProposalBy: asString(src.lastProposalBy),
         status: asString(src.status),
         answeredBy: asString(src.answeredBy),
         replyId: asString(src.replyId),
@@ -295,7 +306,10 @@ window.__ModuleLoader__.load({
             title: asString(src.currentTask.title),
             kind: asString(src.currentTask.kind),
             role: asString(src.currentTask.role),
-            since: asTimestamp(src.currentTask.since)
+            since: asTimestamp(src.currentTask.since),
+            owner: asString(src.currentTask.owner),
+            taskScope: asString(src.currentTask.taskScope),
+            claimState: asString(src.currentTask.claimState)
           }
         : null
       return {
@@ -391,6 +405,40 @@ window.__ModuleLoader__.load({
         .filter(function (rule) {
           return rule.id !== ''
         })
+      // v2.10.1：重复任务合并建议（只提示，不自动删数据）。
+      var duplicates = asArray(src.duplicates)
+        .filter(isPlainObject)
+        .map(function (item) {
+          var primary = isPlainObject(item.primary) ? item.primary : {}
+          return {
+            primary: {
+              id: asString(primary.id),
+              title: asString(primary.title),
+              owner: asString(primary.owner),
+              taskScope: asString(primary.taskScope),
+              groupId: asString(primary.groupId),
+              taskStatus: asString(primary.taskStatus),
+              ts: asTimestamp(primary.ts)
+            },
+            duplicates: asArray(item.duplicates)
+              .filter(isPlainObject)
+              .map(function (dup) {
+                return {
+                  id: asString(dup.id),
+                  title: asString(dup.title),
+                  owner: asString(dup.owner),
+                  taskScope: asString(dup.taskScope),
+                  reason: asString(dup.reason)
+                }
+              })
+              .filter(function (dup) {
+                return dup.id !== ''
+              })
+          }
+        })
+        .filter(function (group) {
+          return group.primary.id !== '' && group.duplicates.length > 0
+        })
       var permissions = {}
       if (isPlainObject(src.permissions)) {
         Object.keys(src.permissions).forEach(function (sessionId) {
@@ -442,6 +490,7 @@ window.__ModuleLoader__.load({
         reputation: reputation,
         rules: rules,
         world: world,
+        duplicates: duplicates,
         permissions: permissions,
         groups: groups,
         sessions: sessions,
@@ -2635,7 +2684,17 @@ window.__ModuleLoader__.load({
                           .join('、')
                       : '（无）') +
                     ' · 状态：' +
-                    ({ assigned: '已分配', delegating: '已派发', collecting: '收集中', done: '已完成' }[rule.taskStatus] || rule.taskStatus || '已分配') +
+                    ({ assigned: '已分配', claimed: '已认领', released: '已释放', delegating: '已派发', collecting: '收集中', done: '已完成', canceled: '已撤回' }[rule.taskStatus] || rule.taskStatus || '已分配') +
+                    ' · 归属：' +
+                    (rule.owner
+                      ? (index.sessionById[rule.owner] ? index.sessionById[rule.owner].title : shortId(rule.owner))
+                      : '未认领') +
+                    '（' +
+                    ({ assigned: '已指派', claimed: '已认领', released: '已释放', unclaimed: '未认领' }[rule.claimState] || rule.claimState || '未认领') +
+                    '）' +
+                    ' / 仅 scope：' +
+                    asString(rule.taskScope).slice(0, 60) +
+                    (rule.scopeWarning ? ' · ⚠ 超出 scope：' + asString(rule.scopeWarning).slice(0, 40) : '') +
                     (function () {
                       var steps = asArray(rule.steps)
                       if (!steps.length) return ''
@@ -3794,6 +3853,9 @@ window.__ModuleLoader__.load({
             setResult({
               loading: false,
               duplicate: payload.duplicate === true,
+              existing: payload.existing && typeof payload.existing === 'object' ? payload.existing : null,
+              owner: asString(payload.owner),
+              taskId: asString(payload.taskId),
               assigned: asArray(payload.assigned),
               createdSession: asString(payload.createdSession),
               createdSessionTitle: asString(payload.createdSessionTitle),
@@ -3836,15 +3898,23 @@ window.__ModuleLoader__.load({
         resultLine = h(
           'div',
           { style: mergeStyle(styles.rowMuted, { fontSize: 11 }) },
-          result.duplicate ? '⚠ 相同任务刚刚已发送，本次重复点击已忽略' : routerText,
+          result.duplicate
+            ? '⚠ 24h 内已有同类任务，已合并到 existing task id=' +
+              ((result.existing && result.existing.taskId) || result.taskId || '').slice(0, 14) +
+              '…，owner=' +
+              (result.owner || (result.existing && result.existing.owner) || '（未指定）') +
+              '；本次未再建群/任务'
+            : routerText,
           h('br'),
-          result.createdWorkspace
-            ? '已新建工作区：' + result.createdWorkspace + '；并新建会话派发任务'
-            : result.createdSession
-              ? '已新建会话' + (result.createdSessionTitle ? '「' + result.createdSessionTitle + '」' : '') + '并把任务派发过去'
-              : assignedTitles.length
-                ? '已派给：' + assignedTitles.join('、') + (result.woken ? '（已唤醒）' : '（离线，下次运行处理）')
-                : '已发布到世界' + (result.createError ? '；新建失败：' + result.createError : '')
+          result.duplicate
+            ? '如确认是新任务，请加「新一轮/全新」或 forceNew=true 重新发布。'
+            : result.createdWorkspace
+              ? '已新建工作区：' + result.createdWorkspace + '；并新建会话派发任务'
+              : result.createdSession
+                ? '已新建会话' + (result.createdSessionTitle ? '「' + result.createdSessionTitle + '」' : '') + '并把任务派发过去'
+                : assignedTitles.length
+                  ? '已派给：' + assignedTitles.join('、') + (result.woken ? '（已唤醒）' : '（离线，下次运行处理）')
+                  : '已发布到世界' + (result.createError ? '；新建失败：' + result.createError : '')
         )
       }
 
@@ -3961,6 +4031,35 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { ref: bodyRef, style: chatStyles.chatBody },
+                asArray(state.duplicates).length > 0
+                  ? h(
+                      'div',
+                      {
+                        style: {
+                          margin: '6px 0 10px',
+                          padding: '6px 8px',
+                          border: '1px solid rgba(255,193,7,.45)',
+                          borderRadius: 6,
+                          background: 'rgba(255,193,7,.08)',
+                          fontSize: 11,
+                          lineHeight: 1.5
+                        }
+                      },
+                      '⚠ 发现 ' +
+                        state.duplicates.length +
+                        ' 组疑似重复任务：' +
+                        state.duplicates
+                          .slice(0, 3)
+                          .map(function (group) {
+                            return (
+                              (group.primary.title || shortId(group.primary.id)) +
+                              (group.primary.owner ? '（owner ' + shortId(group.primary.owner) + '）' : '')
+                            )
+                          })
+                          .join('、') +
+                        '。已阻止重复建群/任务；可在任务详情或用 task.dedupe 查看合并建议。'
+                    )
+                  : null,
                 rules.length === 0
                   ? h(EmptyHint, null, '世界里还没有任务。把要做的事写在下面发出来：有对应申报的成员就派给他，没有就自动新建会话。')
                   : rules.map(function (rule) {

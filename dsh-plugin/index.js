@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.10.0'
+const VERSION = '2.10.1'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -166,6 +166,8 @@ const INSTRUCTIONS = `## 跨会话经验桥（session-bridge，插件自动生�
 **会话引用（统一解析）**：\`session_ask\`/\`session_nudge\` 的 \`to\`、\`group_member\` 的 \`sessions\`、面板加/移成员、世界任务正文里的 \`@\` 都支持同一种写法：完整 id、不带 \`session-\` 前缀的 id、contactId（8 位）、短 id（6 位压缩前缀）、handle、标题（精确优先，其次包含）。唯一前缀/后缀也可以。**匹配到多个时会报错并列出候选，不会替你猜**；这时改用 contactId 或完整 id 重试即可。
 
 **群任务角色（防止人人都是组长）**：用户在群里 @ 多人发布任务时，宿主会指定唯一组长并把任务拆成两步：组长先分工、收集成员结果、最后向用户提交唯一汇总；成员只做自己那部分，用 replyTo 交给组长，不要直接向用户汇报、不要自称组长。任务创建时只唤醒组长，成员只有被组长派活时才会被唤醒一次。
+
+**任务归属锁与范围约束（v2.10.1，必须遵守）**：**全盘读权限不是任务授权**。每个 task/request 都有唯一 owner 和 taskScope（只做什么、不做什么）；只执行明确分配给你的 scope，**不要补做他人分工的 A/B 两侧、工具链、runbook，也不要顺手扩到另一个盘/全盘盘点**。发现缺口先报告或交给 owner，由 owner 决定是否扩展；扩展前先在原 scope 上确认，不要自动改任务边界。任务被他人认领时不要抢（\`task.claim\` 会返回 owner 和拒绝原因）；只有 owner 能推进 taskStatus/结算完成奖励，非 owner 的回复只会作为 proposal/建议记录。创建任务/派活前宿主会按 24h 文本+目标盘查重，命中会返回 existing task id/owner，不要另建群或任务。
 
 **空闲看板（availability）**：宿主为每个主会话维护 idle/busy——有「未回答的 request」或「未完成的群任务（组长）」即 busy，交回结果/回答后自动回到 idle。世界任务的非显式匹配、协同扩展只派 idle 成员；显式 @ 某人时仍尊重用户选择（忙也派）。群任务指派组长时也优先空闲成员，若组长忙会在派活消息里提示「可能排队」。
 
@@ -422,6 +424,290 @@ function similarity(a, b) {
   let inter = 0
   for (const gram of A) if (B.has(gram)) inter += 1
   return (2 * inter) / (A.size + B.size)
+}
+
+// ------------------------------------------------------------------ 任务归属锁 / 范围约束 / 查重（v2.10.1）
+/**
+ * 语义提醒：entry.scope 已经被「可见性」占用（workspace/global/group），不能把
+ * 「只做 X 盘清理」写进去，否则会把条目投递错工作区。任务的工作范围用 taskScope，
+ * 等价于需求里的任务 scope；owner/claimedAt/claimState 用于唯一归属锁。
+ */
+const TASK_SCOPE_MAX = 400
+const TASK_DUPLICATE_WINDOW_MS = 24 * 3600 * 1000
+const TASK_DUPLICATE_THRESHOLD = 0.86
+const TASK_SCOPE_DEFAULT_SUFFIX =
+  '不做：其他成员分工（A/B 侧）、工具链、runbook、额外盘/全盘盘点；发现缺口先报告 owner，不要补做。'
+const TASK_SCOPE_DISPATCH_TAIL = '仅做 scope，禁止扩展；全盘读权限不是任务授权。'
+
+/** 从正文提取目标盘：X 盘 / x盘 / X:\ / drive X。 */
+function extractDriveTargets(value) {
+  const text = String(value || '')
+  const out = new Set()
+  for (const match of text.matchAll(/(?:^|[^A-Za-z0-9])([A-Za-z])\s*盘/g)) out.add(match[1].toUpperCase())
+  for (const match of text.matchAll(/(?:^|[^A-Za-z0-9])([A-Za-z])\s*[:：]\s*[\\/]/g)) out.add(match[1].toUpperCase())
+  for (const match of text.matchAll(/(?:drive|disk)\s*([A-Za-z])\b/gi)) out.add(match[1].toUpperCase())
+  for (const match of text.matchAll(/(?:盘|磁盘)\s*([A-Za-z])\b/g)) out.add(match[1].toUpperCase())
+  return [...out]
+}
+
+/** 任务动作类别（可多个）：用于「同目标盘 + 同类动作」判重。 */
+function taskActionKindsOf(value) {
+  const text = String(value || '')
+  const kinds = new Set()
+  const rules = [
+    { re: /(清理|清空|清扫|腾空间|瘦身|删(?:掉|除)?|disk\s*clean)/i, kind: 'cleanup' },
+    { re: /(盘点|清点|inventory|全盘扫描|扫描|梳理文件)/i, kind: 'inventory' },
+    { re: /(runbook|操作手册|工具链|toolchain|脚本|操作流程)/i, kind: 'runbook' },
+    { re: /(报告|汇总|总结|结论|分析|整理)/i, kind: 'report' },
+    { re: /(审阅|评审|复核|校对|review)/i, kind: 'review' },
+    { re: /(测试|验证|验收|压测|门禁)/i, kind: 'test' },
+    { re: /(修复|修\s*bug|debug|排错|报错)/i, kind: 'fix' }
+  ]
+  for (const rule of rules) if (rule.re.test(text)) kinds.add(rule.kind)
+  return kinds
+}
+
+/** 去掉口语/任务壳后的核心文本，避免「请/帮我/任务」等词把相似度拉低。 */
+function taskCoreText(value) {
+  return normalizeText(value).replace(/(请|麻烦|帮我|帮忙|需要|一下|进行|完成|处理|任务|工作|负责|安排|现在|大家|我们)/g, '')
+}
+
+/** 显式「新一轮/第二次/第 N 版」不是重复：允许继续建新任务，不触发 24h 合并。 */
+function isExplicitNewRound(value) {
+  return /(新任务|新一轮|新的一轮|第\s*[一二三四五六七八九十0-9]+\s*轮|第\s*[一二三四五六七八九十0-9]+\s*版|[一二三四五六七八九十0-9]+\s*次(?:审阅|修改|复核|重做|执行|交付)|重做|重新做|另起|单独任务|独立任务)/i.test(
+    String(value || '')
+  )
+}
+
+/** 生成默认 scope：只做本条明确分配的部分 + 明确的「不做」边界。 */
+function deriveTaskScope(text, title = '') {
+  const summary = String(text || title || '').replace(/\s+/g, ' ').trim()
+  if (!summary) return `仅做：本任务明确分配的部分；${TASK_SCOPE_DEFAULT_SUFFIX}`
+  return `仅做：${truncate(summary, 120)}；${TASK_SCOPE_DEFAULT_SUFFIX}`
+}
+
+/** 任务/请求必须带 scope：显式值优先，否则从正文推导（不会留空）。 */
+function normalizeTaskScope(value, fallbackText = '') {
+  const raw = Array.isArray(value) ? value.join('；') : String(value || '').trim()
+  const base = raw ? raw.replace(/\s+/g, ' ') : deriveTaskScope(fallbackText)
+  if (!base) return deriveTaskScope(fallbackText).slice(0, TASK_SCOPE_MAX)
+  // 每个 scope 都写清「只做什么、不做什么」；显式 scope 缺边界时补默认边界。
+  const withBoundary = /(不做|不碰|禁止|不要|不含|不负责)/.test(base)
+    ? base
+    : `${base}；${TASK_SCOPE_DEFAULT_SUFFIX}`
+  return truncate(withBoundary, TASK_SCOPE_MAX)
+}
+
+/** 关键词是否以肯定语气出现（避开「不要/不做/禁止」这类否定句）。 */
+function hasAffirmativeMatch(text, pattern) {
+  const source = String(text || '')
+  for (const match of source.matchAll(pattern)) {
+    const before = source.slice(Math.max(0, (match.index || 0) - 14), match.index || 0)
+    if (/(不|别|勿|无需|禁止|不要|不做|不碰|不补|未|没有)\s*$/.test(before)) continue
+    if (/(不要|禁止|别|无需)[^。；\n]{0,14}$/.test(before)) continue
+    return true
+  }
+  return false
+}
+
+/**
+ * 判断一段交付/派活文本是否明显超出任务 scope（例如另一个盘的全盘盘点、额外 runbook、
+ * 他人 A/B 分工）。只做提示，不自动扩展 scope；owner 需显式确认。
+ */
+function detectScopeExpansion(scopeText, candidateText) {
+  const scope = String(scopeText || '')
+  const text = String(candidateText || '')
+  if (!scope || !text) return []
+  const reasons = []
+  // 「不做 Y 盘/runbook」是边界，不是授权：只拿「不做」之前的允许区间做比较。
+  const allowedScope = scope.split(/(?:不做|不碰|禁止|不要|不含|不负责)/)[0] || scope
+  const scopeDrives = extractDriveTargets(allowedScope)
+  const textDrives = extractDriveTargets(text)
+  if (scopeDrives.length) {
+    const extraDrives = textDrives.filter((drive) => !scopeDrives.includes(drive))
+    if (extraDrives.length) reasons.push(`涉及 scope 之外的 ${extraDrives.join('/')} 盘`)
+  }
+  if (
+    hasAffirmativeMatch(text, /(全盘|整盘|整块盘|所有盘|每个盘|另一个盘|其他盘|额外.{0,6}盘|第二块盘)/gi) &&
+    !hasAffirmativeMatch(allowedScope, /(全盘|整盘|整块盘|所有盘|每个盘)/gi)
+  ) {
+    reasons.push('出现全盘/额外盘范围')
+  }
+  if (
+    hasAffirmativeMatch(text, /(runbook|操作手册|工具链|toolchain|额外.{0,8}(脚本|流程|文档)|再补.{0,8}(脚本|流程|文档))/gi) &&
+    !hasAffirmativeMatch(allowedScope, /(runbook|操作手册|工具链|toolchain)/gi)
+  ) {
+    reasons.push('出现 scope 外的 runbook/工具链')
+  }
+  if (
+    hasAffirmativeMatch(text, /(A\s*[\/／]\s*B|两侧|两端|另一侧|对方那侧)/gi) &&
+    !hasAffirmativeMatch(allowedScope, /(A\s*[\/／]\s*B|两侧)/gi)
+  ) {
+    reasons.push('出现他人 A/B 分工')
+  }
+  return [...new Set(reasons)]
+}
+
+/** 条目是否仍是「活动」任务/请求（用于 24h 查重）。 */
+function isActiveTaskLike(entry, now = Date.now()) {
+  if (!entry || typeof entry !== 'object') return false
+  if (isExpired(entry, now)) return false
+  if (entry.kind === 'task') return !['done', 'canceled'].includes(entry.taskStatus || 'assigned')
+  if (entry.kind === 'request') return entry.status !== 'answered' && entry.status !== 'canceled' && !entry.answeredBy
+  if (entry.kind === 'command') return true
+  return false
+}
+
+/** 任务 owner：owner 优先，其次 coordinator / 首位 assignee / 作者。 */
+function taskOwnerOf(entry) {
+  if (!entry || typeof entry !== 'object') return ''
+  return (
+    (typeof entry.owner === 'string' && entry.owner) ||
+    (typeof entry.coordinator === 'string' && entry.coordinator) ||
+    (Array.isArray(entry.assignees) && entry.assignees.find((item) => typeof item === 'string' && item)) ||
+    (typeof entry.author === 'string' && entry.author !== 'panel' ? entry.author : '') ||
+    ''
+  )
+}
+
+/** 请求 owner：任务请求继承任务 owner；普通请求是收件人。 */
+function requestOwnerOf(entry, taskEntry = null) {
+  if (!entry || typeof entry !== 'object') return ''
+  if (entry.taskId && taskEntry) return taskOwnerOf(taskEntry)
+  return (
+    (typeof entry.owner === 'string' && entry.owner) ||
+    (Array.isArray(entry.requestTo) && entry.requestTo.find((item) => typeof item === 'string' && item)) ||
+    ''
+  )
+}
+
+/**
+ * 在 active 条目里找 24h 内的重复任务/请求。命中返回 { entry, score, reason }。
+ * opts: { text, groupId, worldOnly, excludeId, now, windowMs, threshold }
+ */
+function findDuplicateTaskEntry(entries, options = {}) {
+  const text = String(options.text || '').trim()
+  if (!text) return null
+  if (isExplicitNewRound(text)) return null
+  const now = toNumber(options.now, Date.now())
+  const windowMs = toNumber(options.windowMs, TASK_DUPLICATE_WINDOW_MS)
+  const threshold = toNumber(options.threshold, TASK_DUPLICATE_THRESHOLD)
+  const groupId = String(options.groupId || '')
+  const worldOnly = options.worldOnly === true
+  const wantedDrives = extractDriveTargets(text)
+  const wantedKinds = taskActionKindsOf(text)
+  let best = null
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (!entry || typeof entry.id !== 'string' || !entry.id) continue
+    if (options.excludeId && entry.id === options.excludeId) continue
+    if (!isActiveTaskLike(entry, now)) continue
+    if (now - toNumber(entry.ts, 0) > windowMs) continue
+    if (!['task', 'request'].includes(entry.kind)) continue
+    if (groupId) {
+      if (entry.groupId !== groupId) continue
+    } else if (worldOnly) {
+      if (!(entry.channel === 'world' || entry.scope === 'global' || entry.worldTask === true)) continue
+    }
+    const candidate = `${entry.title || ''} ${entry.text || ''}`
+    const score = Math.max(similarity(text, candidate), similarity(taskCoreText(text), taskCoreText(candidate)))
+    if (score <= 0) continue
+    const drives = extractDriveTargets(candidate)
+    const sameDrive = wantedDrives.some((drive) => drives.includes(drive))
+    const kinds = taskActionKindsOf(candidate)
+    const sameAction = [...wantedKinds].some((kind) => kinds.has(kind))
+    let reason = ''
+    let weight = score
+    if (score >= threshold) {
+      reason = '文本高度相似'
+    } else if (sameDrive && score >= 0.45) {
+      reason = `同一目标盘 ${wantedDrives.join('/')}`
+      weight = Math.max(weight, 0.88)
+    } else if (sameDrive && sameAction) {
+      reason = `同一目标盘 ${wantedDrives.join('/')} + 同类动作 ${[...wantedKinds].join('/')}`
+      weight = Math.max(weight, 0.82)
+    } else if (sameAction && score >= 0.62) {
+      reason = `同类动作 ${[...wantedKinds].join('/')}`
+      weight = Math.max(weight, 0.78)
+    }
+    if (!reason) continue
+    // 同类任务条目优先作为「existing task」返回，便于调用方拿 owner。
+    if (entry.kind === 'task') weight += 0.02
+    if (!best || weight > best.score) best = { entry, score: weight, similarity: score, reason }
+  }
+  return best
+}
+
+/** 扫描活动任务，给出重复任务簇（只建议，不自动删数据）。 */
+function collectDuplicateTaskGroups(entries, options = {}) {
+  const now = toNumber(options.now, Date.now())
+  const candidates = (Array.isArray(entries) ? entries : []).filter(
+    (entry) =>
+      entry &&
+      entry.id &&
+      entry.kind === 'task' &&
+      !['done', 'canceled'].includes(entry.taskStatus || 'assigned') &&
+      now - toNumber(entry.ts, 0) <= TASK_DUPLICATE_WINDOW_MS
+  )
+  if (candidates.length < 2) return []
+  const parent = new Map(candidates.map((entry) => [entry.id, entry.id]))
+  const findRoot = (id) => {
+    let root = id
+    while (parent.get(root) !== root) root = parent.get(root)
+    let cursor = id
+    while (parent.get(cursor) !== cursor) {
+      const next = parent.get(cursor)
+      parent.set(cursor, root)
+      cursor = next
+    }
+    return root
+  }
+  const reasons = new Map()
+  for (let i = 0; i < candidates.length; i += 1) {
+    for (let j = i + 1; j < candidates.length; j += 1) {
+      const a = candidates[i]
+      const b = candidates[j]
+      const hit = findDuplicateTaskEntry([b], { text: `${a.title || ''} ${a.text || ''}`, now })
+      if (!hit) continue
+      const rootA = findRoot(a.id)
+      const rootB = findRoot(b.id)
+      if (rootA !== rootB) parent.set(rootB, rootA)
+      reasons.set(`${a.id}|${b.id}`, hit.reason)
+    }
+  }
+  const clusters = new Map()
+  for (const entry of candidates) {
+    const root = findRoot(entry.id)
+    if (!clusters.has(root)) clusters.set(root, [])
+    clusters.get(root).push(entry)
+  }
+  return [...clusters.values()]
+    .filter((cluster) => cluster.length > 1)
+    .map((cluster) => {
+      const sorted = cluster.slice().sort((a, b) => toNumber(a.ts, 0) - toNumber(b.ts, 0))
+      const primary = sorted[0]
+      return {
+        primary: {
+          id: primary.id,
+          title: primary.title || '',
+          owner: taskOwnerOf(primary),
+          taskScope: primary.taskScope || normalizeTaskScope('', primary.text || primary.title),
+          groupId: primary.groupId || '',
+          taskStatus: primary.taskStatus || 'assigned',
+          ts: toNumber(primary.ts, 0)
+        },
+        duplicates: sorted.slice(1).map((entry) => ({
+          id: entry.id,
+          title: entry.title || '',
+          owner: taskOwnerOf(entry),
+          taskScope: entry.taskScope || normalizeTaskScope('', entry.text || entry.title),
+          groupId: entry.groupId || '',
+          taskStatus: entry.taskStatus || 'assigned',
+          ts: toNumber(entry.ts, 0),
+          reason: reasons.get(`${primary.id}|${entry.id}`) || reasons.get(`${entry.id}|${primary.id}`) || '文本/目标相似'
+        }))
+      }
+    })
+    .slice(0, 20)
 }
 
 // ------------------------------------------------------------------ 看板存储
@@ -2084,7 +2370,7 @@ export function apply(ctx, config = {}) {
       if (!source && running) {
         return {
           availability: 'busy',
-          currentTask: { id: '', title: '运行中', kind: 'running', role: '', since: 0 },
+          currentTask: { id: '', title: '运行中', kind: 'running', role: '', since: 0, owner: '', taskScope: '', claimState: '' },
           openRequestCount: 0,
           lastSubmittedAt: lastSubmittedBySession.get(sessionId) || 0
         }
@@ -2097,7 +2383,10 @@ export function apply(ctx, config = {}) {
               title: String(source.title || '').slice(0, 40),
               kind: requests[0] ? 'request' : 'task',
               role: String(source.taskRole || ''),
-              since: toNumber(source.ts, 0)
+              since: toNumber(source.ts, 0),
+              owner: source.kind === 'task' ? (typeof source.owner === 'string' ? source.owner : '') : source.owner || '',
+              taskScope: source.taskScope || '',
+              claimState: source.claimState || ''
             }
           : null,
         openRequestCount: requests.length,
@@ -2438,6 +2727,8 @@ export function apply(ctx, config = {}) {
       skills: skillStore.list(),
       profiles,
       world: worldEntriesOf(),
+      // v2.10.1：重复任务合并建议（只下发建议，UI 不自动删数据）。
+      duplicates: collectDuplicateTaskGroups(rules),
       approvals: readApprovals().filter((item) => item && item.status === 'pending'),
       permissions: readPermissionsOf(boardDir).grants,
       // 串行指令队列（依赖未满足/延迟未到的请求）；UI 用它显示「排队中 / 依赖 X」。
@@ -2875,6 +3166,35 @@ export function apply(ctx, config = {}) {
       }
     }
 
+    const linkedTask =
+      typeof input.taskId === 'string' && input.taskId
+        ? active.find((item) => item && item.id === input.taskId && item.kind === 'task') || null
+        : null
+    const taskScope = normalizeTaskScope(
+      input.taskScope || input.scopeText || input.workScope || (linkedTask && linkedTask.taskScope),
+      `${title} ${text}`
+    )
+    const owner =
+      (typeof input.owner === 'string' && input.owner) ||
+      (kind === 'task'
+        ? input.coordinator || (Array.isArray(input.assignees) ? input.assignees[0] : '') || ''
+        : linkedTask
+          ? taskOwnerOf(linkedTask) || (Array.isArray(input.requestTo) ? input.requestTo[0] : '') || ''
+          : (Array.isArray(input.requestTo) ? input.requestTo[0] : '') || '')
+    const ownerRole =
+      typeof input.ownerRole === 'string' && input.ownerRole
+        ? input.ownerRole
+        : owner && owner === input.coordinator
+          ? 'coordinator'
+          : owner
+            ? kind === 'task'
+              ? 'assignee'
+              : 'recipient'
+            : ''
+    const claimedAt = toNumber(input.claimedAt, owner ? now : 0)
+    const claimState =
+      typeof input.claimState === 'string' && input.claimState ? input.claimState : owner ? 'assigned' : 'unclaimed'
+
     const id = `n-${now.toString(36)}-${randomBytes(3).toString('hex')}`
     const entry = {
       id,
@@ -2898,6 +3218,8 @@ export function apply(ctx, config = {}) {
         ? [...new Set(input.mentions.filter((item) => typeof item === 'string' && item))].slice(0, 12)
         : [],
       channel: typeof input.channel === 'string' && input.channel ? input.channel : '',
+      // 世界任务标记需要落盘，24h 查重和完成汇总都靠它识别「这是世界任务」。
+      ...(input.worldTask === true ? { worldTask: true } : {}),
       hiddenFromChat: input.hiddenFromChat === true,
       nudge: input.nudge === true,
       // 加急插话标记（v2.9.3）：UI 用它显示 ⚡ 徽章，urgentTo 便于审计「加急给谁」。
@@ -2913,8 +3235,22 @@ export function apply(ctx, config = {}) {
           }
         : {}),
       curated: input.curated === true,
+      // v2.10.1：非 owner 的回复只作为 proposal；scope 超界时只提示、不自动扩展。
+      ...(input.proposal === true ? { proposal: true } : {}),
+      ...(typeof input.taskVerdict === 'string' && input.taskVerdict ? { taskVerdict: input.taskVerdict } : {}),
+      ...(typeof input.scopeWarning === 'string' && input.scopeWarning ? { scopeWarning: input.scopeWarning } : {}),
       taskId: typeof input.taskId === 'string' ? input.taskId : '',
       taskRole: typeof input.taskRole === 'string' ? input.taskRole : '',
+      // 任务归属锁 + 工作范围（v2.10.1）：task/request 一律带 owner 与 taskScope。
+      ...(kind === 'task' || kind === 'request'
+        ? {
+            owner,
+            ownerRole,
+            claimedAt: claimedAt > 0 ? claimedAt : 0,
+            claimState,
+            taskScope
+          }
+        : {}),
       ...(kind === 'task'
         ? {
             taskStatus: input.taskStatus || 'assigned',
@@ -3273,6 +3609,126 @@ export function apply(ctx, config = {}) {
     if (actor.kind === 'panel') return { ok: true }
     if (isSessionMaintainer(actor.sessionId)) return { ok: true }
     return { ok: false, error: '待复核记录只有面板用户或维护者可以撤回。' }
+  }
+
+  // ---------------------------------------------------------------- 任务归属锁（v2.10.1）
+  const patchTaskEntry = (taskId, patch) => {
+    appendEvents(boardDir, [{ op: 'task', id: taskId, patch, ts: Date.now() }])
+  }
+
+  /**
+   * task.claim：只有 coordinator/assignee（面板需显式给 owner）可以认领；
+   * 已被他人认领时返回当前 owner 和拒绝原因，绝不静默覆盖。
+   */
+  const claimTaskEntry = ({ ref, actorId, actorKind = 'session' }) => {
+    const task = findBoardEntry(ref)
+    if (!task) return { ok: false, error: `找不到任务：${ref}` }
+    if (task.kind !== 'task') return { ok: false, error: `只有 task 可以认领：${task.title}` }
+    if (['done', 'canceled'].includes(task.taskStatus || 'assigned')) {
+      return { ok: false, error: `任务已${task.taskStatus === 'done' ? '完成' : '撤回'}，不能再认领。` }
+    }
+    const wanted = String(actorId || '').trim()
+    if (!wanted) return { ok: false, error: '面板认领任务时需指定 owner（assignee/coordinator 的会话 id）。' }
+    const coordinator = typeof task.coordinator === 'string' ? task.coordinator : ''
+    const assignees = Array.isArray(task.assignees) ? task.assignees.filter((item) => typeof item === 'string' && item) : []
+    // 严格按需求：只有该任务的 coordinator/assignee 可以 claim；面板也必须指定这两个角色之一，
+    // 不允许拿用户权限把任务直接塞给任意会话。
+    const eligible = wanted === coordinator || assignees.includes(wanted) || task.owner === wanted
+    if (!eligible) {
+      return {
+        ok: false,
+        reason: 'not-assignee',
+        owner: task.owner || taskOwnerOf(task),
+        error: `只有该任务的 coordinator/assignee 可以认领：任务「${task.title}」的 owner 是 ${taskOwnerOf(task) ? shortSid(taskOwnerOf(task)) : '（未指定）'}。`
+      }
+    }
+    if (task.owner && task.owner !== wanted) {
+      return {
+        ok: false,
+        reason: 'claimed-by-other',
+        owner: task.owner,
+        error: `任务已被会话 ${shortSid(task.owner)} 认领（owner=${task.owner}，claimedAt=${task.claimedAt || 0}），不能静默覆盖；请让当前 owner 用 task.release 释放，或由用户/维护者处理。`
+      }
+    }
+    if (task.owner === wanted && task.claimState === 'claimed') {
+      return { ok: true, already: true, owner: wanted, taskId: task.id }
+    }
+    const now = Date.now()
+    patchTaskEntry(task.id, {
+      owner: wanted,
+      ownerRole: wanted === coordinator ? 'coordinator' : 'assignee',
+      claimedAt: now,
+      claimState: 'claimed',
+      claimedBy: wanted
+    })
+    return { ok: true, taskId: task.id, owner: wanted, ownerRole: wanted === coordinator ? 'coordinator' : 'assignee', claimedAt: now }
+  }
+
+  /** task.release：owner 自己 / 组长 / 维护者 / 面板可释放；释放后 owner 清空，可被重新认领。 */
+  const releaseTaskEntry = ({ ref, actorId, actorKind = 'session' }) => {
+    const task = findBoardEntry(ref)
+    if (!task) return { ok: false, error: `找不到任务：${ref}` }
+    if (task.kind !== 'task') return { ok: false, error: `只有 task 可以释放：${task.title}` }
+    if (['done', 'canceled'].includes(task.taskStatus || 'assigned')) {
+      return { ok: false, error: `任务已${task.taskStatus === 'done' ? '完成' : '撤回'}，不能释放归属。` }
+    }
+    const wanted = String(actorId || '').trim()
+    const isPanelAdmin = actorKind === 'panel'
+    const allowed =
+      isPanelAdmin ||
+      isSessionMaintainer(wanted) ||
+      (wanted && task.owner === wanted) ||
+      (wanted && task.coordinator === wanted)
+    if (!allowed) {
+      return {
+        ok: false,
+        owner: task.owner || '',
+        error: `只有当前 owner、组长、维护者或面板可以释放任务「${task.title}」；当前 owner=${task.owner || '（空）'}。`
+      }
+    }
+    const previousOwner = task.owner || ''
+    patchTaskEntry(task.id, {
+      owner: '',
+      ownerRole: '',
+      claimedAt: 0,
+      claimState: 'released',
+      releasedBy: wanted || 'panel',
+      releasedAt: Date.now(),
+      previousOwner
+    })
+    return { ok: true, taskId: task.id, previousOwner, claimState: 'released' }
+  }
+
+  /** task.dedupe：只给合并建议；apply=true 时把重复任务标 canceled + 指向 primary，不删除数据。 */
+  const taskDedupe = ({ apply = false, actorId = '' } = {}) => {
+    const suggestions = collectDuplicateTaskGroups(store.readActive())
+    if (!apply || !suggestions.length) return { suggestions, applied: 0 }
+    let applied = 0
+    const now = Date.now()
+    for (const group of suggestions) {
+      const primaryId = group.primary.id
+      for (const duplicate of group.duplicates) {
+        patchTaskEntry(duplicate.id, {
+          taskStatus: 'canceled',
+          mergedInto: primaryId,
+          mergedAt: now,
+          mergedBy: actorId || 'panel',
+          mergeReason: duplicate.reason || '重复任务合并'
+        })
+        for (const entry of store.readActive()) {
+          if (entry.kind !== 'request') continue
+          if (entry.taskId !== duplicate.id) continue
+          if (entry.status === 'answered' || entry.status === 'canceled') continue
+          patchTaskEntry(entry.id, {
+            status: 'canceled',
+            cancelReason: `已合并到任务 ${primaryId}`,
+            canceledAt: now
+          })
+        }
+        applied += 1
+      }
+    }
+    return { suggestions, applied }
   }
   /** 找出一条待复核记录关联的隐藏卡片条目（标题「待复核：…」）。 */
   const hiddenApprovalEntriesOf = (active, approval) => {
@@ -3682,24 +4138,32 @@ export function apply(ctx, config = {}) {
   }
 
   /** 探测/任务两种唤醒文案（立即发送与排队后发送共用，避免两套模板漂移）。 */
-  const buildAskMessage = ({ askMode, text, group, requestId, assignmentTask, authorId }) => {
+  const buildAskMessage = ({ askMode, text, group, requestId, assignmentTask, authorId, taskScope, scopeWarning }) => {
     if (askMode === 'task') {
+      const scopeLine = taskScope
+        ? `【范围锁】归属：${assignmentTask ? shortSid(taskOwnerOf(assignmentTask)) : shortSid(authorId)} · 仅做 scope：${taskScope}（${TASK_SCOPE_DISPATCH_TAIL}）`
+        : ''
+      const warningLine = scopeWarning ? `⚠ 范围提醒：${scopeWarning} —— 已超出原 scope，需 owner 确认，不要自动扩展。` : ''
       if (assignmentTask) {
         return [
           `【任务分配 · 群任务：${assignmentTask.title}】`,
           text,
+          scopeLine,
+          warningLine,
           '',
           `请只做你负责的部分；完成后用 session_share（kind=handoff、group=${group.name}、replyTo=${requestId}、files=文件路径）提交给组长，不要直接向用户汇报，也不要重复执行其他成员的任务。`,
           `（来自会话 ${shortSid(authorId)} · 群组「${group.name}」）`
-        ].join('\n')
+        ].filter(Boolean).join('\n')
       }
       return [
         '【任务分配 · 群内派活】',
         text,
+        scopeLine,
+        warningLine,
         '',
         `请执行/完成上面的工作；完成后用 session_share（kind=handoff、group=${group.name}、replyTo=${requestId}、files=文件路径）回复，正文写清结果/进度；不要展开无关分析。`,
         `（来自会话 ${shortSid(authorId)} · 群组「${group.name}」）`
-      ].join('\n')
+      ].filter(Boolean).join('\n')
     }
     return [
       '【群内请求 · 探测（不是任务） · 请直接回答正文】',
@@ -3720,13 +4184,17 @@ export function apply(ctx, config = {}) {
     const skipped = wantedTargets.filter((id) => !allowed.includes(id))
     if (!allowed.length) return { ok: false, reason: '目标成员已不在群或唤醒授权被撤销' }
     const assignmentTask = item.taskId ? findBoardEntry(item.taskId) : null
+    // 只有任务 owner 才能把 taskStatus 推进到 delegating（排队期间 owner 可能已被释放/转移）。
+    const itemOwnsTask = !assignmentTask || taskOwnerOf(assignmentTask) === item.author
     const message = buildAskMessage({
       askMode: item.askMode,
       text: item.text,
       group,
       requestId: item.requestId,
       assignmentTask,
-      authorId: item.author
+      authorId: item.author,
+      taskScope: item.taskScope || '',
+      scopeWarning: item.scopeWarning || ''
     })
     const now = Date.now()
     try {
@@ -3743,7 +4211,7 @@ export function apply(ctx, config = {}) {
       if (outcome.ok) woken.push(targetId)
       else sleepy.push(targetId)
     }
-    if (item.taskId) {
+    if (item.taskId && itemOwnsTask) {
       try {
         appendEvents(boardDir, [{ op: 'task', id: item.taskId, patch: { taskStatus: 'delegating' }, ts: now }])
       } catch {
@@ -3997,7 +4465,7 @@ export function apply(ctx, config = {}) {
    * 排队：先落 status=queued 的请求条目，再写队列。
    * 返回给模型的中文说明必须写清「等什么、什么时候发、怎么查」。
    */
-  const enqueueAskRequest = ({ group, info, text, title, targets, askMode, assignmentTask, dependsOn, delayMs, step }) => {
+  const enqueueAskRequest = ({ group, info, text, title, targets, askMode, assignmentTask, dependsOn, delayMs, step, taskScope, scopeWarning }) => {
     const gate = canQueueAsk(group, info.id)
     if (!gate.ok) return gate.message
     const items = pendingStore.read()
@@ -4049,6 +4517,9 @@ export function apply(ctx, config = {}) {
         status: 'queued',
         dependsOn: canonicalDeps,
         notBefore,
+        skipDedupe: Boolean(assignmentTask),
+        ...(taskScope ? { taskScope } : {}),
+        ...(scopeWarning ? { scopeWarning } : {}),
         ...(step > 0 ? { taskStep: step } : {}),
         ...(assignmentTask ? { taskId: assignmentTask.id, taskRole: 'member' } : {})
       },
@@ -4069,6 +4540,8 @@ export function apply(ctx, config = {}) {
       targetIds: targets.map((session) => session.id),
       taskId: assignmentTask ? assignmentTask.id : '',
       taskStep: step > 0 ? step : 0,
+      taskScope: taskScope || '',
+      scopeWarning: scopeWarning || '',
       dependsOn: canonicalDeps,
       delayMs: delayMs > 0 ? delayMs : 0,
       notBefore,
@@ -4953,9 +5426,14 @@ export function apply(ctx, config = {}) {
           ? `【请求·已由会话 ${shortSid(entry.answeredBy)} 回复】`
           : '【请求·待响应】'
         : ''
+    const lockInfo =
+      entry.kind === 'task' || entry.kind === 'request'
+        ? `   归属：owner=${entry.owner ? shortSid(entry.owner) : '（未指定）'} · 认领=${entry.claimState || '未认领'} · 仅 scope：${truncate(entry.taskScope || '', 160)}`
+        : ''
     return [
       `${index + 1}. [${kind}/${scope}] ${entry.title}  (id=${entry.id.slice(0, 14)}…，${humanAge(entry.ts, now)}${claimed}${requestStatus})`,
       `   ${entry.text}`,
+      lockInfo,
       entry.files && entry.files.length ? `   文件：${entry.files.join('、')}` : '',
       `   作者：会话 ${shortSid(entry.author)}${entry.workspace ? ` · 工作区 ${path.basename(entry.workspace)}` : ''}${entry.tags && entry.tags.length ? ` · 标签 ${entry.tags.join('、')}` : ''}`
     ].filter(Boolean).join('\n')
@@ -5489,6 +5967,9 @@ export function apply(ctx, config = {}) {
         taskStatus: 'assigned',
         coordinator: coordinatorId,
         assignees: assigneeIds,
+        owner: coordinatorId,
+        ownerRole: 'coordinator',
+        taskScope: normalizeTaskScope('', '招募协作：' + requestText),
         tags: '@招募',
         skipDedupe: true
       },
@@ -5679,6 +6160,11 @@ export function apply(ctx, config = {}) {
         replyTo: {
           type: 'string',
           description: '可选，回复某条「群内请求」的 id（session_ask 生成的请求 id 前缀即可）。回复后请求方会被通知，请求在看板上标记为已回复'
+        },
+        scopeConfirmed: {
+          type: 'boolean',
+          description:
+            '可选，仅任务 owner 使用：交付明显超出 taskScope（额外盘/全盘、runbook、工具链等）但确认这是用户的新要求时传 true；否则不会被自动扩展/结算，只记录 scopeWarning'
         }
       },
       required: ['title', 'text']
@@ -5720,6 +6206,18 @@ export function apply(ctx, config = {}) {
       const looksFinal = /(完成|已完成|已交付|交付完成|通过|验收通过|成功|done|finished|delivered|ready)/i.test(replyText) &&
         !/(未完成|无法|失败|受阻|进行中|待完成|还没)/i.test(replyText)
       const gateTask = replyRequest && replyRequest.taskId ? findBoardEntry(replyRequest.taskId) : null
+      // v2.10.1 归属锁：任务请求只看任务 owner（coordinator/assignee），普通请求看收件人。
+      const gateTaskOwner = gateTask ? taskOwnerOf(gateTask) : ''
+      const gateTaskScope = gateTask
+        ? normalizeTaskScope(gateTask.taskScope, gateTask.text || gateTask.title)
+        : replyRequest
+          ? normalizeTaskScope(replyRequest.taskScope, replyRequest.text || replyRequest.title)
+          : ''
+      const isTaskReply = Boolean(replyRequest && replyRequest.taskId && gateTask)
+      const replyIsOwner = Boolean(isTaskReply && gateTaskOwner && gateTaskOwner === info.id)
+      const replyIsProposal = Boolean(isTaskReply && !replyIsOwner)
+      const scopeExpansion = replyIsOwner ? detectScopeExpansion(gateTaskScope, replyText) : []
+      const scopeNeedsConfirm = scopeExpansion.length > 0 && !(args && args.scopeConfirmed === true)
       const gateIsWorldTask = Boolean(
         replyRequest &&
           (replyRequest.channel === 'world' || (gateTask && gateTask.worldTask === true))
@@ -5758,7 +6256,13 @@ export function apply(ctx, config = {}) {
           author: info.id,
           tags: args && args.tags,
           files: args && args.files,
-          ttlHours: args && args.ttlHours
+          ttlHours: args && args.ttlHours,
+          // 对请求的回复是「结算/建议」而不是普通广播，不能被 48h 文本查重吞掉（尤其 scopeConfirmed 重发）。
+          skipDedupe: Boolean(replyRequest),
+          ...(replyRequest && replyRequest.taskId ? { taskId: replyRequest.taskId } : {}),
+          ...(replyIsProposal ? { proposal: true, taskVerdict: 'proposal' } : {}),
+          ...(isTaskReply && replyIsOwner ? { taskVerdict: scopeNeedsConfirm ? 'scope-warning' : 'owner-delivery' } : {}),
+          ...(scopeNeedsConfirm ? { scopeWarning: scopeExpansion.join('；') } : {})
         },
         'tool'
       )
@@ -5828,7 +6332,7 @@ export function apply(ctx, config = {}) {
           } catch {
             /* 调度失败不影响回复本身 */
           }
-          if (firstAnswer && request.taskRole === 'member') {
+          if (firstAnswer && request.taskRole === 'member' && replyIsOwner) {
             scoreSession(info.id, 8, { success: true })
             try {
               const memberTask = findBoardEntry(request.taskId)
@@ -5838,7 +6342,7 @@ export function apply(ctx, config = {}) {
             }
             replyNote += ' 任务提交 +8 积分。'
           }
-          if (firstAnswer && request.taskRole === 'coordinator') {
+          if (firstAnswer && request.taskRole === 'coordinator' && replyIsOwner) {
             scoreSession(info.id, 10, { success: true })
             replyNote += ' 组长汇总 +10 积分。'
             try {
@@ -5895,7 +6399,7 @@ export function apply(ctx, config = {}) {
               /* 计分失败不影响回复 */
             }
           }
-          if (firstAnswer && request.taskRole !== 'member' && request.taskRole !== 'coordinator') {
+          if (firstAnswer && request.taskRole !== 'member' && request.taskRole !== 'coordinator' && (!isTaskReply || replyIsOwner)) {
             const worldTask = request.channel === 'world'
             const delta = worldTask ? 8 : 5
             scoreSession(info.id, delta, { success: true })
@@ -5906,39 +6410,85 @@ export function apply(ctx, config = {}) {
             }
             replyNote += ` 任务回复 +${delta} 积分。`
           }
-          if (request.author && request.author !== info.id) {
+          const wakeTarget = replyIsProposal && gateTaskOwner && gateTaskOwner !== info.id ? gateTaskOwner : request.author
+          if (wakeTarget && wakeTarget !== info.id) {
             const wakeText = [
-              `【群内请求已收到回复 · 来自会话 ${shortSid(info.id)}】`,
+              replyIsProposal
+                ? `【群任务 · 收到 proposal/建议（非 owner，未结算） · 来自会话 ${shortSid(info.id)}】`
+                : `【群内请求已收到回复 · 来自会话 ${shortSid(info.id)}】`,
               `请求：${request.title}`,
-              `回复：${result.entry.title}：${truncate(String(result.entry.text || '').replace(/\s*\n\s*/g, ' / '), 300)}`,
+              `${replyIsProposal ? '建议' : '回复'}：${result.entry.title}：${truncate(String(result.entry.text || '').replace(/\s*\n\s*/g, ' / '), 300)}`,
               ...(result.entry.files && result.entry.files.length ? [`文件：${result.entry.files.join('、')}`] : []),
-              '（这是一条会话间通知，如需继续追问可用 session_ask 再发请求。）'
+              replyIsProposal
+                ? `这只是 proposal：请 owner（${gateTaskOwner ? shortSid(gateTaskOwner) : '任务负责人'}）确认后再推进 taskStatus / 汇总，非 owner 不结算完成奖励。`
+                : '（这是一条会话间通知，如需继续追问可用 session_ask 再发请求。）'
             ].join('\n')
-            const woke = wakeSession(request.author, wakeText, { requestId: request.id })
-            replyNote = `已回复请求「${request.title}」（id=${request.id.slice(0, 14)}…）；${woke.ok ? '请求方会话已被唤醒。' : '请求方当前不在线，下次运行会看到这条回复。'}`
+            const woke = wakeSession(wakeTarget, wakeText, { requestId: request.id })
+            replyNote = replyIsProposal
+              ? `已作为 proposal/建议提交给 owner ${gateTaskOwner ? shortSid(gateTaskOwner) : '（未指定）'}（id=${request.id.slice(0, 14)}…）；非 owner 不推进任务状态、不结算完成奖励；${woke.ok ? '已唤醒组长收集（proposal 待确认）。' : '组长不在线，下次运行会看到 proposal。'}`
+              : `已回复请求「${request.title}」（id=${request.id.slice(0, 14)}…）；${woke.ok ? '请求方会话已被唤醒。' : '请求方当前不在线，下次运行会看到这条回复。'}`
           } else {
-            replyNote = `已回复请求「${request.title}」（id=${request.id.slice(0, 14)}…）。`
+            replyNote = replyIsProposal
+              ? `已作为 proposal/建议记录（id=${request.id.slice(0, 14)}…）；非 owner 不推进任务状态、不结算完成奖励。`
+              : `已回复请求「${request.title}」（id=${request.id.slice(0, 14)}…）。`
           }
-          // 群任务角色：成员只交组长（并通知组长收集）；组长提交即视为任务完成。
+          // 群任务角色：只有 owner 能推进 taskStatus；非 owner 只记为 proposal。
           if (request.taskId) {
             const isCoordinator = request.taskRole === 'coordinator'
-            appendEvents(boardDir, [
-              {
-                op: 'task',
-                id: request.taskId,
-                patch: { taskStatus: isCoordinator ? 'done' : 'collecting' },
-                ts: Date.now()
-              }
-            ])
+            const taskAdvanced = replyIsOwner && !scopeNeedsConfirm
+            if (!replyIsOwner) {
+              appendEvents(boardDir, [
+                {
+                  op: 'task',
+                  id: request.taskId,
+                  patch: {
+                    proposalCount: toNumber(gateTask && gateTask.proposalCount, 0) + 1,
+                    lastProposalAt: Date.now(),
+                    lastProposalBy: info.id,
+                    proposalTaskStatus: (gateTask && gateTask.taskStatus) || 'assigned'
+                  },
+                  ts: Date.now()
+                }
+              ])
+              replyNote += ` 任务归属锁：owner=${gateTaskOwner ? shortSid(gateTaskOwner) : '（未指定）'}，本次只作为 proposal，未推进 taskStatus、未结算完成奖励。`
+            } else if (scopeNeedsConfirm) {
+              appendEvents(boardDir, [
+                {
+                  op: 'task',
+                  id: request.taskId,
+                  patch: {
+                    scopeWarning: scopeExpansion.join('；'),
+                    scopeWarningAt: Date.now(),
+                    scopeWarningBy: info.id
+                  },
+                  ts: Date.now()
+                }
+              ])
+              replyNote += ` 检测到超出任务 scope：${scopeExpansion.join('；')}。已记录 warning，未自动扩展、未标记完成；如确认这是用户的新要求，请带 scopeConfirmed=true 重发，或在派活消息里先更新 scope。`
+            } else {
+              appendEvents(boardDir, [
+                {
+                  op: 'task',
+                  id: request.taskId,
+                  patch: {
+                    taskStatus: isCoordinator ? 'done' : 'collecting',
+                    ...(scopeExpansion.length
+                      ? { scopeConfirmedAt: Date.now(), scopeConfirmedBy: info.id, scopeConfirmedReasons: scopeExpansion }
+                      : {})
+                  },
+                  ts: Date.now()
+                }
+              ])
+            }
             // 任务刚变成 done：立刻推进以该任务为前置的串行指令。
-            if (isCoordinator) {
+            if (isCoordinator && taskAdvanced) {
               try {
                 runPendingQueue({ source: 'task-done' })
               } catch {
                 /* ignore */
               }
             }
-            if (isCoordinator) {
+            if (isCoordinator && taskAdvanced) {
               replyNote += ' 群任务已标记为完成。'
               // 复核后「需要修改」：交给群管理自动指派给群员，用户不用手动派活。
               try {
@@ -6001,7 +6551,7 @@ export function apply(ctx, config = {}) {
               } catch {
                 /* 群管理通知失败不影响任务完成 */
               }
-            } else {
+            } else if (taskAdvanced) {
               const task = findBoardEntry(request.taskId)
               const coordinatorId = task && task.coordinator
               if (coordinatorId && coordinatorId === request.author) {
@@ -6129,6 +6679,11 @@ export function apply(ctx, config = {}) {
           type: 'integer',
           minimum: 1,
           description: '可选，群任务的第几个步骤（配合 group.post 的 steps）；该请求 answered 后步骤自动标记完成。'
+        },
+        scope: {
+          type: 'string',
+          description:
+            '可选，本次派活的工作范围（只做什么、不做什么）。不传则沿用所属任务 taskScope，或从正文推导；消息模板会写「仅做 scope，禁止扩展」'
         }
       },
       required: ['group', 'text']
@@ -6251,7 +6806,7 @@ export function apply(ctx, config = {}) {
           .filter(
             (entry) =>
               entry.kind === 'task' &&
-              entry.coordinator === info.id &&
+              taskOwnerOf(entry) === info.id &&
               (entry.taskStatus || 'assigned') !== 'done' &&
               Array.isArray(entry.assignees) &&
               targets.every((target) => entry.assignees.includes(target.id))
@@ -6271,6 +6826,18 @@ export function apply(ctx, config = {}) {
       // 修bug群里给维护者的投递一律按 BUG 报告（不是任务分配），避免被扣上组长/成员角色。
       if (bugfixDelivery) askMode = 'probe'
       const assignmentTask = askMode === 'task' ? taskCandidate : null
+      // v2.10.1：请求也必须带 scope；超出已分配任务范围时提示 owner，不自动扩展。
+      const explicitAskScope = String((args && args.scope) || '').trim()
+      const askTaskScope = normalizeTaskScope(
+        explicitAskScope || (assignmentTask && assignmentTask.taskScope),
+        `${text}`
+      )
+      const askScopeExpansion = assignmentTask
+        ? detectScopeExpansion(assignmentTask.taskScope || askTaskScope, text)
+        : explicitAskScope
+          ? detectScopeExpansion(explicitAskScope, text)
+          : []
+      const askScopeWarning = askScopeExpansion.length ? askScopeExpansion.join('；') : ''
 
       // 群任务里若成员已经提交过，不再唤醒/重复请求：改成「插话」提醒，等它下次处理时顺手看到即可。
       const nudgedMembers = []
@@ -6340,7 +6907,9 @@ export function apply(ctx, config = {}) {
           assignmentTask,
           dependsOn: depRefs,
           delayMs,
-          step: assignmentTask ? stepNo : 0
+          step: assignmentTask ? stepNo : 0,
+          taskScope: askTaskScope,
+          scopeWarning: askScopeWarning
         })
       }
       const result = addEntry(
@@ -6353,9 +6922,12 @@ export function apply(ctx, config = {}) {
           author: info.id,
           requestTo: targets.map((session) => session.id),
           mentions: targets.map((session) => session.id),
-              ...(bugfixDelivery ? { tags: '@bug' } : {}),
-              ...(assignmentTask ? { taskId: assignmentTask.id, taskRole: 'member' } : {}),
-              ...(assignmentTask && stepNo > 0 ? { taskStep: stepNo } : {})
+          taskScope: askTaskScope,
+          skipDedupe: Boolean(assignmentTask),
+          ...(askScopeWarning ? { scopeWarning: askScopeWarning } : {}),
+          ...(bugfixDelivery ? { tags: '@bug' } : {}),
+          ...(assignmentTask ? { taskId: assignmentTask.id, taskRole: 'member' } : {}),
+          ...(assignmentTask && stepNo > 0 ? { taskStep: stepNo } : {})
         },
         'tool'
       )
@@ -6386,6 +6958,10 @@ export function apply(ctx, config = {}) {
       // 探测（提问/要进度）和任务分配用不同模板：
       // - 探测：正文顶到最前，只要求针对正文回答，不叮嘱复杂回复格式，避免对方过度分析；
       // - 任务：才附「怎么回复/交给谁」。
+      const scopeMessageLine = `【范围锁】归属：${assignmentTask ? shortSid(taskOwnerOf(assignmentTask)) : shortSid((targets[0] && targets[0].id) || info.id)} · 仅做 scope：${askTaskScope}（${TASK_SCOPE_DISPATCH_TAIL}）`
+      const scopeWarningLine = askScopeWarning
+        ? `⚠ 范围提醒：${askScopeWarning} —— 已超出原 scope，需 owner 确认，不要自动扩展。`
+        : ''
       const requestMessage = bugfixDelivery
         ? [
             '【BUG 报告 · 修bug群投递（不是普通任务）】',
@@ -6399,17 +6975,21 @@ export function apply(ctx, config = {}) {
           ? [
               `【任务分配 · 群任务：${assignmentTask.title}】`,
               text,
+              scopeMessageLine,
+              scopeWarningLine,
               '',
               `请只做你负责的部分；完成后用 session_share（kind=handoff、group=${group.name}、replyTo=${requestId}、files=文件路径）提交给组长，不要直接向用户汇报，也不要重复执行其他成员的任务。`,
               `（来自会话 ${shortSid(info.id)} · 群组「${group.name}」）`
-            ].join('\n')
+            ].filter(Boolean).join('\n')
           : [
               '【任务分配 · 群内派活】',
               text,
+              scopeMessageLine,
+              scopeWarningLine,
               '',
               `请执行/完成上面的工作；完成后用 session_share（kind=handoff、group=${group.name}、replyTo=${requestId}、files=文件路径）回复，正文写清结果/进度；不要展开无关分析。`,
               `（来自会话 ${shortSid(info.id)} · 群组「${group.name}」）`
-            ].join('\n')
+            ].filter(Boolean).join('\n')
         : [
             '【群内请求 · 探测（不是任务） · 请直接回答正文】',
             text,
@@ -6432,6 +7012,9 @@ export function apply(ctx, config = {}) {
             ? `已向群组「${group.name}」发出任务分配：${title}（id=${requestId}）`
             : `已向群组「${group.name}」发出探测：${title}（id=${requestId}）`,
         `目标成员：${memberInlineText(targets) || '(无)'}`,
+        askScopeWarning
+          ? `⚠ 范围提醒：${askScopeWarning}。本次只记录 warning，不自动扩展 scope；请 owner 确认后再追加。`
+          : '',
         bugfixDelivery ? '（维护者 protected/service：本次按 BUG 报告投递，不当作普通任务派活。）' : '',
         woken.length
           ? `已唤醒 ${woken.length} 个在线会话（${memberInlineText(woken)}），它们会立即处理；`
@@ -7248,7 +7831,9 @@ export function apply(ctx, config = {}) {
       '查看与管理跨会话经验板（session-bridge 插件）。' +
       'action=list 列出当前工作区/群组可见的经验/交接（默认不含自己发布的）；' +
       'action=groups 列出所有群组及其成员；' +
-      'action=remove 删除一条（id 可用前缀）；action=claim 认领一条任务交接；' +
+      'action=remove 删除一条（id 可用前缀）；action=claim 认领一条任务交接（对 task 等价 task.claim）；' +
+      'action=task.claim / task.release 认领/释放任务归属锁（只有 assignee/coordinator 可 claim，冲突返回当前 owner）；' +
+      'action=task.dedupe 查看重复任务合并建议（不自动删数据）；' +
       'action=ack 标记本会话已接受某条规矩（id 可用前缀）；' +
       'action=status 查看插件加载状态、看板路径、活动会话与看板面板；' +
       'action=bugfix 一键创建或复用「星桥 · 修bug」群（维护者/群管理可用，维护者为群管理，普通成员可投递 bug 报告）。' +
@@ -7258,13 +7843,18 @@ export function apply(ctx, config = {}) {
       properties: {
         action: {
           type: 'string',
-          enum: ['list', 'groups', 'remove', 'claim', 'unclaim', 'ack', 'status', 'bugfix'],
-          description: 'list（默认）/ groups / remove / claim / unclaim / ack / status / bugfix（创建或复用修bug群）'
+          enum: ['list', 'groups', 'remove', 'claim', 'unclaim', 'task.claim', 'task.release', 'task.dedupe', 'ack', 'status', 'bugfix'],
+          description:
+            'list（默认）/ groups / remove / claim / unclaim / task.claim / task.release / task.dedupe / ack / status / bugfix（创建或复用修bug群）'
         },
         id: { type: 'string', description: '条目 id（remove/claim/unclaim/ack 时用，支持前缀匹配）' },
         limit: { type: 'integer', minimum: 1, maximum: 50, description: 'list 时最多显示多少条，默认 12' },
         includeOwn: { type: 'boolean', description: 'list 时是否包含自己发布的条目，默认 false' },
-        showAll: { type: 'boolean', description: 'list 时是否显示其它工作区的条目，默认 false' }
+        showAll: { type: 'boolean', description: 'list 时是否显示其它工作区的条目，默认 false' },
+        apply: {
+          type: 'boolean',
+          description: '仅 task.dedupe 用：true=把重复任务标 canceled 并指向 primary（保留数据，不删除）；默认只给建议'
+        }
       }
     },
     output: {
@@ -7423,10 +8013,54 @@ export function apply(ctx, config = {}) {
         return `已标记本会话（${shortSid(info.id)}）接受：${entry.title}（右侧栏「经验桥」面板里会显示为已接受）。`
       }
 
+      if (action === 'task.dedupe') {
+        const report = taskDedupe({ apply: args && args.apply === true, actorId: info.id })
+        if (!report.suggestions.length) {
+          return '没有发现 24h 内可合并的重复任务（同一目标盘/同请求/同用户需求）。'
+        }
+        return [
+          `发现 ${report.suggestions.length} 组疑似重复任务：`,
+          ...report.suggestions.map((group, index) => {
+            const primary = group.primary
+            const owner = primary.owner ? shortSid(primary.owner) : '（未指定）'
+            return [
+              `${index + 1}. 保留：${primary.title}（id=${primary.id.slice(0, 14)}…，owner=${owner}，scope=${truncate(primary.taskScope, 80)}）`,
+              ...group.duplicates.map(
+                (item) =>
+                  `   - 重复：${item.title}（id=${item.id.slice(0, 14)}…，owner=${item.owner ? shortSid(item.owner) : '（未指定）'}，${item.reason}）`
+              )
+            ].join('\n')
+          }),
+          report.applied
+            ? `已把 ${report.applied} 个重复任务标为 canceled 并写入 mergedInto（保留数据，未删除）。`
+            : '这只是合并建议：不会自动删数据；确认后用 apply=true（或面板确认）再合并。'
+        ].join('\n')
+      }
+      if (action === 'task.claim' || action === 'task.release') {
+        const result =
+          action === 'task.claim'
+            ? claimTaskEntry({ ref: args && args.id, actorId: info.id, actorKind: 'session' })
+            : releaseTaskEntry({ ref: args && args.id, actorId: info.id, actorKind: 'session' })
+        if (!result.ok) return result.error || '任务归属操作失败'
+        return action === 'task.claim'
+          ? `已认领任务：${result.taskId.slice(0, 14)}… · owner=${shortSid(result.owner)}（claimedAt=${result.claimedAt}）。其他会话不能再覆盖。`
+          : `已释放任务：${result.taskId.slice(0, 14)}…（原 owner=${result.previousOwner ? shortSid(result.previousOwner) : '（空）'}），现在可被 assignee/coordinator 重新认领。`
+      }
       if (action === 'claim' || action === 'unclaim') {
         const entry = findEntry(args && args.id)
         if (!entry) return `没找到条目：${args && args.id}`
-        if (entry.kind !== 'handoff') return `只有 handoff（任务交接）可以认领：${entry.title}`
+        if (entry.kind === 'task') {
+          const result =
+            action === 'claim'
+              ? claimTaskEntry({ ref: entry.id, actorId: info.id, actorKind: 'session' })
+              : releaseTaskEntry({ ref: entry.id, actorId: info.id, actorKind: 'session' })
+          return result.ok
+            ? action === 'claim'
+              ? `已认领任务：${entry.title}（owner=${shortSid(result.owner)}）`
+              : `已释放任务：${entry.title}`
+            : result.error || '任务归属操作失败'
+        }
+        if (entry.kind !== 'handoff') return `只有 handoff（任务交接）或 task（任务归属）可以认领：${entry.title}`
         if (action === 'claim') {
           appendEvents(boardDir, [{ op: 'claim', id: entry.id, by: info.id, ts: Date.now() }])
           return `已认领交接任务：${entry.title}（其他会话会看到"已被会话 ${shortSid(info.id)} 认领"）。`
@@ -7755,6 +8389,33 @@ export function apply(ctx, config = {}) {
       const suggestions = await computeGroupSuggestions()
       return { ok: true, suggestions }
     }
+    if (action === 'task.claim') {
+      const ref = String(payload.taskId || payload.id || '').trim()
+      if (!ref) return { ok: false, error: '缺少 taskId/id' }
+      // 面板认领必须显式给 owner（assignee/coordinator 的 sessionId）；会话调用用自身 id。
+      const actorId =
+        actor.kind === 'session'
+          ? actor.sessionId
+          : String(payload.owner || payload.assigneeId || payload.sessionId || '').trim()
+      const result = claimTaskEntry({ ref, actorId, actorKind: actor.kind })
+      if (!result.ok) return { ...result, ok: false }
+      return { ...result, ok: true }
+    }
+    if (action === 'task.release') {
+      const ref = String(payload.taskId || payload.id || '').trim()
+      if (!ref) return { ok: false, error: '缺少 taskId/id' }
+      const actorId = actor.kind === 'session' ? actor.sessionId : String(payload.owner || payload.sessionId || '').trim()
+      const result = releaseTaskEntry({ ref, actorId, actorKind: actor.kind })
+      if (!result.ok) return { ...result, ok: false }
+      return { ...result, ok: true }
+    }
+    if (action === 'task.dedupe') {
+      const report = taskDedupe({
+        apply: payload.apply === true,
+        actorId: actor.kind === 'session' ? actor.sessionId : 'panel'
+      })
+      return { ok: true, ...report }
+    }
     if (action === 'world.route') {
       // 只做路由分析、不执行任务：用于面板预览/自测。
       const text = String(payload.text || '').trim().slice(0, 1200)
@@ -7798,6 +8459,48 @@ export function apply(ctx, config = {}) {
         /* 去重失败不影响正常发送 */
       }
       const forceNew = payload.forceNew === true || FORCE_NEW_RE.test(text)
+      // v2.10.1：24h 内重复的世界任务（同请求/同目标盘/同用户需求）不再建第二个群/任务。
+      if (!forceNew && payload.allowDuplicate !== true && !isExplicitNewRound(text)) {
+        try {
+          const dup = findDuplicateTaskEntry(store.readActive(), { text, worldOnly: true })
+          if (dup) {
+            const existingOwner = taskOwnerOf(dup.entry)
+            const existingTaskId = dup.entry.kind === 'task' ? dup.entry.id : dup.entry.taskId || ''
+            logger.info(`世界任务命中 24h 重复，已合并到 ${dup.entry.id}：${dup.reason}`)
+            return {
+              ok: true,
+              duplicate: true,
+              messageId: dup.entry.id,
+              existing: {
+                id: dup.entry.id,
+                taskId: existingTaskId,
+                title: dup.entry.title || '',
+                owner: existingOwner,
+                taskScope: dup.entry.taskScope || '',
+                groupId: dup.entry.groupId || '',
+                kind: dup.entry.kind,
+                reason: dup.reason
+              },
+              taskId: existingTaskId,
+              owner: existingOwner,
+              assigned: [],
+              woken: 0,
+              createdSession: '',
+              createdWorkspace: '',
+              createdGroup: null,
+              createError: '',
+              requestIds: [],
+              route: 'duplicate',
+              router: {
+                engine: 'dedupe',
+                reason: `24h 内已有同类任务（${dup.reason}），已返回 existing task id/owner，不再建第二个群/任务`
+              }
+            }
+          }
+        } catch {
+          /* 查重失败不影响正常发送 */
+        }
+      }
       // 世界任务的 @ 解析与「扩充新成员」意图：这两类不交给路由器，避免把新成员外包给子代理。
       const sessionsNow = await buildSessionIndex()
       // 自动路由/路由建议只用 worldEligible（已排除维护者）；用户显式 @ 仍可点名 protected 会话（例外）。
@@ -8174,6 +8877,15 @@ export function apply(ctx, config = {}) {
       }
       let autoGroupTask = null
       let autoCoordinatorId = ''
+      // v2.10.1：世界任务也写入 owner/taskScope；显式 scope 与正文冲突时只提示，不自动扩展。
+      const explicitWorldScope = String(
+        payload.taskScope ||
+          payload.scopeText ||
+          (payload.scope && !['workspace', 'global', 'group'].includes(payload.scope) ? payload.scope : '') ||
+          ''
+      ).trim()
+      const worldTaskScope = normalizeTaskScope(explicitWorldScope, text)
+      const worldScopeWarning = explicitWorldScope ? detectScopeExpansion(explicitWorldScope, text).join('；') : ''
       if (createdGroup) {
         try {
           const memberIds = [...new Set(assigned.map((item) => item.id))]
@@ -8195,6 +8907,10 @@ export function apply(ctx, config = {}) {
               taskStatus: 'assigned',
               coordinator: autoCoordinatorId,
               assignees,
+              owner: autoCoordinatorId,
+              ownerRole: 'coordinator',
+              taskScope: worldTaskScope,
+              ...(worldScopeWarning ? { scopeWarning: worldScopeWarning } : {}),
               worldTask: true,
               skipDedupe: true
             },
@@ -8277,6 +8993,8 @@ export function apply(ctx, config = {}) {
             channel: createdGroup ? '' : 'world',
             requestTo: [item.id],
             mentions: [item.id],
+            taskScope: worldTaskScope,
+            ...(worldScopeWarning ? { scopeWarning: worldScopeWarning } : {}),
             hiddenFromChat: true,
             skipDedupe: true,
             ...(createdGroup && autoGroupTask && item.id === autoCoordinatorId ? { taskId: autoGroupTask.id, taskRole: 'coordinator' } : {})
@@ -8305,6 +9023,8 @@ export function apply(ctx, config = {}) {
                 ),
                 createdWorkspace ? `（本任务新开了工作区：${createdWorkspace}）` : '',
                 `路由理由：${decision.reason}`,
+                `【范围锁】归属：${shortSid(autoCoordinatorId || item.id)} · 仅做 scope：${worldTaskScope}（${TASK_SCOPE_DISPATCH_TAIL}）`,
+                worldScopeWarning ? `⚠ 范围提醒：${worldScopeWarning} —— 已超出 scope，需 owner 确认后再扩展。` : '',
                 '',
                 text,
                 '',
@@ -8317,6 +9037,8 @@ export function apply(ctx, config = {}) {
                 createdWorkspace ? `（本任务新开了工作区：${createdWorkspace}）` : '',
                 createdGroup ? `（已自动拉协作群「${createdGroup.name}」）` : '',
                 `路由理由：${decision.reason}`,
+                `【范围锁】归属：${shortSid(item.id)} · 仅做 scope：${worldTaskScope}（${TASK_SCOPE_DISPATCH_TAIL}）`,
+                worldScopeWarning ? `⚠ 范围提醒：${worldScopeWarning} —— 已超出 scope，需 owner 确认后再扩展。` : '',
                 isMaintainerSession(item.id)
                   ? '（维护者例外：本次是用户在正文里显式 @ 你，按例外处理；普通任务不会自动派给你，你也不会成为组长/成员；bug 请走「' +
                     BUGFIX_GROUP_NAME +
@@ -8349,6 +9071,9 @@ export function apply(ctx, config = {}) {
         createError,
         requestIds,
         forceNew,
+        owner: autoCoordinatorId || '',
+        taskScope: worldTaskScope,
+        scopeWarning: worldScopeWarning,
         route: decision.route,
         router: { engine: decision.engine, reason: decision.reason },
         // v2.9.1：用户显式 @ 维护者的例外提示（普通自动路由不会命中维护者）。
@@ -8714,6 +9439,69 @@ export function apply(ctx, config = {}) {
         const coordinatorBusy = availabilityOfId(coordinatorId) === 'busy'
         const assigneeBusyIds = targetIds.filter((sessionId) => sessionId !== coordinatorId && availabilityOfId(sessionId) === 'busy')
         const assigneeIds = targetIds.filter((sessionId) => sessionId !== coordinatorId)
+        // v2.10.1：任务范围 + 24h 重复任务合并（同群，命中不再建第二个任务/群）。
+        const explicitGroupScope = String(
+          payload.taskScope ||
+            payload.scopeText ||
+            (payload.scope && !['workspace', 'global', 'group'].includes(payload.scope) ? payload.scope : '') ||
+            ''
+        ).trim()
+        const groupTaskScope = normalizeTaskScope(explicitGroupScope, text)
+        const groupScopeWarning = explicitGroupScope ? detectScopeExpansion(explicitGroupScope, text).join('；') : ''
+        if (payload.allowDuplicate !== true && payload.forceNew !== true && !isExplicitNewRound(text)) {
+          try {
+            const dup = findDuplicateTaskEntry(store.readActive(), { text, groupId: group.id })
+            if (dup) {
+              const existingOwner = taskOwnerOf(dup.entry)
+              const existingTaskId = dup.entry.kind === 'task' ? dup.entry.id : dup.entry.taskId || ''
+              const existingCoordinator = dup.entry.coordinator || existingOwner
+              logger.info(`群任务命中 24h 重复，已合并到 ${dup.entry.id}：${dup.reason}`)
+              return {
+                ok: true,
+                duplicate: true,
+                messageId: dup.entry.id,
+                taskId: existingTaskId,
+                owner: existingOwner,
+                existing: {
+                  id: dup.entry.id,
+                  taskId: existingTaskId,
+                  title: dup.entry.title || '',
+                  owner: existingOwner,
+                  taskScope: dup.entry.taskScope || '',
+                  groupId: dup.entry.groupId || group.id,
+                  kind: dup.entry.kind,
+                  reason: dup.reason
+                },
+                task: {
+                  id: existingTaskId || dup.entry.id,
+                  coordinator: existingCoordinator
+                    ? { id: existingCoordinator, title: titleOf(existingCoordinator), contactId: contactIdOf(existingCoordinator) }
+                    : null,
+                  assignees: (Array.isArray(dup.entry.assignees) ? dup.entry.assignees : []).map((sessionId) => ({
+                    id: sessionId,
+                    title: titleOf(sessionId),
+                    contactId: contactIdOf(sessionId)
+                  })),
+                  status: dup.entry.taskStatus || 'assigned',
+                  steps: Array.isArray(dup.entry.steps) ? dup.entry.steps : []
+                },
+                route: 'duplicate',
+                woken: 0,
+                requestIds: [],
+                coordinatorBusy: false,
+                busyAssignees: [],
+                protectedSkipped,
+                protectedNotice,
+                dedupe: {
+                  reason: dup.reason,
+                  message: `24h 内同群已有同类任务，已返回 existing task id/owner，不再建第二个任务/群。`
+                }
+              }
+            }
+          } catch {
+            /* 查重失败不影响建任务 */
+          }
+        }
         const taskEntry = addEntry(
           {
             title: text.slice(0, 20),
@@ -8727,6 +9515,10 @@ export function apply(ctx, config = {}) {
             taskStatus: 'assigned',
             coordinator: coordinatorId,
             assignees: assigneeIds,
+            owner: coordinatorId,
+            ownerRole: 'coordinator',
+            taskScope: groupTaskScope,
+            ...(groupScopeWarning ? { scopeWarning: groupScopeWarning } : {}),
             steps: taskSteps,
             skipDedupe: true
           },
@@ -8772,6 +9564,8 @@ export function apply(ctx, config = {}) {
             ? [
                 `【群任务 · 你是唯一组长（用户指定）】群组「${group.name}」`,
                 `任务：${text}`,
+                `【归属】owner=你（${shortSid(coordinatorId)}）· 仅做 scope：${groupTaskScope}（${TASK_SCOPE_DISPATCH_TAIL}）`,
+                groupScopeWarning ? `⚠ 范围提醒：${groupScopeWarning} —— 已超出 scope，需你确认后再扩展。` : '',
                 `成员：${memberTitles || '(无)'}`,
                 ...(assigneeSessions.length
                   ? [
@@ -8802,6 +9596,8 @@ export function apply(ctx, config = {}) {
             : [
                     `【群任务 · 你是本任务负责人（用户指定）】群组「${group.name}」`,
                     `任务：${text}`,
+                    `【归属】owner=你（${shortSid(coordinatorId)}）· 仅做 scope：${groupTaskScope}（${TASK_SCOPE_DISPATCH_TAIL}）`,
+                    groupScopeWarning ? `⚠ 范围提醒：${groupScopeWarning} —— 已超出 scope，需你确认后再扩展。` : '',
                     '',
                     '本任务没有其他成员，由你独立完成。',
                     '',
@@ -8824,8 +9620,14 @@ export function apply(ctx, config = {}) {
             coordinator: { id: coordinatorId, title: titleOf(coordinatorId), contactId: contactIdOf(coordinatorId) },
             assignees: assigneeIds.map((sessionId) => ({ id: sessionId, title: titleOf(sessionId), contactId: contactIdOf(sessionId) })),
             status: 'assigned',
+            owner: coordinatorId,
+            ownerRole: 'coordinator',
+            taskScope: groupTaskScope,
+            scopeWarning: groupScopeWarning,
             steps: taskSteps
           },
+          taskScope: groupTaskScope,
+          scopeWarning: groupScopeWarning,
           coordinatorBusy,
           busyAssignees: assigneeBusyIds.map((sessionId) => ({ id: sessionId, title: titleOf(sessionId) })),
           woken,
@@ -8835,6 +9637,8 @@ export function apply(ctx, config = {}) {
         }
       }
 
+      const messageTaskScope = normalizeTaskScope(payload.taskScope || payload.scopeText, text)
+      const messageScopeWarning = detectScopeExpansion(messageTaskScope, text).join('；')
       const note = addEntry(
         {
           title: text.slice(0, 20),
@@ -8845,6 +9649,7 @@ export function apply(ctx, config = {}) {
           origin: 'panel',
           tags: bugfixDelivery ? '@bug' : '@群消息',
           mentions: targetIds,
+          taskScope: messageTaskScope,
           skipDedupe: true
         },
         'panel'
@@ -8864,6 +9669,8 @@ export function apply(ctx, config = {}) {
             origin: 'panel',
             requestTo: [sessionId],
             hiddenFromChat: bugfixDelivery ? false : true,
+            taskScope: messageTaskScope,
+            ...(messageScopeWarning ? { scopeWarning: messageScopeWarning } : {}),
             ...(bugfixDelivery ? { tags: '@bug' } : {}),
             skipDedupe: true
           },
@@ -8882,9 +9689,11 @@ export function apply(ctx, config = {}) {
           : [
               `【群内工作安排 · 用户在群里 @ 你（群组「${group.name}」）】`,
               text,
+              `【范围锁】归属：${shortSid(sessionId)} · 仅做 scope：${messageTaskScope}（${TASK_SCOPE_DISPATCH_TAIL}）`,
+              messageScopeWarning ? `⚠ 范围提醒：${messageScopeWarning} —— 需 owner 确认后再扩展。` : '',
               '',
               `请开始处理。完成后用 session_share 汇报（kind=handoff、group=${group.name}、replyTo=${request.entry.id}、files=文件路径）；无法处理请说明原因。`
-            ].join('\n')
+            ].filter(Boolean).join('\n')
         await ensureSessionLive(sessionId)
         const outcome = wakeSession(sessionId, message, { requestId: request.entry.id })
         if (outcome.ok) woken.push({ sessionId, title: titleById.get(sessionId) || shortSid(sessionId) })
