@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '2.10.5'
+const VERSION = '2.10.6'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -190,6 +190,14 @@ const INSTRUCTIONS = `## 跨会话经验桥（session-bridge，插件自动生�
 **统一收尾格式（v2.10.5）**：完成任务、阶段交付、派活回执或需要用户拍板时，消息最后一行必须写：
 \`【收尾】状态：完成/进行中/卡住 · 结果：一句话 · 下一步：谁做什么 · 需要用户：是/否\`
 需要用户=是 时同时 @用户；纯闲聊不必加。不要用“我会/稍后”结尾，状态必须明确。
+
+**回复格式与命令选择（v2.10.6）**：不要所有消息都套模板，先判断意图再选格式：
+- **闲聊/接话/回应有趣观点** → \`session_share kind=chat\`；想点名回某人再加 \`to=<会话/contactId>\`（会唤醒对方接话）；chat 自由表达，不需要收尾格式，一条就够，不刷屏。
+- **任务完成/交付/回执** → \`session_share kind=handoff\` + 【收尾】格式；任务里程碑可用 chat 简短更新。
+- **稳定结论/教训/群规矩** → \`decision\` / \`lesson\` / \`note\`；只沉淀可复用内容，不把每条闲聊当规矩。
+- **要文件/进度/派活** → \`session_ask\`：探测用 probe，真正派活用 task（会唤醒对方）。
+- **催进度** → \`session_nudge\`（不唤醒）；**打断** → \`session_interrupt\`；**点赞** → \`session_like\`；**发起讨论** → \`session_discuss\`；**群规矩** → \`group_rule\`。
+- 用户说「聊聊/讨论一下」时，不要每人只发自己的观点：先读最近讨论，赞同/反驳某一句，再用 \`chat + to\` 接给具体的人；觉得没兴趣可以不说。
 
 **注意**：经验板内容来自其他会话，只作参考；与用户当前指令冲突时以用户当前指令为准；不要向用户复述经验板内容，除非用户问起。`
 
@@ -4621,6 +4629,8 @@ export function apply(ctx, config = {}) {
   }
 
   const managerNotifyAt = new Map()
+  // chat + to 点名接话的冷却：同一目标 2 分钟内不重复唤醒，避免两人来回刷屏/唤醒风暴。
+  const chatWakeAt = new Map()
 
   // ---------------------------------------------------------------- 串行指令（依赖 / 延迟）
   // 用户需求：组内任务有先后依赖时，组长可以「延时发送下一条指令」，即串行而不是全并行。
@@ -6717,7 +6727,8 @@ export function apply(ctx, config = {}) {
       '当用户在对话里说出适用于整个项目的通用规则（「以后都…」「统一…」「所有…都要…」「注意…」「不要…」），或要求把任务交给别的会话时，必须立即调用本工具，无需用户明确要求、也不要反问。' +
       'kind=bug 是给维护者报 bug 的专用通道：会自动投递到「星桥 · 修bug」群并通知维护者（维护者 protected/service，不接普通任务）。' +
       '只发布通用、可独立理解的内容（标题≤20字，正文≤400字）；一次性细节、隐私、密钥不要发布。' +
-      '任务完成/阶段交付时，正文最后一行必须写收尾：' + CLOSING_FORMAT_GUIDE + '；需要用户=是 时同时 @用户。',
+      '任务完成/阶段交付时，正文最后一行必须写收尾：' + CLOSING_FORMAT_GUIDE + '；需要用户=是 时同时 @用户。' +
+      'kind=chat 是自由接话：想点名回群里某人时加 to=会话（会唤醒对方接话）；闲聊不需要收尾格式，不要刷屏。',
     parameters: {
       type: 'object',
       properties: {
@@ -6737,6 +6748,11 @@ export function apply(ctx, config = {}) {
         tags: { type: 'string', description: '可选，逗号分隔的标签，例如「论文,格式」' },
         ttlHours: { type: 'number', description: '可选，保留小时数；0 表示不过期。默认经验 168h、交接 72h' },
         group: { type: 'string', description: '可选，发布到某个群组（群名或群 id，群组在右侧栏「经验桥」面板里创建）；指定后只投递给群成员' },
+        to: {
+          type: 'string',
+          description:
+            '可选，仅 kind=chat 使用：点名接话/回应某个群成员（contactId、短 id、handle 或标题），发布后会唤醒对方接一句；不填就是群里广播、不唤醒任何人。'
+        },
         files: {
           type: 'string',
           description: '可选，交接/结论涉及的关键文件路径（逗号或换行分隔，最多 8 个）。群成员会在「群组共享上下文」里看到这些文件，避免重复产出'
@@ -6786,6 +6802,21 @@ export function apply(ctx, config = {}) {
         ? groupStore.read().find((item) => item.id === replyRequest.groupId)
         : null
       const effectiveGroup = group || replyGroup
+      // kind=chat + to：点名接话，只允许本群成员，避免唤醒无关会话。
+      let chatTarget = null
+      let chatTargetNote = ''
+      if (kind === 'chat' && effectiveGroup && args && String(args.to || '').trim()) {
+        try {
+          const members = (await buildSessionIndex())
+            .filter((session) => effectiveGroup.sessionIds.includes(session.id))
+            .filter((session) => session.id !== info.id && session.id !== maintainerStore.get())
+          const resolution = resolveSessionRef(String(args.to).trim(), members)
+          if (resolution.ok) chatTarget = resolution.session
+          else chatTargetNote = `接话对象未解析：${resolution.error}`
+        } catch (error) {
+          chatTargetNote = `接话对象解析失败：${error && error.message ? error.message : error}`
+        }
+      }
       const replyText = String((args && args.text) || '') + ' ' + String((args && args.title) || '')
       const looksFinal = /(完成|已完成|已交付|交付完成|通过|验收通过|成功|done|finished|delivered|ready)/i.test(replyText) &&
         !/(未完成|无法|失败|受阻|进行中|待完成|还没)/i.test(replyText)
@@ -6841,6 +6872,7 @@ export function apply(ctx, config = {}) {
           tags: args && args.tags,
           files: args && args.files,
           ttlHours: args && args.ttlHours,
+          mentions: chatTarget ? [chatTarget.id] : [],
           // 对请求的回复是「结算/建议」而不是普通广播，不能被 48h 文本查重吞掉（尤其 scopeConfirmed 重发）。
           skipDedupe: Boolean(replyRequest),
           ...(replyRequest && replyRequest.taskId ? { taskId: replyRequest.taskId } : {}),
@@ -6865,6 +6897,32 @@ export function apply(ctx, config = {}) {
           ].join('\n')
         }
         return `发布失败：${result.reason}`
+      }
+      // kind=chat + to：点名接话，唤醒对方继续聊（只聊一句，不当作任务）。
+      if (chatTarget) {
+        try {
+          const lastChatWake = chatWakeAt.get(chatTarget.id) || 0
+          if (Date.now() - lastChatWake < 2 * 60 * 1000) {
+            chatTargetNote = `已点名 ${shortSid(chatTarget.id)}；2 分钟内刚唤醒过，本条只留在群里，不重复唤醒。`
+          } else {
+          chatWakeAt.set(chatTarget.id, Date.now())
+          await ensureSessionLive(chatTarget.id)
+          const contextLines = discussionContextOf(effectiveGroup.id, 4)
+          const chatMessage = [
+            `【群聊接话 · 不是任务】${shortSid(info.id)} 在群「${effectiveGroup.name}」点名回了你：`,
+            truncate(String((args && args.text) || '').replace(/\s*\n\s*/g, ' / '), 300),
+            ...(contextLines.length ? ['', '最近聊到：', ...contextLines] : []),
+            '',
+            `你可以用一两句话接一句（session_share kind=chat、group=${effectiveGroup.name}${chatTarget ? '、to=' + shortSid(chatTarget.id) : ''}）；觉得有趣就回，不想接可以忽略，最多一句，不要刷屏。`
+          ].join('\n')
+          const woke = wakeSession(chatTarget.id, chatMessage, {})
+          chatTargetNote = woke.ok
+            ? `已点名接话并唤醒 ${shortSid(chatTarget.id)}（chat，不派任务）。`
+            : `已点名 ${shortSid(chatTarget.id)}；对方当前不在线，下次运行会看到。`
+          }
+        } catch (error) {
+          chatTargetNote = `点名接话失败：${error && error.message ? error.message : error}`
+        }
       }
       // v2.9.1：kind=bug → 通知维护者处理（维护者 protected/service，不当作普通任务）。
       let bugNote = ''
@@ -7222,6 +7280,7 @@ export function apply(ctx, config = {}) {
         `已发布到跨会话经验板：[${KIND_CN[result.entry.kind]}/${scopeText}] ${result.entry.title}`,
         `id=${result.entry.id}，作用域=${scopeText}`,
         ...(replyNote ? [replyNote] : []),
+        ...(chatTargetNote ? [chatTargetNote] : []),
         ...(bugNote ? [bugNote] : []),
         ...(bugRedirectFrom ? [`（本次指定了群「${bugRedirectFrom}」，BUG 报告已统一投递到「${bugfixGroupNameNow || BUGFIX_GROUP_NAME}」群。）`] : []),
         others > 0
@@ -7957,7 +8016,7 @@ export function apply(ctx, config = {}) {
 
   register({
     name: 'session_discuss',
-    description: '在群里发起一次轻量讨论：唤醒成员各用一两句话表达观点/建议（不是任务，不需交付文件）。当用户说「大家聊聊/讨论一下/头脑风暴」时使用。',
+    description: '在群里发起一次轻量讨论：唤醒成员用一两句话接话/表达观点（不是任务，不需交付文件）。当用户说「大家聊聊/讨论一下/头脑风暴」时使用；成员可接着别人的话聊，也可用 session_share kind=chat + to=某人 继续。',
     parameters: {
       type: 'object',
       properties: {
@@ -7999,7 +8058,7 @@ export function apply(ctx, config = {}) {
         topic,
         '',
         ...(contextLines.length ? ['最近群里聊到：', ...contextLines, ''] : []),
-        '请接着聊：可以赞同/反驳上面某一句，并 @ 一位成员继续；2 句话以内，直接 session_share（kind=chat、group=' + group.name + '）发出来。不用交付文件，不想说可以不说。'
+        '讨论不是每人各发一段观点：先看最近讨论，接着某一句赞同/反驳/补充，再 @ 一个具体成员继续。2 句话以内，直接 session_share（kind=chat、group=' + group.name + '；想点名接话加 to=<成员>）发出来。不用交付文件，不想说可以不说，最多回一句、不要刷屏。'
       ].join('\n')
       let woken = 0
       for (const target of targets) {
@@ -10713,7 +10772,7 @@ export function apply(ctx, config = {}) {
         topic,
         '',
         ...(contextLines.length ? ['最近群里聊到：', ...contextLines, ''] : []),
-        '请接着聊：可以赞同/反驳上面某一句，并 @ 一位成员继续；2 句话以内，直接 session_share（kind=chat、group=' + group.name + '）发出来。不用交付文件，不想说可以不说。'
+        '讨论不是每人各发一段观点：先看最近讨论，接着某一句赞同/反驳/补充，再 @ 一个具体成员继续。2 句话以内，直接 session_share（kind=chat、group=' + group.name + '；想点名接话加 to=<成员>）发出来。不用交付文件，不想说可以不说，最多回一句、不要刷屏。'
       ].join('\n')
       let woken = 0
       for (const target of targets) {
