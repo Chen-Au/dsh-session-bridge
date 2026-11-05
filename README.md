@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contract tests](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/Chen-Au/dsh-session-bridge/actions/workflows/test.yml)
-[![Version](https://img.shields.io/badge/version-2.10.0-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
+[![Version](https://img.shields.io/badge/version-2.10.1-7c5cff.svg)](https://github.com/Chen-Au/dsh-session-bridge/releases)
 [![DSH Desktop](https://img.shields.io/badge/DSH-Desktop-4fd8ff.svg)](https://github.com/Chen-Au/dsh-session-bridge)
 
 
@@ -139,6 +139,24 @@
 - 权限：只有**组长 / 维护者**能排串行指令（群还没设组长时任何成员可排）；普通成员会收到明确提示。
 - 面板：排队的请求在群聊里显示「排队中，依赖 N 项前置」；任务卡显示步骤进度「步骤 1/2（下一步 …）」。
 - `group.post` 支持 `steps: ["先做调研", "再写正文"]`，组长被唤醒时会收到步骤清单与串行做法（步骤 2 用 `dependsOn=<步骤1的请求 id>` 排队）。
+
+### 15. 任务归属锁、范围约束与重复任务合并（v2.10.1）
+
+**全盘读权限不是任务授权。** 拿到全盘读权限的成员只能做明确分配给自己的部分，不能补做他人分工的 A/B 两侧、工具链或 runbook，也不能顺手扩到另一个盘/全盘盘点。
+
+- **任务字段**：`kind=task` 新增 `owner`（唯一 active owner）、`ownerRole`、`claimedAt`、`claimState`（assigned/claimed/released）、`taskScope`（只做什么、不做什么）。任务创建时即写入 owner=coordinator/assignee，并由正文或显式 `taskScope` 生成 scope；`kind=request` 同样带 owner 与 taskScope。
+  - 说明：`entry.scope` 已被可见性占用（workspace/global/group），任务工作范围使用等价的 `taskScope`，避免投递错工作区。
+- **`task.claim` / `task.release`**（HTTP 命令；`session_board` 的 `action=task.claim/task.release` 等价）：
+  - 只有该任务的 coordinator/assignee 可 claim；面板需显式给 `owner`；
+  - 已被他人持有时返回当前 owner 和拒绝原因，**不会静默覆盖**；同一任务只有一个 active owner；
+  - release 后 owner 清空，可被重新认领；`task.dedupe` 输出重复任务合并建议（`apply=true` 只标 canceled + mergedInto，不删除数据）。
+- **`session_share` 回复 task request 时校验归属**：
+  - 非 owner 的回复只作为 proposal/建议记录，**不推进 taskStatus、不结算完成奖励**，但会唤醒 owner 收集；
+  - 只有 owner 能推进 taskStatus/结算；
+  - 交付文本出现 scope 外的盘/全盘盘点、runbook、工具链、A/B 两侧等关键词时，只写 `scopeWarning` 并提示 owner 确认，**不自动扩展 scope**；owner 确认是用户新要求后带 `scopeConfirmed=true` 重发才会推进并留审计。
+- **派活模板**：`session_ask`（任务模式）与 `group.post`/`world.post` 的任务消息统一带「【范围锁】归属：X · 仅做 scope：…（仅做 scope，禁止扩展；全盘读权限不是任务授权）」；`session_ask` 新增可选 `scope` 参数，不传时沿用所属任务 taskScope 或从正文推导。
+- **24h 重复任务合并**：`world.post` / `group.post` 创建任务/群前，对同群或全局最近 24h 的活动 task/request 做规范化文本相似度 + 目标盘 + 同类动作检测（同请求、同目标盘、同用户需求）。命中则返回 `duplicate:true`、existing task id 与 owner，**不再建第二个群/任务**；`forceNew=true`、正文含「新一轮/第 N 版/重新做」或 `allowDuplicate=true` 可显式区分新任务。
+- **UI**：任务卡、群聊和空闲看板显示 owner、claim 状态与「仅 scope」；世界页/任务详情对疑似重复任务给出合并提示；`state.duplicates` 下发建议列表。
 
 ---
 

@@ -236,10 +236,15 @@ await check('session_board.action 用枚举约束', () => {
     'remove',
     'claim',
     'unclaim',
+    'task.claim',
+    'task.release',
+    'task.dedupe',
     'ack',
     'status',
     'bugfix'
   ])
+  assert.equal(toolByName.get('session_share').parameters.properties.scopeConfirmed.type, 'boolean')
+  assert.equal(toolByName.get('session_ask').parameters.properties.scope.type, 'string')
 })
 
 await check('session_share.group 参数存在（可选）', () => {
@@ -349,7 +354,7 @@ await check('查重生效（相同内容不重复发布）', async () => {
 
 await check('session_board status 报告版本与注册结果', async () => {
   const result = String(await board.execute({ action: 'status' }, { agent: rootAgent }))
-  assert.match(result, /session-bridge v2\.10\.0/)
+  assert.match(result, /session-bridge v2\.10\.1/)
   assert.match(result, /工具：session_share, session_ask, session_nudge, session_retract, session_interrupt, group_rule, session_like, session_discuss, session_identity, group_member, session_directory, group_skill, session_profile, session_board, group_recruit, session_urgent/)
   assert.match(result, /通讯录：3 个主会话/)
   assert.match(result, /空闲看板：idle \d+ 个 · busy \d+ 个/)
@@ -361,7 +366,7 @@ await check('session_board status 报告版本与注册结果', async () => {
 
 await check('子会话可只读查看经验板（list / status）', async () => {
   const status = String(await board.execute({ action: 'status' }, { agent: subAgent }))
-  assert.match(status, /session-bridge v2\.10\.0/)
+  assert.match(status, /session-bridge v2\.10\.1/)
   const listed = String(await board.execute({ action: 'list' }, { agent: subAgent }))
   assert.match(listed, /跨会话经验板/)
 })
@@ -458,7 +463,7 @@ await check('GET state 返回规则/群组/会话/送达结构', async () => {
   const { res, json } = await callState()
   assert.equal(res.out.status, 200)
   assert.equal(json.ok, true)
-  assert.equal(json.version, '2.10.0')
+  assert.equal(json.version, '2.10.1')
   assert.ok(Array.isArray(json.rules) && json.rules.length >= 1)
   assert.ok(Array.isArray(json.groups))
   assert.ok(Array.isArray(json.sessions) && json.sessions.length >= 2)
@@ -733,8 +738,9 @@ await check('群任务：只唤醒组长；组长派活时成员才被唤醒一�
     )
   )
   assert.match(memberReply, /组长已收到|已唤醒组长收集/)
-  const collecting = (await callState()).json.rules.find((item) => item.id === task.id)
-  assert.equal(collecting.taskStatus, 'collecting')
+  const afterProposal = (await callState()).json.rules.find((item) => item.id === task.id)
+  assert.equal(afterProposal.taskStatus, 'delegating', '非 owner 只能作为 proposal，不能推进 taskStatus')
+  assert.ok(afterProposal.proposalCount >= 1, '非 owner 的提交应记录为 proposal')
   assert.equal(captured.followups.length, 1, '成员提交后唤醒组长')
 
   // 成员提交过 ≠ 永久禁唤醒：下一轮修改任务必须还能派给他。
@@ -1109,7 +1115,7 @@ await check('面板命令：删除规矩与群组', async () => {
 
 await check('插件启动凭证写入正确（工具/注册/版本/API）', () => {
   const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))
-  assert.equal(receipt.version, '2.10.0')
+  assert.equal(receipt.version, '2.10.1')
   assert.deepEqual(receipt.tools.slice().sort(), ['group_member', 'group_recruit', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_interrupt', 'session_like', 'session_nudge', 'session_profile', 'session_retract', 'session_share', 'session_urgent'])
   assert.deepEqual(receipt.failedTools, [])
   assert.equal(receipt.registration.section, true)
@@ -2706,7 +2712,7 @@ let otherGroupId = ''
 
 await check('v2.9.2：state 暴露撤回/打断能力（探测到宿主 cancel）', async () => {
   const { json } = await callState4()
-  assert.equal(json.version, '2.10.0')
+  assert.equal(json.version, '2.10.1')
   assert.equal(json.capabilities.retract, true)
   assert.equal(json.capabilities.interrupt, 'cancel', '应探测到宿主的 agent.cancel 能力')
   assert.ok(toolByName4.get('session_retract'), '缺少 session_retract 工具')
@@ -3994,6 +4000,325 @@ await (async () => {
     assert.match(String(woke[0].message.content[0].text), /等汇总后再做最终核对/)
   })
 })()
+
+// ---------------------------------------------------------------- N. 任务归属锁 / 范围约束 / 重复任务合并（v2.10.1）
+console.log('== N. 任务归属锁 / 范围约束 / 重复任务合并（v2.10.1）')
+const scopeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-bridge-scope-'))
+const scopeCaptured = { tools: [], routes: [], followups: [] }
+const S_COORD = 'session-c0c0c0c0-1111-4000-8000-aaaaaaaaaaaa'
+const S_MEMBER = 'session-d1d1d1d1-2222-4000-8000-bbbbbbbbbbbb'
+const S_OUT = 'session-e2e2e2e2-3333-4000-8000-cccccccccccc'
+const SCOPE_TITLES = { [S_COORD]: '范围组长', [S_MEMBER]: '范围成员', [S_OUT]: '范围外成员' }
+const scopeAgentOf = (id) => ({
+  id,
+  status: 'idle',
+  session: { id, header: { cwd: CWD } },
+  followup(message) {
+    scopeCaptured.followups.push({ sessionId: id, message })
+  }
+})
+const scopeAgents = [scopeAgentOf(S_COORD), scopeAgentOf(S_MEMBER), scopeAgentOf(S_OUT)]
+const scopeSessionQuery = {
+  async listSessions() {
+    return scopeAgents.map((agent) => ({ header: agent.session.header, live: true, persisted: true, formatStatus: 'current' }))
+  },
+  async readTitleSnapshots(ids) {
+    return ids.map((id) => ({
+      sessionId: id,
+      status: 'fulfilled',
+      value: { session: { id }, ...(SCOPE_TITLES[id] ? { title: { title: SCOPE_TITLES[id] } } : {}) }
+    }))
+  }
+}
+const scopeCtx = {
+  tools: { register(definition) { scopeCaptured.tools.push(definition); return () => {} } },
+  systemPrompt: { section() { return () => {} }, context() { return () => {} } },
+  agents: {
+    roots: () => [scopeAgents[0], scopeAgents[1]],
+    list: () => scopeAgents,
+    get: (id) => scopeAgents.find((agent) => agent.id === id)
+  },
+  sessions: { list: () => scopeAgents.map((agent) => agent.session) },
+  get(name) {
+    if (name === 'webServer') {
+      return { register(route) { scopeCaptured.routes.push(route); return () => {} } }
+    }
+    if (name === 'sessionQuery') return scopeSessionQuery
+    return undefined
+  },
+  effect(callback) { const disposer = callback(); return typeof disposer === 'function' ? disposer : () => {} },
+  on() { return () => {} },
+  logger: { info() {}, warn() {}, error() {} }
+}
+plugin.apply(scopeCtx, { boardDir: scopeDir, injectMode: 'broadcast', autoPrompt: false, approveAutoCreate: false })
+const scopeTools = new Map(scopeCaptured.tools.map((tool) => [tool.name, tool]))
+const scopeRoute = (routePath) => scopeCaptured.routes.find((route) => route.path === routePath)?.handler
+const callScopeState = async () => {
+  const res = fakeRes()
+  await scopeRoute('/api/session-bridge/state')(fakeReq(), res)
+  return { res, json: JSON.parse(res.out.body) }
+}
+const callScopeCommand = async (command) => {
+  const res = fakeRes()
+  await scopeRoute('/api/session-bridge/command')(
+    fakeReq({
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-session-bridge-action': '1' },
+      body: JSON.stringify(command)
+    }),
+    res
+  )
+  return { res, json: JSON.parse(res.out.body) }
+}
+const scopeBoard = scopeTools.get('session_board')
+const scopeShare = scopeTools.get('session_share')
+const scopeAsk = scopeTools.get('session_ask')
+const scopeGroup = await callScopeCommand({
+  action: 'group.create',
+  payload: { name: '范围组', workspace: CWD, sessionIds: [S_COORD, S_MEMBER] }
+})
+const scopeGroupId = scopeGroup.json.groupId
+assert.ok(scopeGroupId, '范围组应创建成功')
+
+await check('task 创建写 owner/taskScope/claim；request 继承 scope', async () => {
+  const posted = await callScopeCommand({
+    action: 'group.post',
+    payload: {
+      id: scopeGroupId,
+      text: '清理 X 盘下载目录临时文件',
+      task: true,
+      coordinatorId: S_COORD,
+      assigneeIds: [S_MEMBER],
+      taskScope: '只做 X 盘下载目录清理；不做 Y 盘、工具链、runbook'
+    }
+  })
+  assert.equal(posted.json.ok, true, JSON.stringify(posted.json))
+  const task = posted.json.state.rules.find((item) => item.id === posted.json.task.id)
+  assert.equal(task.owner, S_COORD)
+  assert.equal(task.ownerRole, 'coordinator')
+  assert.equal(task.claimState, 'assigned')
+  assert.ok(task.claimedAt > 0)
+  assert.match(task.taskScope, /X 盘下载目录清理/)
+  const request = posted.json.state.rules.find((item) => item.id === posted.json.requestIds[0])
+  assert.equal(request.owner, S_COORD, '任务请求继承任务 owner')
+  assert.match(request.taskScope, /X 盘下载目录清理/, '请求必须带 scope')
+})
+
+await check('task.claim 冲突：返回当前 owner + 拒绝原因，不静默覆盖', async () => {
+  const taskId = (await callScopeState()).json.rules.find((item) => item.kind === 'task' && /X 盘下载/.test(item.text)).id
+  const conflict = String(await scopeBoard.execute({ action: 'task.claim', id: taskId }, { agent: scopeAgents[1] }))
+  assert.match(conflict, /已被会话/)
+  assert.match(conflict, /owner=/)
+  const outsider = String(await scopeBoard.execute({ action: 'task.claim', id: taskId }, { agent: scopeAgents[2] }))
+  assert.match(outsider, /只有该任务的 coordinator\/assignee/)
+  const panelBad = await callScopeCommand({ action: 'task.claim', payload: { id: taskId, owner: S_OUT } })
+  assert.equal(panelBad.json.ok, false, '面板也不能把任务塞给非 assignee/coordinator')
+  assert.match(String(panelBad.json.error), /coordinator\/assignee/)
+  const state = await callScopeState()
+  assert.equal(state.json.rules.find((item) => item.id === taskId).owner, S_COORD)
+})
+
+await check('task.release + task.claim：同一任务只有一个 active owner', async () => {
+  const taskId = (await callScopeState()).json.rules.find((item) => item.kind === 'task' && /X 盘下载/.test(item.text)).id
+  const released = await callScopeCommand({ action: 'task.release', payload: { id: taskId } })
+  assert.equal(released.json.ok, true, JSON.stringify(released.json))
+  let task = (await callScopeState()).json.rules.find((item) => item.id === taskId)
+  assert.equal(task.owner, '')
+  assert.equal(task.claimState, 'released')
+  const claimed = String(await scopeBoard.execute({ action: 'task.claim', id: taskId }, { agent: scopeAgents[1] }))
+  assert.match(claimed, /已认领任务/)
+  task = (await callScopeState()).json.rules.find((item) => item.id === taskId)
+  assert.equal(task.owner, S_MEMBER)
+  assert.equal(task.claimState, 'claimed')
+  const conflict = String(await scopeBoard.execute({ action: 'task.claim', id: taskId }, { agent: scopeAgents[0] }))
+  assert.match(conflict, /已被会话/)
+})
+
+await check('非 owner 的 session_share 只作 proposal：不推进 taskStatus、不结算奖励', async () => {
+  const posted = await callScopeCommand({
+    action: 'group.post',
+    payload: {
+      id: scopeGroupId,
+      text: '整理 Y 盘报告第 1 节',
+      task: true,
+      coordinatorId: S_COORD,
+      assigneeIds: [S_MEMBER],
+      taskScope: '只做 Y 盘报告第 1 节'
+    }
+  })
+  const taskId = posted.json.task.id
+  const before = await callScopeState()
+  const memberBefore = (before.json.reputation.find((item) => item.sessionId === S_MEMBER) || { points: 0 }).points
+  scopeCaptured.followups.length = 0
+  const askOut = String(
+    await scopeAsk.execute({ group: '范围组', text: '整理 Y 盘报告第 1 节', to: S_MEMBER, mode: 'task' }, { agent: scopeAgents[0] })
+  )
+  assert.match(askOut, /发出任务分配/)
+  const dispatch = String(scopeCaptured.followups[0].message.content[0].text)
+  assert.match(dispatch, /仅做 scope/)
+  assert.match(dispatch, /禁止扩展/)
+  const memberRequest = (await callScopeState()).json.rules.find(
+    (item) => item.kind === 'request' && item.taskId === taskId && item.taskRole === 'member'
+  )
+  const proposal = String(
+    await scopeShare.execute(
+      { title: '第 1 节完成', text: '第 1 节已完成，请复核', kind: 'handoff', group: '范围组', replyTo: memberRequest.id },
+      { agent: scopeAgents[1] }
+    )
+  )
+  assert.match(proposal, /proposal/)
+  assert.match(proposal, /不推进任务状态/)
+  const after = await callScopeState()
+  const task = after.json.rules.find((item) => item.id === taskId)
+  assert.equal(task.taskStatus, 'delegating', '非 owner 不能推进 taskStatus')
+  assert.ok(task.proposalCount >= 1)
+  const memberAfter = (after.json.reputation.find((item) => item.sessionId === S_MEMBER) || { points: 0 }).points
+  assert.equal(memberAfter, memberBefore, '非 owner 不得获得完成奖励')
+  const coordinatorRequest = after.json.rules.find(
+    (item) => item.kind === 'request' && item.taskId === taskId && item.taskRole === 'coordinator'
+  )
+  const doneReply = String(
+    await scopeShare.execute(
+      { title: '任务完成', text: '报告已完成并交付', kind: 'handoff', group: '范围组', replyTo: coordinatorRequest.id },
+      { agent: scopeAgents[0] }
+    )
+  )
+  assert.match(doneReply, /任务已标记为完成/)
+  assert.equal((await callScopeState()).json.rules.find((item) => item.id === taskId).taskStatus, 'done')
+})
+
+await check('scope 超界：owner 交付额外盘/runbook 只提示不自动完成；scopeConfirmed 后推进', async () => {
+  const posted = await callScopeCommand({
+    action: 'group.post',
+    payload: {
+      id: scopeGroupId,
+      text: '清理 W 盘临时目录',
+      task: true,
+      coordinatorId: S_COORD,
+      assigneeIds: [S_MEMBER],
+      taskScope: '只做 W 盘临时目录清理'
+    }
+  })
+  const taskId = posted.json.task.id
+  const requestId = posted.json.requestIds[0]
+  const warned = String(
+    await scopeShare.execute(
+      { title: '完成 W 盘清理', text: '已完成 W 盘清理，另外把 Y 盘全盘盘点一遍并补 runbook', kind: 'handoff', group: '范围组', replyTo: requestId },
+      { agent: scopeAgents[0] }
+    )
+  )
+  assert.match(warned, /超出任务 scope|超出 scope/)
+  assert.match(warned, /未自动扩展/)
+  let task = (await callScopeState()).json.rules.find((item) => item.id === taskId)
+  assert.ok(task.scopeWarning)
+  assert.notEqual(task.taskStatus, 'done')
+  const confirmed = String(
+    await scopeShare.execute(
+      {
+        title: '确认扩展后完成',
+        text: '已完成 W 盘清理，另外把 Y 盘全盘盘点一遍并补 runbook',
+        kind: 'handoff',
+        group: '范围组',
+        replyTo: requestId,
+        scopeConfirmed: true
+      },
+      { agent: scopeAgents[0] }
+    )
+  )
+  assert.match(confirmed, /任务已标记为完成/)
+  task = (await callScopeState()).json.rules.find((item) => item.id === taskId)
+  assert.equal(task.taskStatus, 'done')
+  assert.ok(task.scopeConfirmedAt > 0)
+})
+
+await check('group.post 24h 重复任务：返回 existing task/owner，不再建第二个任务', async () => {
+  const text = '清理 Z 盘回收站'
+  const first = await callScopeCommand({
+    action: 'group.post',
+    payload: { id: scopeGroupId, text, task: true, coordinatorId: S_COORD, assigneeIds: [S_MEMBER], taskScope: '只做 Z 盘回收站' }
+  })
+  assert.equal(first.json.ok, true, JSON.stringify(first.json))
+  const before = await callScopeState()
+  const beforeCount = before.json.rules.filter((item) => item.kind === 'task' && item.groupId === scopeGroupId).length
+  const second = await callScopeCommand({
+    action: 'group.post',
+    payload: { id: scopeGroupId, text, task: true, coordinatorId: S_COORD, assigneeIds: [S_MEMBER], taskScope: '只做 Z 盘回收站' }
+  })
+  assert.equal(second.json.ok, true, JSON.stringify(second.json))
+  assert.equal(second.json.duplicate, true)
+  assert.equal(second.json.taskId, first.json.task.id)
+  assert.equal(second.json.owner, S_COORD)
+  assert.equal(second.json.woken, 0)
+  const afterCount = (await callScopeState()).json.rules.filter((item) => item.kind === 'task' && item.groupId === scopeGroupId).length
+  assert.equal(afterCount, beforeCount, '命中重复不应新增任务')
+})
+
+await check('world.post 24h 重复任务：同目标盘不再建第二个群/任务', async () => {
+  const first = await callScopeCommand({
+    action: 'world.post',
+    payload: { text: `@${S_COORD} 清理 Q 盘临时目录`, taskScope: '只做 Q 盘临时目录清理' }
+  })
+  assert.equal(first.json.ok, true, JSON.stringify(first.json))
+  assert.ok(first.json.createdGroup)
+  const second = await callScopeCommand({ action: 'world.post', payload: { text: 'Q 盘临时目录清理，只做这一件事' } })
+  assert.equal(second.json.ok, true, JSON.stringify(second.json))
+  assert.equal(second.json.duplicate, true)
+  assert.equal(second.json.owner, S_COORD)
+  assert.equal(second.json.createdGroup, null, '命中重复不应再建群')
+  const qTasks = (await callScopeState()).json.rules.filter(
+    (item) => item.kind === 'task' && /Q 盘/.test(`${item.title} ${item.text}`) && (item.taskStatus || 'assigned') !== 'canceled'
+  )
+  assert.equal(qTasks.length, 1)
+})
+
+await check('task.dedupe：建议不删数据；apply 只标 canceled + mergedInto', async () => {
+  const primary = await callScopeCommand({
+    action: 'group.post',
+    payload: { id: scopeGroupId, text: '清理 V 盘回收站', task: true, coordinatorId: S_COORD, assigneeIds: [S_MEMBER], taskScope: '只做 V 盘回收站' }
+  })
+  assert.equal(primary.json.ok, true, JSON.stringify(primary.json))
+  const duplicate = await callScopeCommand({
+    action: 'group.post',
+    payload: {
+      id: scopeGroupId,
+      text: '清理 V 盘回收站 重复副本',
+      task: true,
+      coordinatorId: S_MEMBER,
+      assigneeIds: [S_COORD],
+      taskScope: '只做 V 盘回收站',
+      allowDuplicate: true
+    }
+  })
+  assert.equal(duplicate.json.ok, true, JSON.stringify(duplicate.json))
+  const beforeTasks = (await callScopeState()).json.rules.filter((item) => item.kind === 'task').length
+  const report = await callScopeCommand({ action: 'task.dedupe', payload: {} })
+  assert.equal(report.json.ok, true, JSON.stringify(report.json))
+  assert.ok(report.json.suggestions.length >= 1)
+  assert.equal((await callScopeState()).json.rules.filter((item) => item.kind === 'task').length, beforeTasks, '建议不得删数据')
+  const applied = await callScopeCommand({ action: 'task.dedupe', payload: { apply: true } })
+  assert.equal(applied.json.ok, true, JSON.stringify(applied.json))
+  assert.ok(applied.json.applied >= 1)
+  const merged = (await callScopeState()).json.rules.find((item) => item.id === duplicate.json.task.id)
+  assert.ok(merged, 'apply 不得删除任务数据')
+  assert.equal(merged.taskStatus, 'canceled')
+  assert.ok(merged.mergedInto)
+})
+
+await check('state/UI：owner、scope、claim、duplicates 与静态文案', async () => {
+  const state = await callScopeState()
+  assert.ok(Array.isArray(state.json.duplicates))
+  const busy = state.json.sessions.find((session) => session.availability === 'busy' && session.currentTask)
+  assert.ok(busy && busy.currentTask.owner && busy.currentTask.taskScope, 'currentTask 应带 owner/taskScope')
+  const appHtml = fs.readFileSync(path.join(PLUGIN_DIR, 'app.html'), 'utf8')
+  const clientJs = fs.readFileSync(path.join(PLUGIN_DIR, 'client.js'), 'utf8')
+  for (const needle of ['仅 scope', '归属：', 'taskScope', 'duplicates', 'scopeConfirmed', 'task.dedupe', 'task-lock', 'dedupe-card']) {
+    assert.ok(appHtml.includes(needle) || clientJs.includes(needle), 'UI 缺少 ' + needle)
+  }
+  assert.ok(clientJs.includes('24h 内已有同类任务'), '世界页应提示重复合并')
+})
+
+fs.rmSync(scopeDir, { recursive: true, force: true })
+
 // ---------------------------------------------------------------- 收尾
 fs.rmSync(targetedDir, { recursive: true, force: true })
 fs.rmSync(contactDir, { recursive: true, force: true })
