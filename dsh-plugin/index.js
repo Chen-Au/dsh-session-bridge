@@ -4167,6 +4167,173 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  // ---------------------------------------------------------------- agent preset（核心工具的挂载点）
+  //
+  // DSH 的 Web 面把「agent 平面」整体挪到了 agent preset 后面：read/write/edit/pwsh/glob/grep/job_* /
+  // web_* / subagent / skill / todo / present / ask_user_question 等 27 个核心工具，都是会话挂上 preset
+  // 之后才注册进这个 agent 的。宿主的 SessionController.composeAgent() 会在 create/resume 的 setup 里
+  // mount preset；插件若直接调 ctx.agents.create()/resume()（本插件历史上就是这么干的），agent 就只有
+  // 宿主面注册的工具（session_*/group_*、office/ppt、wechat 等），核心工具一个都没有 —— 这就是用户
+  // 看到的「工具被莫名其妙剥夺」。下面这些 helper 把 create/resume 的 setup 补齐到与宿主同款：
+  // 先装模型选择，再挂 preset；另外给「已经活着但漏挂 preset」的会话做一次补救（recompose）。
+  // 宿主把 agent preset 服务发布得比本插件晚（冷启动竞态），所以这里用可选注入捕获它，并在需要时等待。
+  let agentPresetsService = null
+  const agentPresetsWaiters = []
+  try {
+    ctx.inject(['agentPresets'], (child) => {
+      agentPresetsService = child.agentPresets || (child.get && child.get('agentPresets')) || null
+      for (const notify of agentPresetsWaiters.splice(0)) notify(agentPresetsService)
+    })
+  } catch {
+    /* ignore */
+  }
+
+  const agentPresetService = () => {
+    if (agentPresetsService) return agentPresetsService
+    try {
+      return (ctx.get && ctx.get('agentPresets')) || null
+    } catch {
+      return null
+    }
+  }
+
+  /** 等宿主把 agent preset 服务挂上来（冷启动时本插件可能先加载）；超时返回 null。 */
+  const waitForAgentPresetService = (timeoutMs = 15000) =>
+    new Promise((resolve) => {
+      const current = agentPresetService()
+      if (current) return resolve(current)
+      let settled = false
+      const finish = (value) => {
+        if (settled) return
+        settled = true
+        resolve(value)
+      }
+      agentPresetsWaiters.push(finish)
+      const timer = setTimeout(() => finish(agentPresetService()), timeoutMs)
+      if (timer && typeof timer.unref === 'function') timer.unref()
+    })
+
+  /** 读会话已选的 preset（projection 里没有时返回 undefined，让宿主用默认 preset）。 */
+  const agentPresetIdOfSession = (session) => {
+    try {
+      const projections = (ctx.get && ctx.get('sessionProjections')) || ctx.sessionProjections
+      if (!projections || typeof projections.stateOf !== 'function' || !session) return undefined
+      const preset = projections.stateOf(session, 'agentPreset')
+      return typeof preset === 'string' && preset ? preset : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /** 解析 preset：宿主行还没就绪时短暂等待；会话记录的 preset 被删掉时回退默认（与宿主 composeAgent 同策略）。 */
+  const resolveAgentPreset = async (presets, presetId) => {
+    const tryResolve = async (wanted) => {
+      let lastError = null
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        try {
+          return await presets.resolve(wanted)
+        } catch (error) {
+          lastError = error
+          const code = error && error.code
+          if (code !== 'agent-preset/not-found' || attempt >= 39) throw error
+          await new Promise((resolve) => setTimeout(resolve, 250))
+        }
+      }
+      throw lastError || new Error('agent preset 不可用')
+    }
+    try {
+      return await tryResolve(presetId)
+    } catch (error) {
+      if (presetId === undefined || (error && error.code !== 'agent-preset/not-found')) throw error
+      logger.warn(`preset「${presetId}」已不可用，回退默认 preset 继续恢复`)
+      return await tryResolve(undefined)
+    }
+  }
+
+  /**
+   * 生成 agents.create/resume 的 setup：装模型选择 + 挂 agent preset（核心工具）。
+   * preset 服务晚就绪时先等它；实在等不到才退回旧行为（只装模型选择），并留下 warn 方便排查。
+   */
+  const buildAgentSetup = (options = {}) => {
+    const selection = options.selection
+    const wantsSelection = Boolean(installModelSelection && selection)
+    return async (agentCtx, agent) => {
+      if (wantsSelection) installModelSelection(agentCtx, { current: selection })
+      const presets = await waitForAgentPresetService(15000)
+      if (!presets) {
+        logger.warn('agent preset 服务 15s 内不可用：本次 create/resume 未挂 preset，核心工具会缺失')
+        return
+      }
+      const session = (agent && agent.session) || options.session
+      const presetId = options.presetId !== undefined ? options.presetId : agentPresetIdOfSession(session)
+      const resolved = await resolveAgentPreset(presets, presetId)
+      const mounted = await presets.mount(agentCtx, resolved.id)
+      if (resolved.broken) {
+        logger.warn(`preset「${resolved.id}」有不可用行，核心工具可能不全：${String(resolved.broken).slice(0, 200)}`)
+      }
+      // 插件自建的新会话没有 header.agentPreset：补一条选择事件，之后宿主按同一 preset 恢复。
+      if (options.recordPreset && mounted && agent && agent.session && typeof agent.session.append === 'function') {
+        try {
+          agent.session.append('agent-preset/selected', { agentPreset: mounted.id })
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+
+  /** 给「活着但漏挂 preset」的 agent 补挂；recompose 会发 tools/change，下个回合核心工具就回来了。 */
+  const repairPresetForLiveAgent = async (agent) => {
+    const presets = await waitForAgentPresetService(3000)
+    if (!presets || !agent || !agent.ctx) return { ok: false, reason: 'no-preset-service' }
+    try {
+      if (typeof presets.composedPreset === 'function' && presets.composedPreset(agent.ctx) !== undefined) {
+        return { ok: true, skipped: true }
+      }
+    } catch {
+      /* ignore */
+    }
+    const resolved = await resolveAgentPreset(presets, agentPresetIdOfSession(agent.session))
+    if (typeof presets.recompose === 'function') await presets.recompose(agent.ctx, resolved.id)
+    else await presets.mount(agent.ctx, resolved.id)
+    return { ok: true, preset: resolved.id }
+  }
+
+  /** 巡检一轮所有 live 会话，把漏挂 preset 的补上；返回被修复的 [{session, preset}]。 */
+  const repairPresetForLiveSessions = async (source) => {
+    const presets = await waitForAgentPresetService(3000)
+    if (!presets) {
+      logger.warn(`preset 修复巡检（${source}）：agent preset 服务不可用，跳过`)
+      return []
+    }
+    let agents = []
+    try {
+      agents = ctx.agents && typeof ctx.agents.list === 'function' ? ctx.agents.list() : []
+    } catch {
+      agents = []
+    }
+    const repaired = []
+    for (const agent of agents) {
+      if (!agent || !agent.session || !agent.ctx) continue
+      // 只修根会话：子 agent（delegationDepth > 0）的 preset 由父 agent 的 revision 继承，不在这里重挂。
+      const depth = agent.session.header ? agent.session.header.delegationDepth : 0
+      if (typeof depth === 'number' && depth > 0) continue
+      try {
+        const outcome = await repairPresetForLiveAgent(agent)
+        if (outcome && outcome.ok && !outcome.skipped) {
+          repaired.push({ session: shortSid(agent.id || agent.session.id || ''), preset: outcome.preset })
+        }
+      } catch (error) {
+        logger.warn(`补挂 preset 失败（${shortSid(agent.id || '')}）：${error && error.message ? error.message : error}`)
+      }
+    }
+    logger.info(
+      `preset 修复巡检（${source}）：live=${agents.length}，补挂=${repaired.length}` +
+        (repaired.length > 0 ? `（${repaired.map((item) => `${item.session}->${item.preset}`).join('、')}）` : '')
+    )
+    return repaired
+  }
+
   /** 唤醒一个在线会话（followup 会开一轮并让它处理消息）；不在线返回 not-live。 */
   const wakeSession = (sessionId, text, meta = {}) => {
     try {
@@ -5409,12 +5576,7 @@ export function apply(ctx, config = {}) {
     try {
       if (!ctx.agents || typeof ctx.agents.resume !== 'function') return { agent: null, skipped: false }
       const selection = resolveDefaultSelection()
-      const setup =
-        installModelSelection && selection
-          ? (agentCtx) => {
-              installModelSelection(agentCtx, { current: selection })
-            }
-          : undefined
+      const setup = buildAgentSetup({ selection })
       const handle = await ctx.agents.resume({
         resumeSessionId: sessionId,
         agentOptions: {},
@@ -5726,12 +5888,7 @@ export function apply(ctx, config = {}) {
     // 世界任务自动创建的会话直接干活，不弹「是否注册」询问（否则会多一轮且打断任务）。
     silentNewSessions.add(sessionId)
     const selection = resolveDefaultSelection()
-    const setup =
-      installModelSelection && selection
-        ? (agentCtx) => {
-            installModelSelection(agentCtx, { current: selection })
-          }
-        : undefined
+    const setup = buildAgentSetup({ selection, recordPreset: true })
     try {
       // 宿主 agents.create(options) 收的是 CreateAgentOptions（不是位置参数 id）。
       const agent = await ctx.agents.create({
@@ -9836,12 +9993,7 @@ export function apply(ctx, config = {}) {
         }
         try {
           const selection = resolveDefaultSelection()
-          const setup =
-            installModelSelection && selection
-              ? (agentCtx) => {
-                  installModelSelection(agentCtx, { current: selection })
-                }
-              : undefined
+          const setup = buildAgentSetup({ selection })
           const handle = await ctx.agents.resume({
             resumeSessionId: sessionId,
             agentOptions: {},
@@ -11971,6 +12123,13 @@ export function apply(ctx, config = {}) {
   const runHealthCheck = async (options = {}) => {
     const issues = []
     const fixes = []
+    // 修复「活着但没挂 preset」的会话：核心工具在 preset 上，漏挂载就只剩宿主面工具。
+    try {
+      const repairedPresets = await repairPresetForLiveSessions('health')
+      if (repairedPresets.length > 0) fixes.push(`为 ${repairedPresets.length} 个 live 会话补挂 agent preset（核心工具恢复）`)
+    } catch (error) {
+      logger.warn('preset 修复失败：' + (error && error.message ? error.message : error))
+    }
     try {
       // HTTP API 掉线时尝试重注册（冷启动晚就绪兜底）
       if (!registration.api && typeof registerWebServer === 'function') {
@@ -12213,6 +12372,11 @@ export function apply(ctx, config = {}) {
     /* ignore */
   }
   setTimeout(() => { void runHealthCheck({ alert: false }) }, 20000).unref?.()
+  // 插件加载/热更新后尽早补挂一次（8s 时 agent 已就绪；25s 兜住宿主加载更慢的场合）。
+  for (const presetRepairDelay of [8000, 25000]) {
+    const presetRepairTimer = setTimeout(() => { void repairPresetForLiveSessions('load').catch(() => {}) }, presetRepairDelay)
+    presetRepairTimer.unref?.()
+  }
 
   // ---------------------------------------------------------------- 启动凭证
   // 注意：部署后 index.js 会被复制到 dsh-plugin/loaded/ 下执行，HERE 指向 loaded/，
