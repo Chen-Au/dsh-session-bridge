@@ -198,7 +198,7 @@ function assertJsonSchema(node, where) {
 }
 
 await check('恰好注册 session_share / session_board / session_ask', () => {
-  assert.deepEqual([...toolByName.keys()].sort(), ['group_member', 'group_recruit', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_interrupt', 'session_like', 'session_nudge', 'session_profile', 'session_retract', 'session_share', 'session_urgent'])
+  assert.deepEqual([...toolByName.keys()].sort(), ['council_vote', 'group_member', 'group_recruit', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_interrupt', 'session_like', 'session_nudge', 'session_profile', 'session_retract', 'session_share', 'session_urgent', 'task_transfer'])
   assert.equal(captured.harnessLogs.filter(([level]) => level === 'error').length, 0, '注册阶段不应有 error 级日志')
 })
 
@@ -232,6 +232,7 @@ await check('session_share.kind/scope 用枚举约束', () => {
 await check('session_board.action 用枚举约束', () => {
   assert.deepEqual(toolByName.get('session_board').parameters.properties.action.enum, [
     'list',
+    'search',
     'groups',
     'remove',
     'claim',
@@ -354,8 +355,8 @@ await check('查重生效（相同内容不重复发布）', async () => {
 
 await check('session_board status 报告版本与注册结果', async () => {
   const result = String(await board.execute({ action: 'status' }, { agent: rootAgent }))
-  assert.match(result, /session-bridge v3\.0\.2/)
-  assert.match(result, /工具：session_share, session_ask, session_nudge, session_retract, session_interrupt, group_rule, session_like, session_discuss, session_identity, group_member, session_directory, group_skill, session_profile, session_board, group_recruit, session_urgent/)
+  assert.match(result, /session-bridge v4\.0\.0/)
+  assert.match(result, /工具：session_share, session_ask, session_nudge, session_retract, session_interrupt, group_rule, session_like, session_discuss, task_transfer, council_vote, session_identity, group_member, session_directory, group_skill, session_profile, session_board, group_recruit, session_urgent/)
   assert.match(result, /通讯录：3 个主会话/)
   assert.match(result, /空闲看板：idle \d+ 个 · busy \d+ 个/)
   assert.match(result, /权限分级：维护者=未注册/)
@@ -366,7 +367,7 @@ await check('session_board status 报告版本与注册结果', async () => {
 
 await check('子会话可只读查看经验板（list / status）', async () => {
   const status = String(await board.execute({ action: 'status' }, { agent: subAgent }))
-  assert.match(status, /session-bridge v3\.0\.2/)
+  assert.match(status, /session-bridge v4\.0\.0/)
   const listed = String(await board.execute({ action: 'list' }, { agent: subAgent }))
   assert.match(listed, /跨会话经验板/)
 })
@@ -463,7 +464,7 @@ await check('GET state 返回规则/群组/会话/送达结构', async () => {
   const { res, json } = await callState()
   assert.equal(res.out.status, 200)
   assert.equal(json.ok, true)
-  assert.equal(json.version, '3.0.2')
+  assert.equal(json.version, '4.0.0')
   assert.ok(Array.isArray(json.rules) && json.rules.length >= 1)
   assert.ok(Array.isArray(json.groups))
   assert.ok(Array.isArray(json.sessions) && json.sessions.length >= 2)
@@ -1115,8 +1116,8 @@ await check('面板命令：删除规矩与群组', async () => {
 
 await check('插件启动凭证写入正确（工具/注册/版本/API）', () => {
   const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'))
-  assert.equal(receipt.version, '3.0.2')
-  assert.deepEqual(receipt.tools.slice().sort(), ['group_member', 'group_recruit', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_interrupt', 'session_like', 'session_nudge', 'session_profile', 'session_retract', 'session_share', 'session_urgent'])
+  assert.equal(receipt.version, '4.0.0')
+  assert.deepEqual(receipt.tools.slice().sort(), ['council_vote', 'group_member', 'group_recruit', 'group_rule', 'group_skill', 'session_ask', 'session_board', 'session_directory', 'session_discuss', 'session_identity', 'session_interrupt', 'session_like', 'session_nudge', 'session_profile', 'session_retract', 'session_share', 'session_urgent', 'task_transfer'])
   assert.deepEqual(receipt.failedTools, [])
   assert.equal(receipt.registration.section, true)
   assert.equal(receipt.registration.context, true)
@@ -2732,7 +2733,7 @@ let otherGroupId = ''
 
 await check('v2.9.2：state 暴露撤回/打断能力（探测到宿主 cancel）', async () => {
   const { json } = await callState4()
-  assert.equal(json.version, '3.0.2')
+  assert.equal(json.version, '4.0.0')
   assert.equal(json.capabilities.retract, true)
   assert.equal(json.capabilities.interrupt, 'cancel', '应探测到宿主的 agent.cancel 能力')
   assert.ok(toolByName4.get('session_retract'), '缺少 session_retract 工具')
@@ -3214,10 +3215,9 @@ await (async () => {
     const state = await callState4()
     const group = state.json.groups.find((item) => item.id === 'g-recruit')
     assert.ok(group.sessionIds.includes(G.idleMember), '新成员应自动加入群组')
-    const task = state.json.rules.find((entry) => entry.kind === 'task' && entry.groupId === 'g-recruit')
-    assert.ok(task, '应创建招募任务')
-    assert.equal(task.coordinator, G.leader, '组长应沿用发起人')
-    assert.ok(task.assignees.includes(G.idleMember), '任务应指派给新成员')
+    const announcement = state.json.rules.find((entry) => entry.kind === 'chat' && entry.groupId === 'g-recruit' && String(entry.title).indexOf('招募公告') === 0)
+    assert.ok(announcement, '应创建招募公告')
+    assert.ok(!state.json.rules.some((entry) => entry.kind === 'task' && entry.groupId === 'g-recruit'), '招募不应生成任务线')
     const audit = state.json.rules.find(
       (entry) => entry.kind === 'chat' && entry.groupId === 'g-recruit' && String(entry.title).indexOf('招募') >= 0
     )
@@ -4021,8 +4021,8 @@ await (async () => {
   })
 })()
 
-// ---------------------------------------------------------------- N. 任务归属锁 / 范围约束 / 重复任务合并（v3.0.2）
-console.log('== N. 任务归属锁 / 范围约束 / 重复任务合并（v3.0.2）')
+// ---------------------------------------------------------------- N. 任务归属锁 / 范围约束 / 重复任务合并（v4.0.0）
+console.log('== N. 任务归属锁 / 范围约束 / 重复任务合并（v4.0.0）')
 const scopeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-bridge-scope-'))
 const scopeCaptured = { tools: [], routes: [], followups: [] }
 const S_COORD = 'session-c0c0c0c0-1111-4000-8000-aaaaaaaaaaaa'
@@ -4339,7 +4339,7 @@ await check('state/UI：owner、scope、claim、duplicates 与静态文案', asy
 
 fs.rmSync(scopeDir, { recursive: true, force: true })
 
-// ---------------------------------------------------------------- O. 任务线（task-6 / v3.0.2）
+// ---------------------------------------------------------------- O. 任务线（task-6 / v4.0.0）
 // 群任务/世界任务/单独任命组长 → 自动 5 阶段清单；state.taskLines 实时状态；卡住自动催办（不唤醒、去重、上限 3 次）。
 console.log('== O. 任务线：自动 5 阶段 / 实时状态 / 卡住催办（task-6）')
 
@@ -4849,7 +4849,7 @@ await check('任务线 UI：app.html 增加看板区（阶段/进度/卡住）�
 
 fs.rmSync(taskLineDir, { recursive: true, force: true })
 
-// ---------------------------------------------------------------- P. 任务完成通知（task-7 / v3.0.2）
+// ---------------------------------------------------------------- P. 任务完成通知（task-7 / v4.0.0）
 // 任务 done → 群里生成一条来自组长的完成通知并 @用户（panelMention）；幂等；撤回/未完成不生成；
 // app 只在可见+有焦点+非全屏时提示音/toast，否则只留未读 badge。
 console.log('== P. 任务完成通知：组长群里 @用户 + 幂等 + 非全屏提示（task-7）')

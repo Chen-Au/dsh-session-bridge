@@ -732,6 +732,143 @@
     .cmd-trigger { padding: 7px 8px; }
     .icon-btn { width: 30px; height: 30px; }
   }
+.office-badge{display:inline-block;margin-left:4px;padding:0 5px;border:1px solid rgba(255,210,90,.45);border-radius:999px;color:#ffd25a;font-size:9px;font-weight:700;vertical-align:1px;background:rgba(255,210,90,.08)}
+.tl-flow{margin-top:8px;border-top:1px dashed var(--line);padding-top:7px;font-size:11px;color:var(--muted)}.tl-flow summary{cursor:pointer;color:var(--accent-2);user-select:none}.tl-flow-list{margin-top:6px;display:flex;flex-direction:column;gap:5px}.tl-flow-row{display:flex;gap:6px;line-height:1.45}.tl-flow-time{color:var(--dim);min-width:58px}.tl-flow-who{color:#f4f6ff}.tl-flow-detail{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ================================================================
+   v4.0 指挥中心：异常优先 / 今日任务流 / 统一收件箱 / 资源队列
+   视觉更克制：少统计、少文字，留白与层级优先。
+   ================================================================ */
+.command-pane { gap: 12px; }
+.cmd-head { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; flex: none; }
+.cmd-head .section-title { margin: 0; }
+.cmd-status { margin-top: 3px; font-size: 12px; color: var(--muted); }
+.cmd-status b { color: var(--text); font-weight: 600; }
+.cmd-status .danger { color: var(--danger); }
+.cmd-head-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.cmd-head-actions .btn { padding: 6px 11px; font-size: 11.5px; }
+.cmd-quick { display: flex; gap: 6px; flex-wrap: wrap; flex: none; }
+.cmd-quick .btn { padding: 4px 10px; font-size: 11px; border-radius: 9px; }
+.cmd-grid {
+  flex: 1; min-height: 0; overflow: auto; padding-right: 4px;
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(190px, auto); gap: 12px; align-content: start;
+}
+.cmd-grid .home-card { min-height: 0; }
+.cmd-grid .home-list { min-height: 0; }
+.cmd-sub { font-size: 10.5px; color: var(--dim); font-weight: 400; }
+.cmd-empty {
+  padding: 14px 10px; text-align: center; font-size: 11.5px; color: var(--dim);
+  border: 1px dashed var(--line); border-radius: 10px;
+}
+/* 异常 / 待决策 */
+.alert-item { border-color: color-mix(in srgb, var(--gold) 26%, var(--line)); }
+.alert-item.sev-danger { border-color: rgba(255,107,129,.42); background: rgba(255,107,129,.05); }
+.alert-item.sev-info { border-color: var(--line); }
+.alert-item .hi-title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.ok-line { display: flex; align-items: center; gap: 8px; padding: 14px 10px; color: var(--mint); font-size: 12px; }
+/* 任务信息流 */
+.flow-group { border: 1px solid var(--line); border-radius: 10px; background: var(--surface-1); }
+.flow-group summary {
+  list-style: none; display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  cursor: pointer; font-size: 12px; color: var(--text); user-select: none;
+}
+.flow-group summary::-webkit-details-marker { display: none; }
+.flow-group summary::before { content: "▸"; color: var(--dim); font-size: 10px; flex: none; }
+.flow-group[open] summary::before { content: "▾"; }
+.flow-group[open] summary { border-bottom: 1px dashed var(--line); }
+.flow-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-count { flex: none; font-size: 10px; color: var(--dim); }
+.flow-list { padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.flow-row { display: flex; gap: 8px; font-size: 11px; line-height: 1.45; }
+.flow-time { flex: none; min-width: 52px; color: var(--dim); }
+.flow-body { flex: 1; min-width: 0; }
+.flow-route { color: #e9edff; }
+.flow-action { color: var(--muted); }
+.flow-detail { margin-top: 1px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-empty { padding: 8px 4px; font-size: 11px; color: var(--dim); }
+.task-detail-flow { margin-top: 12px; }
+.task-detail-flow > .hint { margin-bottom: 6px; }
+/* 统一收件箱 */
+.inbox-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: none; }
+.inbox-head .section-title { margin: 0; }
+.inbox-list { flex: 1; min-height: 0; overflow: auto; padding-right: 4px; display: flex; flex-direction: column; gap: 8px; }
+.inbox-group-title { margin: 4px 2px 0; font-size: 10px; color: var(--dim); letter-spacing: 1.2px; text-transform: uppercase; }
+.inbox-item {
+  display: flex; gap: 10px; align-items: flex-start; padding: 10px 11px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+}
+.inbox-item.unread { border-color: color-mix(in srgb, var(--accent) 42%, var(--line)); }
+.inbox-item.cat-stalled { border-color: rgba(255,107,129,.42); background: rgba(255,107,129,.05); }
+.inbox-icon { flex: none; width: 24px; text-align: center; font-size: 15px; line-height: 1.3; }
+.inbox-main { flex: 1; min-width: 0; }
+.inbox-title { font-size: 12.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inbox-sub { margin-top: 2px; font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inbox-actions { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+.inbox-actions .btn { padding: 3px 8px; font-size: 10.5px; }
+.inbox-time { flex: none; font-size: 10px; color: var(--dim); }
+.inbox-empty { padding: 30px 12px; text-align: center; color: var(--dim); font-size: 12px; border: 1px dashed var(--line); border-radius: 12px; }
+.cat-chip { display: inline-flex; align-items: center; height: 17px; padding: 0 6px; border-radius: 999px; font-size: 9.5px; border: 1px solid var(--line); color: var(--muted); }
+.cat-chip.approval { color: var(--gold); border-color: rgba(255,209,102,.4); }
+.cat-chip.stalled { color: var(--danger); border-color: rgba(255,107,129,.45); }
+.cat-chip.request { color: var(--accent-2); border-color: rgba(79,216,255,.35); }
+.cat-chip.completion { color: var(--mint); border-color: rgba(95,242,200,.4); }
+.cat-chip.queued { color: var(--pink); border-color: rgba(255,122,200,.4); }
+/* 资源队列 */
+.tag-soon { font-size: 9.5px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 999px; color: var(--dim); font-weight: 400; }
+.resource-row {
+  display: flex; align-items: center; gap: 8px; padding: 8px 9px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface-1);
+}
+.resource-row .rr-main { flex: 1; min-width: 0; }
+.resource-row .rr-title { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.resource-row .rr-sub { font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.resource-row .rr-prio { flex: none; font-size: 9.5px; color: var(--gold); border: 1px solid rgba(255,209,102,.35); border-radius: 999px; padding: 0 6px; }
+@media (max-width: 1119px) {
+  .cmd-grid { display: flex; flex-direction: column; grid-template-columns: none; grid-auto-rows: auto; }
+  .cmd-grid .home-card { max-height: none; flex: none; }
+  .cmd-grid .home-list { flex: none; }
+}
+@media (max-width: 900px) {
+  .cmd-head-actions { margin-left: 0; width: 100%; }
+  .cmd-head-actions .btn { flex: 0 0 auto; }
+  .cmd-quick { width: 100%; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; }
+  .cmd-quick .btn { flex: none; }
+  .cmd-grid { padding-bottom: 72px; }
+  .inbox-head { gap: 4px; }
+  .inbox-head .filter-chip { padding: 3px 8px; font-size: 10.5px; }
+  .inbox-head .section-title { width: 100%; }
+  .bn-item { position: relative; }
+  .bn-item.has-unread::after {
+    content: ""; position: absolute; top: 7px; right: 50%; margin-right: -18px;
+    width: 6px; height: 6px; border-radius: 50%; background: var(--danger);
+  }
+}
+@media (max-width: 1260px) {
+  .tab { padding: 6px 10px; font-size: 12px; }
+}
+/* 统一滚动条（新列表没有 .scroll 类，避免默认白色粗滚动条） */
+* { scrollbar-width: thin; scrollbar-color: rgba(124,92,255,.35) transparent; }
+*::-webkit-scrollbar { width: 7px; height: 7px; }
+*::-webkit-scrollbar-thumb { background: rgba(124,92,255,.35); border-radius: 7px; }
+*::-webkit-scrollbar-track { background: transparent; }
+/* 4.0.1 响应式防溢出：min-width:0 贯穿 flex/grid 容器，长文本可断行 */
+html, body { max-width: 100%; overflow-x: hidden; }
+main, .view, .pane, .chat-wrap, .chat, .group-foldable, .group-topline, .group-chips,
+.cmd-grid, .cmd-head, .cmd-head-actions, .cmd-quick, .inbox-head, .inbox-list,
+.home-list, .home-item, .tasks-toolbar, .tasks-board, .task-col, .task-col-body,
+.tl-card, .bubble, .bubble .body, .msg, .text, .task-card-text, .task-lock,
+.notif-item, .notif-main, header, .tabs { min-width: 0; }
+header { flex-wrap: nowrap; }
+.tabs { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.msg, .text, .task-card-text, .task-lock, .bubble .body, .home-item .hi-title,
+.home-item .hi-sub, .inbox-title, .inbox-sub, .notif-sub { overflow-wrap: anywhere; word-break: break-word; }
+@media (max-width: 900px) {
+  .group-chips { flex-wrap: wrap !important; overflow-x: visible; }
+  .group-chip { max-width: 100%; }
+  .cmd-head-actions { row-gap: 6px; }
+  .inbox-head { width: 100%; }
+}
 </style>
 </head>
 <body>
@@ -740,12 +877,13 @@
     <div class="brand">
       <div class="logo">🌌</div>
       <div>
-        <h1>星桥</h1>
+        <h1>星桥 <span class="office-badge" id="userOfficeBadge" title="星桥官职"></span></h1>
         <small>NEBULA · AGENT HUB</small>
       </div>
     </div>
     <div class="tabs" id="mainTabs">
       <button class="tab active" data-view="home">首页<span class="tab-dot"></span></button>
+      <button class="tab" data-view="inbox">收件箱<span class="tab-dot"></span></button>
       <button class="tab" data-view="world">世界<span class="tab-dot"></span></button>
       <button class="tab" data-view="groups">群聊<span class="tab-dot"></span></button>
       <button class="tab" data-view="tasks">任务<span class="tab-dot"></span></button>
@@ -761,44 +899,73 @@
   </header>
   <main>
     <section class="view active" id="view-home">
-      <div class="pane home-pane">
-        <div class="home-head">
-          <div class="section-title">首页 · 今日</div>
-          <span class="hint" id="homeSummary">加载中…</span>
-          <span class="spacer"></span>
-          <button class="btn aside-toggle" data-aside-toggle title="展开右侧详情">详情</button>
+      <div class="pane command-pane">
+        <div class="cmd-head">
+          <div>
+            <div class="section-title">指挥中心</div>
+            <div class="cmd-status" id="homeStatus">加载中…</div>
+          </div>
+          <div class="cmd-head-actions">
+            <button class="btn primary" data-qa="task">＋ 发布任务</button>
+            <button class="btn" id="homeInboxBtn" title="打开统一收件箱">📥 收件箱 <b id="homeInboxCount">0</b></button>
+            <button class="btn aside-toggle" data-aside-toggle title="展开右侧详情">详情</button>
+          </div>
         </div>
-        <div class="home-grid">
-          <div class="home-card" id="homeActionCard">
-            <div class="home-card-head">需要你处理 <b id="homeActionCount">0</b><span class="count" id="homeActionHint"></span></div>
+        <div class="cmd-quick">
+          <button class="btn urgent" data-qa="urgent">⚡ 加急</button>
+          <button class="btn" data-qa="bug">🛡️ 报BUG</button>
+          <button class="btn" data-qa="find">🔍 找成员</button>
+          <button class="btn" data-qa="newgroup">＋ 新建群</button>
+          <button class="btn" data-qa="board">🏆 积分榜</button>
+        </div>
+        <div class="cmd-grid">
+          <div class="home-card" id="cmdPriorityCard">
+            <div class="home-card-head">⚠️ 异常 · 待决策 <b id="homeActionCount">0</b><span class="cmd-sub" id="homeActionHint"></span></div>
             <div class="home-list" id="homeActionList"></div>
           </div>
-          <div class="home-card" id="homeTaskCard">
-            <div class="home-card-head">进行中任务线 <span class="home-link" id="homeTasksMore">全部任务 →</span></div>
-            <div class="home-list" id="homeTaskList"></div>
+          <div class="home-card" id="cmdInboxCard">
+            <div class="home-card-head">📥 跨会话收件箱 <span class="home-link" id="homeInboxMore">全部 →</span></div>
+            <div class="home-list" id="homeInboxList"></div>
           </div>
-          <div class="home-card" id="homeGroupCard">
-            <div class="home-card-head">最近群聊 <span class="home-link" id="homeGroupsMore">全部群聊 →</span></div>
-            <div class="home-list" id="homeGroupList"></div>
+          <div class="home-card" id="cmdFlowCard">
+            <div class="home-card-head">🕘 今日任务流 <span class="home-link" id="homeTasksMore">任务看板 →</span></div>
+            <div class="home-list" id="cmdFlowList"></div>
           </div>
-          <div class="home-card" id="homeQuickCard">
-            <div class="home-card-head">快捷操作</div>
-            <div class="home-quick">
-              <button class="btn primary" data-qa="task">＋ 发布任务</button>
-              <button class="btn urgent" data-qa="urgent">⚡ 加急</button>
-              <button class="btn" data-qa="bug">🛡️ 报BUG</button>
-              <button class="btn" data-qa="find">🔍 找成员</button>
-              <button class="btn" data-qa="newgroup">＋ 新建群</button>
-              <button class="btn" data-qa="board">🏆 积分榜</button>
-            </div>
+          <div class="home-card" id="cmdResourceCard">
+            <div class="home-card-head">🖥️ 资源队列 <span class="tag-soon">computer-use</span><span class="spacer"></span><button class="home-link" id="resourceRefresh" type="button">刷新</button></div>
+            <div class="home-list" id="resourceQueueList"></div>
           </div>
         </div>
       </div>
       <aside class="aside scroll">
-        <div class="section-title">在线 / 空闲</div>
+        <div class="section-title">空闲可派</div>
         <div class="home-mini-list" id="homeIdleList"></div>
-        <div class="section-title" style="margin-top:14px">积分榜 · TOP</div>
-        <div class="lb" id="homeLb"></div>
+        <div class="section-title" style="margin-top:14px">今日概览</div>
+        <div class="home-list" id="homeStatsList"></div>
+      </aside>
+    </section>
+    <section class="view" id="view-inbox">
+      <div class="pane">
+        <div class="inbox-head">
+          <div class="section-title">收件箱</div>
+          <span class="hint" id="inboxSummary">加载中…</span>
+          <span class="spacer"></span>
+          <button class="filter-chip active" data-inbox-filter="all">全部</button>
+          <button class="filter-chip" data-inbox-filter="pending">待处理</button>
+          <button class="filter-chip" data-inbox-filter="approval">审批</button>
+          <button class="filter-chip" data-inbox-filter="request">请求</button>
+          <button class="filter-chip" data-inbox-filter="completion">完成</button>
+          <button class="filter-chip" data-inbox-filter="stalled">卡住</button>
+          <button class="filter-chip" data-inbox-filter="queued">排队</button>
+          <button class="btn aside-toggle" data-aside-toggle title="展开说明">说明</button>
+        </div>
+        <div class="inbox-list" id="inboxList"></div>
+      </div>
+      <aside class="aside scroll">
+        <div class="section-title">收件箱分类</div>
+        <div class="home-list" id="inboxAsideStats"></div>
+        <div class="section-title" style="margin-top:14px">处理原则</div>
+        <div class="card text" style="font-size:12px">异常与待决策优先：任务卡住、待审批、串行排队未满足依赖、完成通知。点条目可跳群或查看任务详情；审批可一键通过/驳回。</div>
       </aside>
     </section>
     <section class="view" id="view-world">
@@ -941,6 +1108,7 @@
 </div>
 <nav class="bottom-nav" id="bottomNav" aria-label="主导航">
   <button class="bn-item active" data-view="home"><b>🏠</b>首页</button>
+  <button class="bn-item" data-view="inbox"><b>📥</b>收件箱</button>
   <button class="bn-item" data-view="world"><b>🌍</b>世界</button>
   <button class="bn-item" data-view="groups"><b>💬</b>群聊</button>
   <button class="bn-item" data-view="tasks"><b>🧭</b>任务</button>
@@ -1081,6 +1249,7 @@
   var groupSeenInited = false
   var palette = { open: false, items: [], index: 0 }
   var taskFilter = { group: '', status: 'all' }
+  var inboxFilter = 'all'
   var notifOpen = false
   var lastError = ''
   try { notifReadIds = JSON.parse(localStorage.getItem(NOTIF_READ_KEY) || '{}') || {} } catch (e) { notifReadIds = {} }
@@ -1143,11 +1312,15 @@
     if (diff < 86400000) return Math.floor(diff / 3600000) + ' 小时前'
     return new Date(ts).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
   }
+  function officeBadge(who) {
+    if (!who || !who.office) return ''
+    return ' <span class="office-badge" title="星桥官职 · Lv.' + esc(who.officeLevel || '') + '">' + esc(who.office) + '</span>'
+  }
   function identityOf(id) {
     if (id === 'panel') return { handle: '你', avatar: '🛰️', panel: true }
     var session = sessionById[id]
     if (!session) return { handle: String(id || '').slice(-6) || '未知', avatar: '👤' }
-    return { handle: session.handle || session.title || String(id).slice(-6), avatar: session.avatar || '👤', role: session.role || '', skills: session.skills || [], style: session.style || '', persona: session.persona || '' }
+    return { handle: session.handle || session.title || String(id).slice(-6), avatar: session.avatar || '👤', role: session.role || '', office: session.office || '', officeLevel: session.officeLevel || 0, skills: session.skills || [], style: session.style || '', persona: session.persona || '' }
   }
   function jumpToSession(id, title) {
     var opener = window.opener
@@ -1551,10 +1724,13 @@
     }
     renderWorld()
     renderIdleBoard()
+    var userOffice = state.offices && state.offices.user ? state.offices.user.office : ''
+    if ($('userOfficeBadge')) $('userOfficeBadge').textContent = userOffice ? '👑 ' + userOffice : ''
     renderTaskLines()
     renderGroups()
     renderBoard()
     renderHome()
+    renderInbox()
     renderTasks()
     renderNotifications()
     renderBadges()
@@ -1594,12 +1770,12 @@
         var sub = busy ? (task ? task + (since ? ' · ' + since : '') : '忙碌中') + lock : (s.title || '')
         return '<div class="idle-row" data-jump="' + esc(s.id) + '" data-title="' + esc(s.title || who.handle) + '" title="' + esc((s.title || '') + (busy && task ? ' · 当前：' + task + lock : '')) + '">' +
           '<span class="dot ' + (busy ? 'busy' : 'idle') + '"></span>' +
-          '<div class="meta"><b>' + esc(who.handle) + '</b><small>' + esc(short(sub, 58)) + '</small></div>' +
+          '<div class="meta"><b>' + esc(who.handle) + officeBadge(who) + '</b><small>' + esc(short(sub, 58)) + '</small></div>' +
           '<span class="avail-badge ' + (busy ? 'busy' : 'idle') + '">' + (busy ? '忙' : '空闲') + '</span>' +
           '</div>'
       }).join('')
   }
-  var TASK_LINE_LABELS = { waiting: '等待', active: '进行中', stalled: '卡住', done: '完成', canceled: '已撤回' }
+  var TASK_LINE_LABELS = { waiting: '等待', active: '进行中', stalled: '卡住', paused: '已暂停', done: '完成', canceled: '已撤回' }
   /** 任务线看板（task-6）：阶段勾选、当前步骤、进度条、卡住 badge、最近更新。随既有 state 轮询实时刷新。 */
   function renderTaskLines() {
     var board = $('taskLinesBoard')
@@ -1628,6 +1804,8 @@
       if (line.groupName) extra.push(line.groupName)
       var jumpId = leader.id || ''
       var jumpAttrs = jumpId ? ' data-jump="' + esc(jumpId) + '" data-title="' + esc(leader.title || leaderName) + '"' : ''
+      var flow = (state.taskFlows || {})[line.taskId] || []
+      var flowHtml = flow.length ? '<details class="tl-flow" onclick="event.stopPropagation()"><summary>信息流 · ' + flow.length + ' 条</summary><div class="tl-flow-list">' + flow.slice(-10).map(function (ev) { return '<div class="tl-flow-row"><span class="tl-flow-time">' + esc(when(ev.ts)) + '</span><span class="tl-flow-who">' + esc(ev.fromName || '') + ' → ' + esc((ev.toNames || []).join('、') || '') + '</span><span class="tl-flow-detail">' + esc(ev.action || '') + (ev.detail ? '：' + ev.detail : '') + '</span></div>' }).join('') + '</div></details>' : ''
       return '<div class="taskline ' + esc(line.lineStatus) + '"' + jumpAttrs + ' title="' + esc(line.title + ' · 组长：' + leaderName + ' · 最近更新：' + when(line.lastProgressAt)) + '">' +
         '<div class="tl-head"><span class="tl-title">' + esc(line.title) + '</span><span class="tl-badge ' + esc(line.lineStatus) + '">' + esc(statusLabel) + '</span></div>' +
         '<div class="tl-meta"><span>组长：' + esc(leaderName) + '</span>' +
@@ -1697,7 +1875,7 @@
       var who = identityOf(entry.author)
       html += '<div class="card' + (entry.urgent ? ' urgent' : '') + (entry.completionNotice ? ' completion-card' : '') + '">'
       html += '<div class="row"><div class="avatar clickable" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + avatarHtml(who.avatar) + '</div><div style="flex:1;min-width:0">'
-      html += '<div class="who"><span class="name">' + esc(who.handle) + '</span><span class="time">' + when(entry.ts) + '</span></div>'
+      html += '<div class="who"><span class="name">' + esc(who.handle) + officeBadge(who) + '</span><span class="time">' + when(entry.ts) + '</span></div>'
       html += '<div class="title">' + esc(entry.title) + '</div>'
       html += '<div class="text clamp">' + esc(entry.text || '') + '</div>'
       var chips = '<div class="chips"><span class="chip kind">' + esc(KIND[entry.kind] || entry.kind) + '</span>'
@@ -1840,7 +2018,8 @@
           var chatTitle = String(entry.title || '')
           var chatText = String(entry.text || '')
           var chatBody = chatTitle === chatText || chatText === '' ? chatTitle : (chatText.indexOf(chatTitle) === 0 ? chatText : chatTitle + '\n' + chatText)
-          var collapsible = entry.kind !== 'chat' && chatBody.length > 220
+          // v4.0：聊天长文默认折叠（所有类型 > 160 字），点击展开；减少长文噪音。
+          var collapsible = chatBody.length > 160
           var fileChips = (entry.files || []).map(function (file) {
             return '<button class="chip file file-chip" data-file="' + esc(file) + '">📎 ' + esc(short(String(file).split(/[\\/]/).pop() || file, 30)) + '</button>'
           }).join('')
@@ -1886,7 +2065,7 @@
       var busyTitle = busy && session.currentTask && session.currentTask.title ? '当前任务：' + session.currentTask.title : ''
       return '<div class="member compact">' +
         '<div class="avatar clickable" data-jump="' + esc(id) + '" data-title="' + esc(session.title || who.handle) + '">' + avatarHtml(who.avatar) + '</div>' +
-        '<div class="who"><b>' + esc(who.handle) + (manager ? ' <span class="badge-manager">群管理</span>' : '') + (isProtected ? ' <span class="badge-manager">维护者·观察</span>' : '') + ' <span class="avail-badge ' + (busy ? 'busy' : 'idle') + '" title="' + esc(busyTitle) + '">' + (busy ? '忙' : '空闲') + '</span></b>' +
+        '<div class="who"><b>' + esc(who.handle) + officeBadge(who) + (manager ? ' <span class="badge-manager">群管理</span>' : '') + (isProtected ? ' <span class="badge-manager">维护者·观察</span>' : '') + ' <span class="avail-badge ' + (busy ? 'busy' : 'idle') + '" title="' + esc(busyTitle) + '">' + (busy ? '忙' : '空闲') + '</span></b>' +
         '<small><code class="contactid" data-copy="' + esc(cid) + '" title="点击复制 contactId（可直接用作 session_ask 的 to）">' + esc(cid) + '</code> · ' + meta + '</small></div>' +
         '<div class="actions">' + (session.status === 'running' ? '<button class="btn small danger" data-interrupt="' + esc(id) + '" title="打断这一轮（不删会话、不丢历史）">⏹ 打断</button>' : '') +
         '<button class="btn small mint" data-like="' + esc(id) + '">👍</button>' +
@@ -2128,6 +2307,7 @@
       '<div class="task-card-text">' + esc(entry.text || '') + '</div>' +
       lockHtml +
       '<div class="task-meta">' + coordinatorHtml + memberHtml + '</div>' +
+      taskFlowHtml(entry.id, 20, false, true) +
       '<div class="task-actions"><button class="btn small" data-task-detail="' + esc(entry.id) + '">查看任务请求 / 状态</button></div>' +
       '</div></div>'
   }
@@ -2296,6 +2476,7 @@
           ' · ' + when(request.ts) + '<br/>' + esc(request.title || '') + '</div>'
       })
     }
+    html += '<div class="task-detail-flow"><div class="hint">信息流</div>' + taskFlowHtml(task.id, 40, true, false) + '</div>'
     $('taskDetail').innerHTML = html
     $('taskDetailModal').classList.add('open')
   }
@@ -2890,7 +3071,8 @@
     var out = []
     var seen = {}
     ;(state.rules || []).forEach(function (entry) {
-      if (!entry || entry.panelMention !== true || entry.hiddenFromChat === true || seen[entry.id]) return
+      // 完成通知单独进「完成」类；不再重复算一条「@我」。
+      if (!entry || entry.panelMention !== true || entry.hiddenFromChat === true || entry.completionNotice === true || seen[entry.id]) return
       seen[entry.id] = true
       out.push({
         id: 'mention:' + entry.id,
@@ -2926,6 +3108,7 @@
   }
   function renderBadges() {
     var unread = noticesUnread()
+    var inboxCount = inboxBadgeCount()
     var bell = $('bellBadge')
     if (bell) { bell.textContent = String(unread.length); bell.hidden = unread.length <= 0 }
     var bellBtn = $('bellBtn')
@@ -2933,15 +3116,18 @@
     document.querySelectorAll('.tab').forEach(function (tab) {
       var view = tab.getAttribute('data-view')
       var n = 0
-      if (view === 'home' || view === 'groups') n = unread.length
+      if (view === 'home' || view === 'inbox') n = inboxCount
+      else if (view === 'groups') n = unread.length + groupUnreadTotal()
       else if (view === 'world') n = unread.filter(function (item) { return item.kind === 'approval' || (item.kind === 'mention' && !item.groupId) }).length
       else if (view === 'tasks') n = unread.filter(function (item) { return item.kind === 'stalled' }).length
       tab.classList.toggle('has-unread', n > 0)
     })
-    var groupsTabDot = groupUnreadTotal()
-    var groupsTab = document.querySelector('.tab[data-view="groups"]')
-    if (groupsTab && !groupsTab.classList.contains('has-unread') && groupsTabDot > 0) groupsTab.classList.add('has-unread')
-    document.title = (unread.length ? '(' + unread.length + ') ' : '') + 'NEBULA · 星桥'
+    document.querySelectorAll('.bn-item').forEach(function (item) {
+      var view = item.getAttribute('data-view')
+      var n = view === 'home' || view === 'inbox' ? inboxCount : view === 'groups' ? unread.length + groupUnreadTotal() : 0
+      item.classList.toggle('has-unread', n > 0)
+    })
+    document.title = (inboxCount ? '(' + inboxCount + ') ' : '') + 'NEBULA · 星桥'
   }
   function markNoticeRead(notice) {
     if (!notice) return
@@ -2983,95 +3169,558 @@
     }
   }
 
-  // ---------------- 首页 ----------------
-  function homeActionHtml(notice) {
-    var actions = notice.kind === 'approval'
-      ? '<button class="btn small primary" data-home-approve="' + esc(notice.approvalId) + '">通过</button><button class="btn small" data-home-reject="' + esc(notice.approvalId) + '">驳回</button>'
-      : '<button class="btn small" data-notif-open="' + esc(notice.id) + '">查看</button>'
-    return '<div class="home-item" data-notif-open="' + esc(notice.id) + '">' +
-      '<span class="hi-icon">' + notice.icon + '</span>' +
-      '<div class="hi-main"><div class="hi-title">' + esc(notice.title) + '</div><div class="hi-sub">' + esc(notice.sub) + '</div></div>' +
-      '<span class="hi-actions">' + actions + '</span></div>'
+  // ================================================================
+  // v4.0 指挥中心：任务信息流 / 异常优先 / 统一收件箱 / 资源队列
+  // 数据全部来自 state（taskFlows / taskLines / pendingAsks / approvals /
+  // completionNotices），不改后端；资源队列先留接口占位。
+  // ================================================================
+  function taskFlowOf(taskId) {
+    var flows = state.taskFlows || {}
+    var list = flows[String(taskId || '')]
+    return Array.isArray(list) ? list : []
   }
+  function taskTitleForFlow(taskId) {
+    var task = (state.rules || []).find(function (item) { return item.kind === 'task' && item.id === taskId })
+    if (task) return task.title || task.text || taskId
+    var line = (state.taskLines || []).find(function (item) { return item.taskId === taskId })
+    if (line) return line.title || taskId
+    return short(String(taskId || ''), 18)
+  }
+  function flowRowHtml(event) {
+    var route = (event.fromName || '?') + ' → ' + ((event.toNames || []).join('、') || '—')
+    return '<div class="flow-row"><span class="flow-time">' + esc(when(event.ts)) + '</span><div class="flow-body">' +
+      '<div><span class="flow-route">' + esc(route) + '</span> <span class="flow-action">' + esc(event.action || '') + '</span></div>' +
+      (event.detail ? '<div class="flow-detail" title="' + esc(event.detail) + '">' + esc(event.detail) + '</div>' : '') +
+      '</div></div>'
+  }
+  /** 任务信息流展开层；hideWhenEmpty=true 时无流转不占位。 */
+  function taskFlowHtml(taskId, limit, openByDefault, hideWhenEmpty) {
+    var events = taskFlowOf(taskId)
+    if (!events.length) {
+      return hideWhenEmpty ? '' : '<div class="flow-empty">暂无信息流（还没有派活 / 回复 / 完成记录）</div>'
+    }
+    var list = events.slice(-Math.max(1, limit || 30))
+    return '<details class="flow-group"' + (openByDefault ? ' open' : '') + ' onclick="event.stopPropagation()">' +
+      '<summary><span class="flow-title">信息流</span><span class="flow-count">' + events.length + ' 条 · ' + esc(when(events[events.length - 1].ts)) + '</span></summary>' +
+      '<div class="flow-list">' + list.map(flowRowHtml).join('') + '</div></details>'
+  }
+  function todayStartTs() {
+    var start = new Date()
+    start.setHours(0, 0, 0, 0)
+    return start.getTime()
+  }
+  function todayFlowGroups() {
+    var start = todayStartTs()
+    var groups = []
+    Object.keys(state.taskFlows || {}).forEach(function (taskId) {
+      var events = (state.taskFlows[taskId] || []).filter(function (event) { return (event.ts || 0) >= start })
+      if (!events.length) return
+      groups.push({ taskId: taskId, title: taskTitleForFlow(taskId), events: events })
+    })
+    groups.sort(function (a, b) {
+      var ta = a.events[a.events.length - 1]
+      var tb = b.events[b.events.length - 1]
+      return (tb.ts || 0) - (ta.ts || 0)
+    })
+    return groups
+  }
+
+  // ---------------- 统一收件箱数据模型 ----------------
+  function pendingRequestItems() {
+    return (state.rules || []).filter(function (entry) {
+      return entry && entry.kind === 'request' && entry.status !== 'answered' && !entry.answeredBy
+    }).map(function (entry) {
+      var targets = Array.isArray(entry.requestTo) ? entry.requestTo : []
+      var targetNames = targets.map(function (id) { return identityOf(id).handle }).join('、')
+      return {
+        id: 'request:' + entry.id,
+        category: 'request',
+        icon: '📨',
+        title: entry.title || entry.text || '待处理请求',
+        sub: [groupNameOf(entry.groupId), targetNames ? '→ ' + targetNames : '', entry.taskId ? '任务请求' : ''].filter(Boolean).join(' · '),
+        ts: entry.ts || 0,
+        groupId: entry.groupId || '',
+        taskId: entry.taskId || '',
+        entry: entry
+      }
+    })
+  }
+  function queuedAskItems() {
+    return (state.pendingAsks || []).map(function (ask) {
+      var deps = Array.isArray(ask.dependsOn) ? ask.dependsOn : []
+      var delayed = ask.notBefore && ask.notBefore > Date.now()
+      var blocked = deps.length > 0 || delayed
+      return {
+        id: 'queued:' + ask.id,
+        category: 'queued',
+        icon: '⏳',
+        title: ask.title || '排队中的请求',
+        sub: [ask.groupName, blocked ? (deps.length ? '依赖 ' + deps.length + ' 项未满足' : '延迟未到') : '排队中', ask.author ? identityOf(ask.author).handle : ''].filter(Boolean).join(' · '),
+        ts: ask.createdAt || 0,
+        groupId: ask.groupId || '',
+        ask: ask
+      }
+    })
+  }
+  /** 后端 4.0 已提供 state.inbox 派生读模型时直接采用（权威 attention/priority）；旧版则本地派生。 */
+  function backendInboxItems() {
+    var box = state.inbox
+    if (!box || !Array.isArray(box.items)) return null
+    var kindMap = {
+      approval: { category: 'approval', icon: '🔐', prefix: 'approval:' },
+      request: { category: 'request', icon: '📨', prefix: 'inbox:request:' },
+      'urgent-request': { category: 'request', icon: '⚡', prefix: 'inbox:urgent:' },
+      'stuck-task': { category: 'stalled', icon: '⛔', prefix: 'inbox:stuck:' },
+      'paused-task': { category: 'stalled', icon: '⏸️', prefix: 'inbox:paused:' },
+      'queued-ask': { category: 'queued', icon: '⏳', prefix: 'inbox:queued:' },
+      completion: { category: 'completion', icon: '✅', prefix: 'completion:' }
+    }
+    return box.items.map(function (item) {
+      var meta = kindMap[item.kind] || { category: 'request', icon: '📥', prefix: 'inbox:other:' }
+      var readKey = meta.prefix + item.id
+      return {
+        id: readKey,
+        backendId: item.id,
+        backendKind: item.kind,
+        category: meta.category,
+        icon: meta.icon,
+        title: item.title || '',
+        sub: [item.groupName, item.detail].filter(Boolean).join(' · '),
+        ts: item.ts || 0,
+        groupId: item.groupId || '',
+        priority: item.priority || 0,
+        approvalId: item.kind === 'approval' ? item.id : '',
+        read: notifReadIds[readKey] === true,
+        raw: item
+      }
+    })
+  }
+  function inboxItems() {
+    var backend = backendInboxItems()
+    if (backend) return backend
+    var items = []
+    approvalNotices().forEach(function (notice) {
+      items.push({
+        id: notice.id, category: 'approval', icon: '🔐',
+        title: String(notice.title || '').replace(/^待复核：/, ''),
+        sub: notice.sub, ts: notice.ts, groupId: notice.groupId, approvalId: notice.approvalId,
+        read: notifReadIds[notice.id] === true
+      })
+    })
+    items = items.concat(pendingRequestItems()).concat(queuedAskItems())
+    completionNoticeItems().forEach(function (notice) {
+      items.push({
+        id: notice.id, category: 'completion', icon: '✅', title: notice.title, sub: notice.sub,
+        ts: notice.ts, groupId: notice.groupId, notice: notice.notice, read: notifReadIds[notice.id] === true
+      })
+    })
+    stalledNotices().forEach(function (notice) {
+      items.push({
+        id: notice.id, category: 'stalled', icon: '⛔', title: notice.title, sub: notice.sub,
+        ts: notice.ts, groupId: notice.groupId, line: notice.line
+      })
+    })
+    mentionNotices().forEach(function (notice) {
+      items.push({
+        id: notice.id, category: 'mention', icon: '📣', title: notice.title, sub: notice.sub,
+        ts: notice.ts, groupId: notice.groupId, entry: notice.entry, read: notifReadIds[notice.id] === true
+      })
+    })
+    var rank = { stalled: 0, approval: 1, queued: 2, request: 3, completion: 4, mention: 5 }
+    items.sort(function (a, b) {
+      var ra = rank[a.category] === undefined ? 9 : rank[a.category]
+      var rb = rank[b.category] === undefined ? 9 : rank[b.category]
+      if (ra !== rb) return ra - rb
+      return (b.ts || 0) - (a.ts || 0)
+    })
+    return items
+  }
+  function inboxBadgeCount() {
+    var items = inboxItems()
+    if (state.inbox && typeof state.inbox.attentionCount === 'number') {
+      var extra = items.filter(function (item) {
+        return (item.category === 'completion' || item.category === 'mention') && !item.read
+      }).length
+      return state.inbox.attentionCount + extra
+    }
+    return items.filter(function (item) {
+      if (item.category === 'approval' || item.category === 'completion' || item.category === 'mention') return !item.read
+      return true
+    }).length
+  }
+  function inboxFilterActive(item) {
+    if (inboxFilter === 'all') return true
+    if (inboxFilter === 'pending') return ['approval', 'request', 'queued', 'stalled'].indexOf(item.category) >= 0
+    return item.category === inboxFilter
+  }
+  var INBOX_CAT_LABEL = { stalled: '任务卡住', approval: '待审批', queued: '串行排队', request: '待回复请求', completion: '任务完成', mention: '有人 @ 我' }
+  function inboxItemActions(item) {
+    if (item.category === 'approval') {
+      return '<button class="btn small primary" data-inbox-approve="' + esc(item.approvalId) + '">通过</button>' +
+        '<button class="btn small" data-inbox-reject="' + esc(item.approvalId) + '">驳回</button>' +
+        '<button class="btn small" data-inbox-open="' + esc(item.id) + '">查看</button>'
+    }
+    if (item.category === 'completion') {
+      return '<button class="btn small primary" data-inbox-open="' + esc(item.id) + '">查看群</button>' +
+        '<button class="btn small" data-inbox-read="' + esc(item.id) + '">已读</button>'
+    }
+    if (item.category === 'stalled') {
+      return '<button class="btn small primary" data-inbox-open="' + esc(item.id) + '">查看任务</button>' +
+        (item.groupId ? '<button class="btn small" data-inbox-group="' + esc(item.groupId) + '">跳群</button>' : '')
+    }
+    if (item.category === 'queued') {
+      return '<button class="btn small" data-inbox-open="' + esc(item.id) + '">查看</button>' +
+        (item.groupId ? '<button class="btn small" data-inbox-group="' + esc(item.groupId) + '">跳群</button>' : '')
+    }
+    if (item.category === 'request') {
+      return '<button class="btn small primary" data-inbox-open="' + esc(item.id) + '">查看</button>' +
+        (item.groupId ? '<button class="btn small" data-inbox-group="' + esc(item.groupId) + '">跳群</button>' : '')
+    }
+    return '<button class="btn small" data-inbox-open="' + esc(item.id) + '">查看</button>'
+  }
+  function inboxItemHtml(item) {
+    return '<div class="inbox-item cat-' + esc(item.category) + (item.read === false ? ' unread' : '') + '" data-inbox-id="' + esc(item.id) + '">' +
+      '<span class="inbox-icon">' + item.icon + '</span>' +
+      '<div class="inbox-main"><div class="inbox-title">' + esc(item.title) + '</div>' +
+      '<div class="inbox-sub"><span class="cat-chip ' + esc(item.category) + '">' + esc(INBOX_CAT_LABEL[item.category] || item.category) + '</span> ' + esc(item.sub || '') + '</div>' +
+      '<div class="inbox-actions">' + inboxItemActions(item) + '</div></div>' +
+      '<span class="inbox-time">' + when(item.ts) + '</span></div>'
+  }
+  function renderInbox() {
+    var list = $('inboxList')
+    if (!list) return
+    var all = inboxItems()
+    var items = all.filter(inboxFilterActive)
+    var summary = $('inboxSummary')
+    if (summary) {
+      var backendTotal = state.inbox && typeof state.inbox.total === 'number' ? state.inbox.total : all.length
+      var attention = state.inbox && typeof state.inbox.attentionCount === 'number' ? state.inbox.attentionCount : inboxBadgeCount()
+      summary.textContent = '待处理 ' + inboxBadgeCount() + ' · 需拍板 ' + attention + ' · 共 ' + backendTotal + ' 条'
+    }
+    var previousScrollTop = list.scrollTop
+    if (!all.length) {
+      list.innerHTML = '<div class="inbox-empty">收件箱是空的。<br/>任务卡住、待审批、待回复请求、串行排队和完成通知都会出现在这里。</div>'
+    } else if (!items.length) {
+      list.innerHTML = '<div class="inbox-empty">当前筛选下没有条目。</div>'
+    } else if (inboxFilter === 'all') {
+      var groups = []
+      var seen = {}
+      items.forEach(function (item) {
+        if (!seen[item.category]) { seen[item.category] = true; groups.push({ category: item.category, items: [] }) }
+        groups[groups.length - 1].items.push(item)
+      })
+      list.innerHTML = groups.map(function (group) {
+        return '<div class="inbox-group-title">' + esc(INBOX_CAT_LABEL[group.category] || group.category) + ' · ' + group.items.length + '</div>' +
+          group.items.map(inboxItemHtml).join('')
+      }).join('')
+    } else {
+      list.innerHTML = items.map(inboxItemHtml).join('')
+    }
+    list.scrollTop = previousScrollTop
+    var aside = $('inboxAsideStats')
+    if (aside) {
+      var counts = {}
+      all.forEach(function (item) { counts[item.category] = (counts[item.category] || 0) + 1 })
+      aside.innerHTML = ['stalled', 'approval', 'queued', 'request', 'completion', 'mention'].map(function (category) {
+        return '<div class="home-mini"><span class="cat-chip ' + category + '">' + esc(INBOX_CAT_LABEL[category]) + '</span><b style="margin-left:auto">' + (counts[category] || 0) + '</b></div>'
+      }).join('')
+    }
+    renderBadges()
+  }
+  function inboxItemById(id) {
+    return inboxItems().find(function (item) { return item.id === id }) || null
+  }
+  function markInboxItemRead(id) {
+    var item = inboxItemById(id)
+    if (!item) return
+    if (item.category === 'completion' && item.notice) markCompletionSeen(item.notice)
+    notifReadIds[id] = true
+    persistNotifRead()
+    renderInbox()
+    renderHome()
+    renderBadges()
+    renderNotifications()
+    renderCompletionBadge()
+  }
+  function openInboxItem(id) {
+    var item = inboxItemById(id)
+    if (!item) { toast('条目已失效', true); refresh(); return }
+    markInboxItemRead(id)
+    if (item.category === 'approval') { switchView('world'); return }
+    if (item.category === 'completion' && item.notice) { openCompletionTarget(item.notice); return }
+    if (item.category === 'stalled' && item.line) { openTaskLine(item.line); return }
+    if (item.taskId) {
+      var task = (state.rules || []).find(function (entry) { return entry.kind === 'task' && entry.id === item.taskId })
+      if (task) { openTaskDetail(task.id); return }
+    }
+    if (item.groupId) { currentGroupId = item.groupId; switchView('groups'); return }
+    if (item.category === 'mention') { switchView('world'); return }
+    toast('这条收件没有可跳转的目标', true)
+  }
+  function handleInboxClick(event) {
+    var approve = event.target.closest('[data-inbox-approve]')
+    if (approve) { approveApproval(approve.getAttribute('data-inbox-approve'), approve); return }
+    var reject = event.target.closest('[data-inbox-reject]')
+    if (reject) { rejectApproval(reject.getAttribute('data-inbox-reject'), reject); return }
+    var read = event.target.closest('[data-inbox-read]')
+    if (read) { markInboxItemRead(read.getAttribute('data-inbox-read')); return }
+    var group = event.target.closest('[data-inbox-group]')
+    if (group) { currentGroupId = group.getAttribute('data-inbox-group'); switchView('groups'); return }
+    var open = event.target.closest('[data-inbox-open]')
+    if (open) { openInboxItem(open.getAttribute('data-inbox-open')); return }
+    var row = event.target.closest('[data-inbox-id]')
+    if (row) openInboxItem(row.getAttribute('data-inbox-id'))
+  }
+
+  // ---------------- 资源队列（computer-use 接口占位） ----------------
+  function normalizeResourceQueue() {
+    // 实际后端（4.0 index.js）把 computer-use 租约放在 state.computerResource / state.commandCenter.computer；
+    // 同时兼容 state.resources / computerUse / resourceQueue 预留结构。
+    var cc = state.commandCenter && typeof state.commandCenter === 'object' ? state.commandCenter : null
+    var computer = state.computerResource && typeof state.computerResource === 'object'
+      ? state.computerResource
+      : cc && cc.computer && typeof cc.computer === 'object' ? cc.computer : null
+    if (computer) {
+      var lease = computer.lease && typeof computer.lease === 'object' ? computer.lease : null
+      var ownerId = lease && lease.owner ? String(lease.owner) : ''
+      var ttlMs = lease && isFinite(lease.ttlMs) ? Math.max(0, Number(lease.ttlMs)) : 0
+      var priority = Number(computer.priority || 0)
+      return {
+        available: true,
+        source: 'commandCenter.computer',
+        inUse: ownerId
+          ? [{ id: ownerId, handle: lease.label || identityOf(ownerId).handle, title: lease.label || '', since: lease.expiresAt ? lease.expiresAt - ttlMs : 0, priority: priority ? 'priority ' + priority : '', ttlMs: ttlMs }]
+          : [],
+        queue: [],
+        note: computer.available === false ? 'computer-use 未检测到安装 / 未启用' : ''
+      }
+    }
+    var source = state.resources || state.computerUse || state.resourceQueue || state.resource || null
+    var inUse = []
+    var queue = []
+    if (Array.isArray(source)) queue = source
+    else if (source && typeof source === 'object') {
+      inUse = Array.isArray(source.inUse) ? source.inUse : Array.isArray(source.occupied) ? source.occupied : Array.isArray(source.current) ? source.current : []
+      queue = Array.isArray(source.queue) ? source.queue : Array.isArray(source.waiting) ? source.waiting : []
+    }
+    function norm(item, index) {
+      var src = item && typeof item === 'object' ? item : {}
+      var id = src.sessionId || src.id || ''
+      return {
+        id: id || 'res-' + index,
+        handle: src.handle || (id ? identityOf(id).handle : '未知会话'),
+        title: src.title || src.taskTitle || '',
+        since: src.since || src.startedAt || 0,
+        priority: src.priority || src.level || '',
+        groupName: src.groupName || ''
+      }
+    }
+    return { available: !!source, inUse: inUse.map(norm), queue: queue.map(norm) }
+  }
+  function renderResourceQueue() {
+    var box = $('resourceQueueList')
+    if (!box) return
+    var res = normalizeResourceQueue()
+    if (!res.available) {
+      box.innerHTML =
+        '<div class="resource-row"><span>🖥️</span><div class="rr-main"><div class="rr-title">computer-use · 空闲</div><div class="rr-sub">接口未接入：显示 state.resources / commandCenter.computer 的占用、排队与优先级</div></div><span class="tag-soon">待接入</span></div>' +
+        '<div class="resource-row"><span>⏳</span><div class="rr-main"><div class="rr-title">排队 0</div><div class="rr-sub">接入后显示占用会话、已用时长与排队优先级</div></div></div>' +
+        '<div class="flow-empty">预留结构：state.commandCenter.computer = { lease: { owner, label, expiresAt, ttlMs }, priority }</div>'
+      return
+    }
+    var rows = []
+    if (!res.inUse.length && !res.queue.length) {
+      rows.push('<div class="resource-row"><span>🖥️</span><div class="rr-main"><div class="rr-title">当前无占用</div><div class="rr-sub">computer-use 空闲' + (res.note ? ' · ' + esc(res.note) : '') + '</div></div></div>')
+    }
+    res.inUse.forEach(function (item) {
+      var remain = item.ttlMs ? ' · 剩余 ' + Math.max(1, Math.round(item.ttlMs / 60000)) + ' 分钟' : ''
+      rows.push('<div class="resource-row"><span>🟢</span><div class="rr-main"><div class="rr-title">占用中 · ' + esc(item.handle) + (item.title && item.title !== item.handle ? ' · ' + esc(short(item.title, 20)) : '') + '</div>' +
+        '<div class="rr-sub">' + esc(item.groupName || 'desktop 桌面') + remain + '</div></div>' +
+        (item.priority ? '<span class="rr-prio">' + esc(item.priority) + '</span>' : '') + '</div>')
+    })
+    res.queue.forEach(function (item) {
+      rows.push('<div class="resource-row"><span>⏳</span><div class="rr-main"><div class="rr-title">排队 · ' + esc(item.handle) + '</div>' +
+        '<div class="rr-sub">' + esc(item.groupName || '') + (item.priority ? ' · 优先级 ' + esc(item.priority) : '') + '</div></div></div>')
+    })
+    if (res.source === 'commandCenter.computer') {
+      rows.push('<div class="flow-empty">来源：state.commandCenter.computer · 排队队列暂未由后端提供（先显示 0）。</div>')
+    }
+    box.innerHTML = rows.join('')
+  }
+
+  // ---------------- 异常 / 待决策 ----------------
+  function priorityAlerts() {
+    var alerts = []
+    ;(state.taskLines || []).forEach(function (line) {
+      if (lineStatusOf(line) !== 'stalled') return
+      var leader = line.leader || {}
+      alerts.push({
+        id: 'stalled:' + (line.taskId || line.title || ''), kind: 'stalled', sev: 'danger', icon: '⛔',
+        title: line.title || '任务卡住',
+        sub: [line.groupName, '当前 ' + (line.currentStepText || ''), '卡住自 ' + when(line.stalledSince || line.lastProgressAt)].filter(Boolean).join(' · '),
+        ts: line.stalledSince || line.lastProgressAt || 0, line: line, leaderId: leader.id || ''
+      })
+    })
+    ;(state.taskLines || []).forEach(function (line) {
+      var status = lineStatusOf(line)
+      var idleMs = Date.now() - (line.lastProgressAt || line.ts || 0)
+      if (status === 'waiting' && idleMs > 30 * 60 * 1000) {
+        alerts.push({
+          id: 'waiting:' + (line.taskId || line.title || ''), kind: 'waiting', sev: 'warn', icon: '⏸️',
+          title: '任务等待中：' + (line.title || ''),
+          sub: [line.groupName, '已等待 ' + when(line.lastProgressAt || line.ts)].filter(Boolean).join(' · '),
+          ts: line.lastProgressAt || line.ts || 0, line: line
+        })
+      }
+      if (status === 'active' && line.lineStatus === 'paused') {
+        alerts.push({
+          id: 'paused:' + (line.taskId || line.title || ''), kind: 'paused', sev: 'warn', icon: '⏸️',
+          title: '任务已暂停：' + (line.title || ''),
+          sub: [line.groupName, line.pauseNote || '等待你决定是否继续'].filter(Boolean).join(' · '),
+          ts: line.pausedAt || line.lastProgressAt || 0, line: line
+        })
+      }
+    })
+    ;(state.approvals || []).forEach(function (item) {
+      if (!item || item.status !== 'pending') return
+      alerts.push({
+        id: 'approval:' + item.id, kind: 'approval', sev: 'warn', icon: '🔐',
+        title: '待复核：' + short(String(item.title || item.text || ''), 40),
+        sub: [(item.source === 'group.recruit' ? '招募新成员' : '自动创建会话'), when(item.createdAt)].filter(Boolean).join(' · '),
+        ts: item.createdAt || 0, approvalId: item.id
+      })
+    })
+    ;(state.pendingAsks || []).forEach(function (ask) {
+      var deps = Array.isArray(ask.dependsOn) ? ask.dependsOn : []
+      var delayed = ask.notBefore && ask.notBefore > Date.now()
+      var blocked = deps.length > 0 || delayed
+      alerts.push({
+        id: 'queued:' + ask.id, kind: 'queued', sev: blocked ? 'warn' : 'info', icon: '⏳',
+        title: '排队中：' + (ask.title || '请求'),
+        sub: [ask.groupName, blocked ? (deps.length ? '依赖 ' + deps.length + ' 项未满足' : '延迟未到') : '等待执行'].filter(Boolean).join(' · '),
+        ts: ask.createdAt || 0, ask: ask
+      })
+    })
+    ;(state.rules || []).forEach(function (entry) {
+      if (!entry || entry.kind !== 'request' || entry.urgent !== true) return
+      if (entry.status === 'answered' || entry.answeredBy) return
+      var targets = (entry.requestTo || []).map(function (id) { return identityOf(id).handle }).join('、')
+      alerts.push({
+        id: 'urgent-request:' + entry.id, kind: 'urgent-request', sev: 'danger', icon: '⚡',
+        title: '加急请求：' + (entry.title || entry.text || ''),
+        sub: [groupNameOf(entry.groupId), targets ? '→ ' + targets : ''].filter(Boolean).join(' · '),
+        ts: entry.ts || 0, groupId: entry.groupId || '', entry: entry
+      })
+    })
+    alerts.sort(function (a, b) {
+      var rank = { danger: 0, warn: 1, info: 2 }
+      var ra = rank[a.sev] === undefined ? 3 : rank[a.sev]
+      var rb = rank[b.sev] === undefined ? 3 : rank[b.sev]
+      if (ra !== rb) return ra - rb
+      return (b.ts || 0) - (a.ts || 0)
+    })
+    return alerts
+  }
+  function alertActionsHtml(alert) {
+    if (alert.kind === 'approval') {
+      return '<button class="btn small primary" data-home-approve="' + esc(alert.approvalId) + '">通过</button>' +
+        '<button class="btn small" data-home-reject="' + esc(alert.approvalId) + '">驳回</button>'
+    }
+    if (alert.line) {
+      var index = (state.taskLines || []).indexOf(alert.line)
+      return '<button class="btn small" data-home-line="' + index + '">查看</button>' +
+        (alert.line.leader && alert.line.leader.id ? '<button class="btn small urgent" data-home-nudge="' + index + '">⚡ 催</button>' : '')
+    }
+    if (alert.ask) {
+      return '<button class="btn small" data-inbox-open="queued:' + esc(alert.ask.id) + '">查看</button>'
+    }
+    return ''
+  }
+  function alertItemHtml(alert) {
+    return '<div class="home-item alert-item sev-' + esc(alert.sev) + '">' +
+      '<span class="hi-icon">' + alert.icon + '</span>' +
+      '<div class="hi-main"><div class="hi-title">' + esc(alert.title) + '</div><div class="hi-sub">' + esc(alert.sub) + '</div></div>' +
+      '<span class="hi-actions">' + alertActionsHtml(alert) + '</span></div>'
+  }
+
+  // ---------------- 指挥中心首页 ----------------
   function renderHome() {
-    var actions = noticesUnread().slice(0, 8)
+    var alerts = priorityAlerts()
+    var inbox = inboxItems()
+    var actionable = inbox.filter(function (item) { return !item.read || item.category === 'request' || item.category === 'queued' || item.category === 'stalled' })
     var tl = state.taskLineStats || {}
     var sessions = (state.sessions || []).filter(function (session) { return session && session.internal !== true })
-    var idleCount = sessions.filter(function (session) { return session.availability !== 'busy' }).length
+    var idleSessions = sessions.filter(function (session) { return session.availability !== 'busy' })
+    var flowGroups = todayFlowGroups()
+    var flowCount = flowGroups.reduce(function (sum, group) { return sum + group.events.length }, 0)
+    var resource = normalizeResourceQueue()
+
+    var status = $('homeStatus')
+    if (status) {
+      if (!state.version && !lastError) {
+        status.innerHTML = '正在读取状态…'
+      } else if (lastError) {
+        status.innerHTML = '<span class="danger">⚠ ' + esc(lastError) + '</span>'
+      } else if (alerts.length) {
+        status.innerHTML = '<b class="danger">' + alerts.length + '</b> 件需要你决策或处理 · 今日流转 <b>' + flowCount + '</b> 条' + (lastError ? '' : '')
+      } else {
+        status.innerHTML = '✅ 没有异常与待决策 · 今日流转 <b>' + flowCount + '</b> 条 · 资源队列' + (resource.available ? ' <b>' + (resource.inUse.length + resource.queue.length) + '</b> 项' : '待接入')
+      }
+    }
     var countEl = $('homeActionCount')
-    if (countEl) countEl.textContent = String(actions.length)
+    if (countEl) countEl.textContent = String(alerts.length)
     var hintEl = $('homeActionHint')
-    if (hintEl) hintEl.textContent = lastError ? ' · 连接异常' : ''
-    var summary = $('homeSummary')
-    if (summary) summary.textContent = '待处理 ' + actions.length + ' · 任务线 ' + (tl.active || 0) + ' 进行 / ' + (tl.stalled || 0) + ' 卡住 · 空闲 ' + idleCount + ' 位'
+    if (hintEl) hintEl.textContent = alerts.length ? '按严重程度排序' : ''
+    var inboxCountEl = $('homeInboxCount')
+    if (inboxCountEl) inboxCountEl.textContent = String(inboxBadgeCount())
     var actionList = $('homeActionList')
     if (actionList) {
       var parts = []
-      if (lastError) {
-        parts.push('<div class="error-bar">⚠ ' + esc(lastError) + '<span class="spacer"></span><button class="btn small" data-home-retry>重试</button></div>')
-      }
-      if (!state.version && !lastError) {
-        parts.push('<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>')
-      } else if (!actions.length) {
-        parts.push('<div class="home-empty">✅ 当前没有需要你处理的事项</div>')
-      } else {
-        actions.forEach(function (notice) { parts.push(homeActionHtml(notice)) })
-      }
+      if (!state.version && !lastError) parts.push('<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>')
+      else if (!alerts.length) parts.push('<div class="ok-line">✅ 一切正常，没有需要你介入的异常</div>')
+      else alerts.slice(0, 7).forEach(function (alert) { parts.push(alertItemHtml(alert)) })
       actionList.innerHTML = parts.join('')
     }
-    var taskList = $('homeTaskList')
-    if (taskList) {
-      var openLines = (state.taskLines || []).filter(function (line) {
-        var status = lineStatusOf(line)
-        return status === 'active' || status === 'stalled' || status === 'waiting'
-      })
-      taskList.innerHTML = openLines.length ? openLines.slice(0, 4).map(function (line) {
-        var index = state.taskLines.indexOf(line)
-        var status = lineStatusOf(line)
-        var leader = line.leader || {}
-        var nudge = leader.id ? '<button class="btn small urgent" data-home-nudge="' + index + '" title="给组长发加急插话催进度">⚡ 催</button>' : ''
-        return '<div class="home-item" data-home-line="' + index + '">' +
-          '<span class="hi-icon">' + (status === 'stalled' ? '⛔' : '🧭') + '</span>' +
-          '<div class="hi-main"><div class="hi-title">' + esc(line.title || '任务线') + '</div>' +
-          '<div class="hi-sub">' + esc((line.groupName || '') + ' · ' + (line.currentStepText || '') + ' · ' + (line.progress || 0) + '%' + (status === 'stalled' ? ' · 卡住' : '')) + '</div>' +
-          '<div class="tl-progress" style="margin-top:4px"><span style="width:' + Math.max(0, Math.min(100, line.progress || 0)) + '%"></span></div></div>' +
-          '<span class="hi-actions">' + nudge + '</span></div>'
-      }).join('') : '<div class="home-empty">还没有进行中的任务线。在群聊里「发布任务」会自动生成 5 阶段清单。</div>'
+    var inboxList = $('homeInboxList')
+    if (inboxList) {
+      var preview = actionable.slice(0, 5)
+      inboxList.innerHTML = preview.length ? preview.map(inboxItemHtml).join('') : '<div class="cmd-empty">收件箱为空：没有待回复请求、审批、卡住任务或完成通知。</div>'
     }
-    var groupList = $('homeGroupList')
-    if (groupList) {
-      var groups = (state.groups || []).slice().sort(function (a, b) {
-        var ua = groupUnreadCount(a)
-        var ub = groupUnreadCount(b)
-        if (ua !== ub) return ub - ua
-        return latestGroupTs(b) - latestGroupTs(a)
-      })
-      groupList.innerHTML = groups.length ? groups.slice(0, 5).map(function (group) {
-        var unread = groupUnreadCount(group)
-        var entries = groupEntries(group)
-        var last = entries.length ? entries[entries.length - 1] : null
-        var who = last ? identityOf(last.author).handle : ''
-        return '<div class="home-item" data-home-group="' + esc(group.id) + '">' +
-          '<span class="hi-icon">💬</span><div class="hi-main">' +
-          '<div class="hi-title">' + esc(group.name) + (unread > 0 ? ' <span class="gc-unread">' + unread + '</span>' : '') + '</div>' +
-          '<div class="hi-sub">' + esc(last ? who + '：' + String(last.title || last.text || '').slice(0, 30) : '暂无消息') + '</div></div>' +
-          '<span class="hi-time" style="font-size:10px;color:var(--dim);flex:none">' + (last ? when(last.ts) : '') + '</span></div>'
-      }).join('') : '<div class="home-empty">还没有群聊。点「＋ 新建群」或发布世界任务会自动建群。</div>'
+    var flowList = $('cmdFlowList')
+    if (flowList) {
+      flowList.innerHTML = flowGroups.length
+        ? flowGroups.slice(0, 6).map(function (group) {
+            var latest = group.events[group.events.length - 1]
+            return '<details class="flow-group" data-flow-task="' + esc(group.taskId) + '">' +
+              '<summary><span class="flow-title">' + esc(short(group.title, 30)) + '</span><span class="flow-count">' + group.events.length + ' 条 · ' + esc(when(latest.ts)) + '</span></summary>' +
+              '<div class="flow-list">' + group.events.slice(-12).map(flowRowHtml).join('') + '</div></details>'
+          }).join('')
+        : '<div class="cmd-empty">今天还没有任务流转记录。派活、催办、回复、完成都会记录在这里。</div>'
     }
+    var resourceList = $('resourceQueueList')
+    if (resourceList) renderResourceQueue()
     var idleList = $('homeIdleList')
     if (idleList) {
       var sorted = sessions.slice().sort(function (a, b) {
         return (a.availability === 'busy' ? 1 : 0) - (b.availability === 'busy' ? 1 : 0) || (b.points || 0) - (a.points || 0)
       })
-      idleList.innerHTML = sorted.length ? sorted.slice(0, 10).map(function (session) {
+      idleList.innerHTML = sorted.length ? sorted.slice(0, 9).map(function (session) {
         var who = identityOf(session.id)
         var busy = session.availability === 'busy'
+        var current = busy && session.currentTask && session.currentTask.title ? session.currentTask.title : ''
         return '<div class="home-mini" data-home-session="' + esc(session.id) + '" data-title="' + esc(session.title || who.handle) + '" title="' + esc(session.title || '') + '">' +
           '<span class="dot ' + (busy ? 'busy' : 'idle') + '"></span><b>' + esc(who.handle) + '</b>' +
-          '<span style="margin-left:auto;font-size:10px">' + (busy ? '忙' : '空闲') + '</span></div>'
+          '<span style="margin-left:auto;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:110px">' + (busy ? esc(short(current || '忙', 12)) : '空闲') + '</span></div>'
       }).join('') : '<div class="home-empty">还没有会话。</div>'
     }
-    renderLeaderboard($('homeLb'), 5)
+    var statsList = $('homeStatsList')
+    if (statsList) {
+      statsList.innerHTML =
+        '<div class="home-mini"><span>🧭</span><b>进行中任务</b><span style="margin-left:auto">' + (tl.active || 0) + '</span></div>' +
+        '<div class="home-mini"><span>🕘</span><b>今日流转</b><span style="margin-left:auto">' + flowCount + '</span></div>' +
+        '<div class="home-mini"><span>📥</span><b>待处理</b><span style="margin-left:auto;color:' + (inboxBadgeCount() ? 'var(--gold)' : 'inherit') + '">' + inboxBadgeCount() + '</span></div>' +
+        '<div class="home-mini"><span>🟢</span><b>空闲可派</b><span style="margin-left:auto">' + idleSessions.length + ' / ' + sessions.length + '</span></div>'
+    }
   }
 
   // ---------------- 任务看板 ----------------
@@ -3102,6 +3751,7 @@
       '<div class="tl-steps">' + steps + '</div>' +
       '<div class="tl-progress"><span style="width:' + Math.max(0, Math.min(100, line.progress || 0)) + '%"></span></div>' +
       '<div class="tlc-sub">' + (meta.length ? '<span>' + esc(meta.join(' · ')) + '</span>' : '') + '<span style="margin-left:auto">更新 ' + when(line.lastProgressAt) + '</span></div>' +
+      taskFlowHtml(line.taskId, 15, false, true) +
       '<div class="tlc-actions"><button class="btn small" data-line-open="' + index + '">详情</button>' +
       (leader.id ? '<button class="btn small urgent" data-line-nudge="' + index + '">⚡ 催</button>' : '') +
       '<button class="btn small" data-line-goto="' + index + '">去群里</button></div></div>'
@@ -3259,6 +3909,7 @@
     if (name === 'groups') { renderGroups(); updateJumpLatest() }
     if (name === 'tasks') renderTasks()
     if (name === 'home') renderHome()
+    if (name === 'inbox') renderInbox()
     if (name === 'world') renderWorld()
   }
   function focusComposer() {
@@ -3270,6 +3921,7 @@
   // ---------------- 全局搜索 / 命令面板 ----------------
   function paletteActions() {
     return [
+      { kind: '动作', icon: '📥', label: '收件箱', sub: '异常 / 审批 / 请求 / 完成', run: function () { switchView('inbox') } },
       { kind: '动作', icon: '＋', label: '发布群任务', sub: '当前群 → 打开任务编辑', run: function () { if (!currentGroup()) { toast('先选择一个群聊', true); return } switchView('groups'); openTaskModal() } },
       { kind: '动作', icon: '💬', label: '新建群聊', sub: '创建群并拉成员', run: function () { openGroupModal() } },
       { kind: '动作', icon: '🛡️', label: '报 BUG', sub: '投递到「星桥 · 修bug」群', run: function () { ensureBugfixGroup() } },
@@ -3416,6 +4068,8 @@
     if (approve) { approveApproval(approve.getAttribute('data-home-approve'), approve); return }
     var reject = event.target.closest('[data-home-reject]')
     if (reject) { rejectApproval(reject.getAttribute('data-home-reject'), reject); return }
+    var inboxOpen = event.target.closest('[data-inbox-open]')
+    if (inboxOpen) { openInboxItem(inboxOpen.getAttribute('data-inbox-open')); return }
     var noticeEl = event.target.closest('[data-notif-open]')
     if (noticeEl) {
       var notice = findNoticeById(noticeEl.getAttribute('data-notif-open'))
@@ -3452,9 +4106,9 @@
       else openPalette('')
       return
     }
-    if (mod && /^[1-4]$/.test(String(event.key))) {
+    if (mod && /^[1-5]$/.test(String(event.key))) {
       event.preventDefault()
-      switchView(['home', 'world', 'groups', 'tasks'][Number(event.key) - 1])
+      switchView(['home', 'inbox', 'world', 'groups', 'tasks'][Number(event.key) - 1])
       return
     }
     if (event.key === 'Escape') {
@@ -3513,26 +4167,31 @@
       button.addEventListener('click', function () { toggleAside() })
     })
     $('asideMask').addEventListener('click', function () { toggleAside(false) })
-    // 首页
-    $('homeActionList').addEventListener('click', onHomeActionClick)
-    $('homeTaskList').addEventListener('click', onHomeTaskClick)
-    $('homeGroupList').addEventListener('click', function (event) {
-      var item = event.target.closest('[data-home-group]')
-      if (!item) return
-      currentGroupId = item.getAttribute('data-home-group')
-      switchView('groups')
-    })
-    $('homeIdleList').addEventListener('click', function (event) {
+    // 指挥中心（v4.0）
+    if ($('homeActionList')) $('homeActionList').addEventListener('click', onHomeActionClick)
+    if ($('homeInboxList')) $('homeInboxList').addEventListener('click', handleInboxClick)
+    if ($('homeIdleList')) $('homeIdleList').addEventListener('click', function (event) {
       var item = event.target.closest('[data-home-session]')
       if (item) jumpToSession(item.getAttribute('data-home-session'), item.getAttribute('data-title') || '')
     })
-    $('homeLb').addEventListener('click', function (event) {
-      var jump = event.target.closest('[data-jump]')
-      if (jump) jumpToSession(jump.getAttribute('data-jump'), jump.getAttribute('data-title'))
+    if ($('homeInboxBtn')) $('homeInboxBtn').addEventListener('click', function () { switchView('inbox') })
+    if ($('homeInboxMore')) $('homeInboxMore').addEventListener('click', function () { switchView('inbox') })
+    if ($('homeTasksMore')) $('homeTasksMore').addEventListener('click', function () { switchView('tasks') })
+    if ($('resourceRefresh')) $('resourceRefresh').addEventListener('click', function () {
+      renderResourceQueue()
+      refresh(false)
+      toast('资源队列已刷新（state.resources 未接入时显示占位）')
     })
-    $('homeTasksMore').addEventListener('click', function () { switchView('tasks') })
-    $('homeGroupsMore').addEventListener('click', function () { switchView('groups') })
-    $('boardBackBtn').addEventListener('click', function () { switchView('home') })
+    // 统一收件箱
+    if ($('inboxList')) $('inboxList').addEventListener('click', handleInboxClick)
+    document.querySelectorAll('[data-inbox-filter]').forEach(function (chip) {
+      chip.addEventListener('click', function () {
+        inboxFilter = chip.getAttribute('data-inbox-filter')
+        document.querySelectorAll('[data-inbox-filter]').forEach(function (item) { item.classList.toggle('active', item === chip) })
+        renderInbox()
+      })
+    })
+    if ($('boardBackBtn')) $('boardBackBtn').addEventListener('click', function () { switchView('home') })
     // 快捷操作（首页快捷卡 + 窄窗 FAB）
     document.querySelectorAll('[data-qa]').forEach(function (button) {
       button.addEventListener('click', function () { runQuickAction(button.getAttribute('data-qa')) })

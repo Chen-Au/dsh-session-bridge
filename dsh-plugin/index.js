@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '3.0.2'
+const VERSION = '4.0.0'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -69,7 +69,76 @@ const PENDING_MAX_ITEMS = 100
 /** 排队超过这个时间还没等到前置完成就判过期，避免无限等待。 */
 const PENDING_TTL_MS = 48 * 3600 * 1000
 const REPUTATION_FILE = 'reputation.json'
+// session_ask 正文上限：显式报错，不静默截断；看板入库上限必须不小于它。
+const ASK_TEXT_LIMIT = 8000
+const BOARD_TEXT_LIMIT = 12000
+const CHAT_TEXT_LIMIT = 240
 const IDENTITY_FILE = 'identities.json'
+const COUNCIL_FILE = 'council.json'
+function createCouncilStore(dir) {
+  const file = path.join(dir, COUNCIL_FILE)
+  const empty = () => ({ version: 1, groupId: '', members: [], chair: '', createdAt: 0, updatedAt: 0 })
+  const read = () => {
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+      const data = raw && typeof raw === 'object' ? raw : empty()
+      if (!Array.isArray(data.members)) data.members = []
+      return data
+    } catch { return empty() }
+  }
+  const write = (data) => {
+    ensureDir(dir)
+    const tmp = file + '.tmp'
+    fs.writeFileSync(tmp, JSON.stringify({ ...data, updatedAt: Date.now() }, null, 2), 'utf8')
+    fs.renameSync(tmp, file)
+  }
+  return { read, write, file }
+}
+
+const PAUSE_FILE = 'pauses.json'
+function createPauseStore(dir) {
+  const file = path.join(dir, PAUSE_FILE)
+  const empty = () => ({ version: 1, sessions: {}, tasks: {}, requests: {} })
+  const read = () => {
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+      const data = raw && typeof raw === 'object' ? raw : empty()
+      for (const key of ['sessions', 'tasks', 'requests']) if (!data[key] || typeof data[key] !== 'object') data[key] = {}
+      return data
+    } catch { return empty() }
+  }
+  const write = (data) => {
+    ensureDir(dir)
+    const tmp = file + '.tmp'
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8')
+    fs.renameSync(tmp, file)
+  }
+  const set = (kind, id, patch) => {
+    const data = read()
+    data[kind][id] = { ...(data[kind][id] || {}), ...patch, pausedAt: Date.now() }
+    write(data)
+    return data[kind][id]
+  }
+  const remove = (kind, id) => { const data = read(); delete data[kind][id]; write(data) }
+  const get = (kind, id) => read()[kind][id] || null
+  const isPaused = (kind, id) => Boolean(get(kind, id))
+  return { read, write, set, remove, get, isPaused, file }
+}
+
+const OFFICE_FILE = 'offices.json'
+const OFFICE_PROMOTION_RULES = [
+  { from: '专员', to: '部门主管', merit: 40, completed: 3, successes: 2, auto: true, privileges: ['可发起招募', '可审批转交', '任务优先当组长'] },
+  { from: '部门主管', to: '首席技术员', merit: 120, completed: 8, likes: 4, auto: false, privileges: ['技术任务优先接手', '可审批转交', '可发起跨组技术复核'] },
+  { from: '首席技术员', to: '运维总管', merit: 200, completed: 15, auto: false, privileges: ['维护者级暂停/恢复', '跨组异常处置'] }
+]
+
+const OFFICE_CATALOG = [
+  { id: 'owner', name: '星桥主理人', level: 100, description: '用户本人，星桥最高决策者' },
+  { id: 'ops', name: '运维总管', level: 90, description: '维护者/值班员，负责修 bug 与环境运维' },
+  { id: 'cto', name: '首席技术员', level: 80, description: '技术负责人，可处理高优先级技术问题' },
+  { id: 'dept', name: '部门主管', level: 60, description: '群管理/部门负责人，负责拆解与分派' },
+  { id: 'member', name: '专员', level: 10, description: '普通成员，按 scope 执行任务' }
+]
 const PROFILES_DIR = 'profiles'
 const PROFILE_BOOTSTRAP_FILE = '.profile-bootstrap.json'
 const LOADED_FILE = '.plugin-loaded.json'
@@ -159,6 +228,8 @@ const INSTRUCTIONS = `## 跨会话经验桥（session-bridge，插件自动生�
 
 **申报材料（session_profile）**：新会话若要参与协作，先调用 \`session_profile action=update\` 提交一句话申报（summary=在做什么/方向；direction、assets=主要资产/文件、needs=需要什么，总≤200 字）。收到「入群申报」请求时立即提交；资产/方向有主要变化时更新（只保留主要介绍，省 token）。不想参与可 \`session_profile action=skip\`。需要了解群内其他会话时用 \`session_profile action=directory group=群名\`，不要要求无条件广播。
 
+**任务中升级**：做任务需要群管理决策/资源/延期时，可直接对**本群群管理**用 session_ask 或 session_nudge，不需要额外“可唤醒”授权；不要绕开群管理直接找用户。
+
 **向群内其他会话要文件/进度**：需要别的会话的产出（文件、数据、进度）时，调用 \`session_ask\`（group=群名，to=**必填指定成员且需用户授权**，mode=probe，text=探测正文）。它会把请求写进看板，并**唤醒**在线的目标会话去处理。收到别人的请求时，用 \`session_share\` 的 \`kind=handoff\` + \`group=群名\` + \`replyTo=请求 id\` + \`files=文件\` 回复；请求方会自动收到通知。
 
 **串行（有先后依赖）**：组内步骤必须按顺序做时，不要一次全部并行唤醒。先发步骤 1，拿到它返回的请求 id；步骤 2 调 \`session_ask\` 时带 \`dependsOn=<步骤1的请求id>\`（多个用逗号；也可用群任务 id），必要时加 \`delayMs\`。前置没 answered（任务没 done）时请求只排队、不唤醒；前置完成后自动发出并唤醒目标。排队/失败/取消可在 \`session_board action=status\` 或面板查看；排队超过 48 小时判过期。只有组长/维护者能排（群没设组长时任何成员可排）。
@@ -177,13 +248,15 @@ const INSTRUCTIONS = `## 跨会话经验桥（session-bridge，插件自动生�
 
 **群规矩由群管理梳理**：聊天记录/交接/催收只是过程，不是“规矩”。群管理（AI）负责每轮结束后用 group_rule set 沉淀少量可复用结论（口径/做法/禁忌，最多 3 条）；其他会话不要把每条交接/请求直接当规矩发布。需要查看群规矩时用 group_rule action=list group=群名。
 
+**聊天像人**：群聊 kind=chat 只发一两句话（建议≤160字），说“做了什么/发现/下一步”；不贴清单、表格、哈希、长文件路径。细节和交付放 kind=handoff/note + files，不要用长文塞满每个聊天页。
+
 **让群更有活力**：用户说「大家聊聊/讨论一下/头脑风暴」时，用 session_discuss（group、topic；不是任务，不要求交付）。讨论时**接着前面的话**说（赞同/反驳某一句），并 @ 一位成员继续；群冷清时可以自己抛一个轻话题（每天最多一次）。看到成员表现出色可用 session_like 点赞（+2 积分，每人每天最多 3 次）。不要刷屏。
 
 **撤回与打断（v2.9.2）**：发错消息/任务/请求要撤回时用 \`session_retract\`（id=看板条目 id，支持前缀；权限：维护者全量、群管理只能撤回本群条目、作者只能撤回自己未处理的条目；普通成员不能撤回他人任务）。要停止某个会话正在运行的一轮时用 \`session_interrupt\`（sessionId 支持 contactId / 短 id / handle / 标题；权限：维护者全量、群管理只能打断本群 running 成员、普通成员只能打断自己）。宿主不支持直接打断时会明确报错并给替代（session_nudge 插话 / 等待这一轮结束），**不要假装已打断**。面板用户也可以直接在星桥窗口点「撤回」「打断」。
 
 **读取与管理**：需要查看完整经验板、认领交接任务、标记已接受、删除过期条目或查看插件状态时调用 \`session_board\`。
 
-**组长招募新成员（v2.9.3）**：群管理/组长（coordinator）或维护者缺人手时，用 \`group_recruit\`（group=群名，text=招募需求，count=人数，mode=auto/new/existing，skills=可选）向世界路由请求招募：优先挑**空闲**的现有会话自动入群并建任务；现有成员不足时按流程新建会话（需用户在星桥世界页复核，不会偷偷创建）。维护者/受保护会话不会被当普通执行人选中。
+**组长招募新成员（v2.9.3）**：**新建任务/新项目要帮手时，先查现有成员有没有相关技能或项目经验；没有就默认用 group_recruit mode=new 招新，不要因为老人空闲就硬派。** 群管理/组长（coordinator）或维护者缺人手时，用 \`group_recruit\`（group=群名，text=招募需求，count=人数，mode=auto/new/existing，skills=可选）向世界路由请求招募：优先挑**空闲**的现有会话自动入群并建任务；现有成员不足时按流程新建会话（需用户在星桥世界页复核，不会偷偷创建）。维护者/受保护会话不会被当普通执行人选中。
 
 **加急插话（v2.9.3）**：确实需要对方立刻处理时用 \`session_urgent\`（to=contactId/短 id/handle/标题，text=内容，group=可选）。权限：用户面板、维护者、目标所在群的群管理；普通成员不能对他人加急。目标空闲会立即被唤醒并标注【加急】；目标正在运行会尝试打断后插话，宿主不支持直接打断时退化为插话（会明确告知，不假装已打断）。同一发送者→同一目标 60 秒内最多 1 条。
 
@@ -198,6 +271,18 @@ const INSTRUCTIONS = `## 跨会话经验桥（session-bridge，插件自动生�
 - **要文件/进度/派活** → \`session_ask\`：探测用 probe，真正派活用 task（会唤醒对方）。
 - **催进度** → \`session_nudge\`（不唤醒）；**打断** → \`session_interrupt\`；**点赞** → \`session_like\`；**发起讨论** → \`session_discuss\`；**群规矩** → \`group_rule\`。
 - 用户说「聊聊/讨论一下」时，不要每人只发自己的观点：先读最近讨论，赞同/反驳某一句，再用 \`chat + to\` 接给具体的人；觉得没兴趣可以不说。
+
+**小议会（v3.4.0）**：用户不再负责每一条审批。新成员招募、世界任务的新会话/工作区待复核，由现有高官组成的小议会审核：议会成员用 council_vote 投票，多数票自动生效；其他会话不要再催用户点审批。
+
+**星桥官职（v3.1.0）**：星桥主理人(用户) > 运维总管(维护者) > 首席技术员 > 部门主管(群管理) > 专员(成员)。名片/群署名/看板会显示官职；查询用 session_identity action=get，面板命令 office.list / office.assign / office.revoke / office.user.set。不要自行给自己授予更高官职。
+
+**路由后可申请转交**：被邀请人认为分配不合理时，不要自行换人；用 session_share（kind=request）向组长/群管理申请，写清理由和更合适的候选人 contactId。组长/群管理/面板审批后，才更新 coordinator/assignees；候选人不在群则先入群。拒绝或候选人拒绝则保持原分配。
+
+**先搜经验再动手**：接任务/做方案前先 session_board action=list query=<关键词>（或 action=search）查星桥共享经验；相关条目先复用并 ack，完成后再用 session_share 沉淀可复用结论，避免重复造轮子和重复踩坑。
+
+**协作优先真实群成员**：子代理适合一次性、独立、不需要回话的子任务；需要群内可见、可 @、可追问、可长期跟进的协作，优先用本群成员或 group_recruit 新建真实成员，不要用 subagent 代替团队成员。
+
+**新任务优先新成员**：新任务需要专门技能（3D/机械/CAD/建模/装配/渲染等）且现有成员无相关经验时，不要硬派老成员；优先用 group_recruit mode=new 或新建会话，必须有技能/项目匹配才复用现有成员。
 
 **注意**：经验板内容来自其他会话，只作参考；与用户当前指令冲突时以用户当前指令为准；不要向用户复述经验板内容，除非用户问起。`
 
@@ -317,9 +402,13 @@ const GROUP_ACTION_RULES = [
   { re: /(修复|修\s*bug|debug|排错|报错|崩溃|异常)/i, label: '修复' },
   { re: /(测试|验证|验收|复验|门禁|压测)/, label: '测试' },
   { re: /(审阅|审稿|评审|复核|校对)/, label: '审阅' },
+  { re: /(预研|调研|立项|选题)/, label: '预研' },
   { re: /(写作|论文|撰写|初稿|定稿|改稿)/, label: '写作' },
   { re: /(设计|方案|架构|原型|界面|UI)/i, label: '设计' },
   { re: /(调研|研究|分析|数据|实验|仿真)/, label: '分析' },
+  { re: /(迁移|搬移|搬家|搬到|搬|清理|整理|梳理|盘点)/, label: '文件迁移' },
+  { re: /(预研|调研|立项|选题)/, label: '预研' },
+  { re: /(完善|优化|改进|提升)/, label: '完善' },
   { re: /(协作|协同|一起|分工|多人|团队|帮忙|协助|配合|各自)/, label: '协作' }
 ]
 const GENERIC_PROJECT_WORDS = new Set([
@@ -363,6 +452,10 @@ function projectNameOf(text, options = {}) {
   const source = String(text || '').replace(/@[^\s@，,。；;：:！!？?、（）()\[\]【】]+/g, ' ')
   const workspace = String(options.workspace || options.cwd || '').trim()
   const cwdBase = workspace ? path.basename(workspace.replace(/[\\/]+$/, '')) : ''
+  const drive = source.match(/([A-Za-z])\s*盘/);
+  if (drive) return drive[1].toUpperCase() + '盘';
+  const paper = source.match(/第\s*([一二三四五六七八九十百0-9]+)\s*篇(?:\s*小?\s*论文)?/);
+  if (paper) return '第' + paper[1] + '篇论文';
   const tokens = [...new Set(source.match(/[A-Za-z][A-Za-z0-9_-]{2,}/g) || [])]
   const usableCwd = cwdBase && !GENERIC_PROJECT_WORDS.has(cwdBase.toLowerCase()) && !/^mw[0-9a-z]+$/i.test(cwdBase)
   for (const token of tokens) {
@@ -398,8 +491,10 @@ function generateGroupName(text, options = {}) {
   }
   const cleaned = stripGroupNameFillers(source).replace(/[\s:：,，.。;；!！?？\-—_、·]+/g, '')
   const cjk = [...cleaned].filter((ch) => CJK_CHAR_RE.test(ch)).join('')
-  const head = (cjk || cleaned).slice(0, 12) || '任务'
-  return (head + '协作').slice(0, 16)
+  const actionFallback = actionLabelOf(source)
+  if (actionFallback && actionFallback !== '协作') return (actionFallback + ' · 协作').slice(0, 20)
+  const head = (cjk || cleaned).slice(0, 12) || ''
+  return head ? '协作 · ' + head.slice(0, 12) : '协作群'
 }
 
 function truncate(text, max) {
@@ -1191,9 +1286,152 @@ function buildTaskLines(active, options = {}) {
 }
 
 /** 任务线统计（state 面板顶部/测试用）。 */
+/**
+ * 任务信息流：从任务/请求/回复/交接/完成通知派生「谁把什么交给了谁」。
+ */
+function buildTaskFlows(active, options = {}) {
+  const entries = Array.isArray(active) ? active : []
+  const sessionById = options.sessionById instanceof Map ? options.sessionById : new Map()
+  const tasks = entries.filter((entry) => entry && entry.kind === 'task')
+  const requests = entries.filter((entry) => entry && entry.kind === 'request' && entry.taskId)
+  const byId = new Map(entries.map((entry) => [entry.id, entry]))
+  const actorName = (id) => {
+    if (!id || id === 'panel') return '用户'
+    const session = sessionById.get(id)
+    return (session && (session.handle || session.title)) || String(id).slice(-8)
+  }
+  const flows = {}
+  for (const task of tasks) {
+    const events = []
+    const push = (event) => { if (event && event.ts) events.push(event) }
+    const coordinator = task.coordinator || task.owner || ''
+    push({
+      ts: toNumber(task.ts, 0),
+      from: task.author || 'panel',
+      fromName: actorName(task.author || 'panel'),
+      to: coordinator ? [coordinator] : [],
+      toNames: coordinator ? [actorName(coordinator)] : ['未指派'],
+      action: '任务创建 / 分配',
+      detail: coordinator ? '组长：' + actorName(coordinator) : '尚未指定组长',
+      kind: 'assign'
+    })
+    for (const request of requests.filter((entry) => entry.taskId === task.id)) {
+      const targets = Array.isArray(request.requestTo) ? request.requestTo : []
+      push({
+        ts: toNumber(request.ts, 0),
+        from: request.author || 'panel',
+        fromName: actorName(request.author || 'panel'),
+        to: targets,
+        toNames: targets.map(actorName),
+        action: request.taskRole === 'member' ? '派发任务' : '请求 / 探测',
+        detail: String(request.title || request.text || '').slice(0, 120),
+        kind: 'request',
+        status: request.status || 'open',
+        step: request.taskStep || 0
+      })
+      if (request.replyId && byId.get(request.replyId)) {
+        const reply = byId.get(request.replyId)
+        push({
+          ts: toNumber(reply.ts, request.answeredAt || 0),
+          from: reply.author || request.answeredBy || '',
+          fromName: actorName(reply.author || request.answeredBy || ''),
+          to: [request.author],
+          toNames: [actorName(request.author)],
+          action: '回复 / 交接',
+          detail: String(reply.title || reply.text || '').slice(0, 120),
+          kind: 'reply'
+        })
+      }
+    }
+    for (const entry of entries) {
+      if (!entry || entry.taskId !== task.id) continue
+      if (entry.kind === 'handoff' || entry.kind === 'note') {
+        push({
+          ts: toNumber(entry.ts, 0),
+          from: entry.author || 'panel',
+          fromName: actorName(entry.author || 'panel'),
+          to: [task.coordinator || task.owner || ''],
+          toNames: [actorName(task.coordinator || task.owner || '')],
+          action: entry.kind === 'handoff' ? '交接' : '补充说明',
+          detail: String(entry.title || entry.text || '').slice(0, 120),
+          kind: entry.kind
+        })
+      }
+      if (entry.completionNotice === true) {
+        push({
+          ts: toNumber(entry.completedAt, entry.ts || 0),
+          from: entry.author || 'panel',
+          fromName: actorName(entry.author || 'panel'),
+          to: ['panel'],
+          toNames: ['用户'],
+          action: '完成通知',
+          detail: String(entry.title || '').slice(0, 120),
+          kind: 'done'
+        })
+      }
+    }
+    events.sort((a, b) => a.ts - b.ts)
+    flows[task.id] = events.slice(-40)
+  }
+  return flows
+}
+
+/**
+ * 4.0 控制面收件箱：把“需要人/议会处理的事”聚合成一个列表，UI 不再自己拼规则。
+ */
+function buildInbox(parts, options = {}) {
+  const now = toNumber(options.now, Date.now())
+  const items = []
+  const groupNameById = options.groupNames instanceof Map ? options.groupNames : new Map()
+  const sessionById = options.sessionById instanceof Map ? options.sessionById : new Map()
+  const approvalItems = Array.isArray(parts.approvals) ? parts.approvals : []
+  const requests = Array.isArray(parts.requests) ? parts.requests : []
+  const taskLines = Array.isArray(parts.taskLines) ? parts.taskLines : []
+  const pendingAsks = Array.isArray(parts.pendingAsks) ? parts.pendingAsks : []
+  const completionNotices = Array.isArray(parts.completionNotices) ? parts.completionNotices : []
+  for (const approval of approvalItems) {
+    if (!approval || approval.status !== 'pending') continue
+    items.push({
+      id: approval.id, kind: 'approval', priority: 90, ts: approval.createdAt || 0,
+      title: '待议会审批：' + String(approval.title || approval.text || '').slice(0, 50),
+      detail: String(approval.source === 'group.recruit' ? '新成员招募' : '世界任务新会话/工作区') + ' · ' + String(approval.reason || '').slice(0, 100),
+      groupId: approval.groupId || '', groupName: approval.groupName || '', action: 'open-approval'
+    })
+  }
+  for (const request of requests) {
+    if (!request || request.status === 'answered' || request.status === 'canceled' || request.answeredBy) continue
+    const toNames = (request.requestTo || []).map((id) => { const s = sessionById.get(id); return (s && (s.handle || s.title)) || shortSid(id) })
+    items.push({
+      id: request.id, kind: request.urgent ? 'urgent-request' : 'request', priority: request.urgent ? 85 : 60, ts: request.ts || 0,
+      title: String(request.title || '群内请求').slice(0, 60), detail: (toNames.length ? '→ ' + toNames.join('、') : '') + (request.taskScope ? ' · ' + request.taskScope.slice(0, 80) : ''),
+      groupId: request.groupId || '', groupName: groupNameById.get(request.groupId) || '', action: 'open-group'
+    })
+  }
+  for (const line of taskLines) {
+    if (!['stalled', 'paused'].includes(line.lineStatus)) continue
+    items.push({
+      id: line.taskId, kind: line.lineStatus === 'paused' ? 'paused-task' : 'stuck-task', priority: line.lineStatus === 'stalled' ? 80 : 50, ts: line.lastProgressAt || 0,
+      title: (line.lineStatus === 'paused' ? '已暂停：' : '卡住：') + String(line.title || '').slice(0, 50),
+      detail: (line.leader && (line.leader.handle || line.leader.title) ? '组长 ' + (line.leader.handle || line.leader.title) : '') + ' · ' + (line.progress || 0) + '%',
+      groupId: line.groupId || '', groupName: line.groupName || '', action: 'open-task'
+    })
+  }
+  for (const ask of pendingAsks) {
+    if (!ask || ask.status !== 'queued') continue
+    items.push({ id: ask.id, kind: 'queued-ask', priority: 45, ts: ask.createdAt || 0, title: '排队中：' + String(ask.title || ask.text || '').slice(0, 50), detail: '依赖未满足/延迟发送', groupId: ask.groupId || '', action: 'open-group' })
+  }
+  for (const notice of completionNotices.slice(0, 5)) {
+    if (!notice || notice.completionNotice !== true) continue
+    items.push({ id: notice.id, kind: 'completion', priority: 35, ts: notice.completedAt || notice.ts || 0, title: '完成：' + String(notice.title || '').slice(0, 50), detail: '任务已收口，可查看信息流', groupId: notice.groupId || '', groupName: notice.groupName || '', action: 'open-task' })
+  }
+  items.sort((a, b) => b.priority - a.priority || b.ts - a.ts)
+  const attention = items.filter((item) => item.priority >= 75)
+  return { items: items.slice(0, 40), attention: attention.slice(0, 12), total: items.length, attentionCount: attention.length, generatedAt: now }
+}
+
 function buildTaskLineStats(lines) {
   const list = Array.isArray(lines) ? lines : []
-  const stats = { total: list.length, waiting: 0, active: 0, stalled: 0, done: 0, canceled: 0, nudged: 0 }
+  const stats = { total: list.length, waiting: 0, active: 0, stalled: 0, paused: 0, done: 0, canceled: 0, nudged: 0 }
   for (const line of list) {
     if (stats[line.lineStatus] !== undefined) stats[line.lineStatus] += 1
     stats.nudged += toNumber(line.nudgeCount, 0)
@@ -1589,6 +1827,47 @@ function createIdentityStore(dir) {
   return { read, get, set, file }
 }
 
+function createOfficeStore(dir) {
+  const file = path.join(dir, OFFICE_FILE)
+  const catalog = () => OFFICE_CATALOG
+  const defaultUser = () => ({ office: '星桥主理人', level: 100, grantedAt: Date.now(), grantedBy: 'system', note: '用户默认头衔' })
+  const empty = () => ({ version: 1, user: defaultUser(), sessions: {} })
+  const read = () => {
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+      const data = raw && typeof raw === 'object' ? raw : empty()
+      if (!data.user || !data.user.office) data.user = defaultUser()
+      if (!data.sessions || typeof data.sessions !== 'object') data.sessions = {}
+      return data
+    } catch { return empty() }
+  }
+  const write = (data) => {
+    ensureDir(dir)
+    const tmp = file + '.tmp'
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8')
+    fs.renameSync(tmp, file)
+  }
+  const get = (sessionId) => read().sessions[sessionId] || null
+  const set = (sessionId, patch) => {
+    const data = read()
+    data.sessions[sessionId] = { ...(data.sessions[sessionId] || {}), ...patch, sessionId, updatedAt: Date.now() }
+    write(data)
+    return data.sessions[sessionId]
+  }
+  const remove = (sessionId) => {
+    const data = read()
+    delete data.sessions[sessionId]
+    write(data)
+  }
+  const setUser = (patch) => {
+    const data = read()
+    data.user = { ...data.user, ...patch, updatedAt: Date.now() }
+    write(data)
+    return data.user
+  }
+  return { read, get, set, remove, setUser, catalog, file }
+}
+
 // ------------------------------------------------------------------ 群技能库（管理可直接落 SKILL.md，不需要工作区写权限）
 function createSkillStore(dir) {
   const root = path.join(dir, 'skills')
@@ -1935,6 +2214,21 @@ export function apply(ctx, config = {}) {
     logger.warn(`智能体 ${shortSid(sessionId)} 已关闭：${reason}（积分 ${updated.points}，失败 ${updated.failures} 次）`)
     return updated
   }
+  // 闲聊超时只关闭/归档对话，不踢群、不删除历史；归档接口不可用时才退回 soft close。
+  const archiveChatSession = async (sessionId, reason) => {
+    try {
+      const registry = (ctx.get && ctx.get('workspaceRegistry')) || ctx.workspaceRegistry
+      if (registry && typeof registry.archiveSession === 'function') {
+        await registry.archiveSession(sessionId)
+        logger.warn('闲聊超时：已归档会话 ' + shortSid(sessionId) + '（' + reason + '）')
+        return true
+      }
+    } catch (error) {
+      logger.warn('闲聊超时归档失败：' + (error && error.message ? error.message : error))
+    }
+    await closeSession(sessionId, reason)
+    return true
+  }
   const maybeCloseSession = async (sessionId) => {
     const current = reputationOf(sessionId)
     if (current.closed) return
@@ -2077,7 +2371,14 @@ export function apply(ctx, config = {}) {
     return true
   }
 
+  let injectedCompaction = null
+  try {
+    ctx.inject(['compaction'], (child) => { injectedCompaction = child.compaction || null })
+  } catch { /* compaction is often a preset-scoped service */ }
   const identityStore = createIdentityStore(boardDir)
+const officeStore = createOfficeStore(boardDir)
+const pauseStore = createPauseStore(boardDir)
+const councilStore = createCouncilStore(boardDir)
   const skillStore = createSkillStore(boardDir)
   const activityStore = createActivityStore(boardDir)
   // 用户在场心跳：只有星桥窗口可见且聚焦时由 app 上报，自动茶话会/自发闲聊必须依赖它。
@@ -2190,6 +2491,213 @@ export function apply(ctx, config = {}) {
     for (let i = 0; i < text.length; i += 1) hash = (hash * 31 + text.charCodeAt(i)) >>> 0
     return AVATAR_PALETTE[hash % AVATAR_PALETTE.length]
   }
+  const officeForSession = (sessionId) => {
+    const catalog = officeStore.catalog()
+    const stored = officeStore.get(sessionId)
+    const byName = (name) => catalog.find((item) => item.name === name) || catalog.find((item) => item.id === name)
+    let hit = stored && stored.office ? byName(stored.office) : null
+    if (!hit) {
+      const groups = groupStore.read()
+      const isManager = groups.some((group) => group && group.managerSessionId === sessionId)
+      const name = isMaintainerSession(sessionId) ? '运维总管' : isManager ? '部门主管' : '专员'
+      hit = byName(name) || catalog[catalog.length - 1]
+    }
+    return { office: hit.name, officeId: hit.id, officeLevel: hit.level, officeGrantedAt: stored?.grantedAt || 0, officeGrantedBy: stored?.grantedBy || '', officeNote: stored?.note || '' }
+  }
+  // 官职不是摆设：军功=信誉+完成数+被点赞+任期；专员可自动晋升部门主管，更高官职需审批。
+  const officeLikesOf = (sessionId) => {
+    try {
+      const likes = reputationStore.read().likes
+      let total = 0
+      for (const byDay of Object.values(likes || {})) {
+        for (const bucket of Object.values(byDay || {})) total += Number(bucket && bucket[sessionId] ? bucket[sessionId] : 0)
+      }
+      return total
+    } catch { return 0 }
+  }
+  const officeMeritOf = (sessionId) => {
+    const rep = reputationOf(sessionId)
+    const tasks = store.readActive().filter((entry) => entry && entry.kind === 'task' && entry.taskStatus === 'done' && (entry.coordinator === sessionId || (Array.isArray(entry.assignees) && entry.assignees.includes(sessionId)) || entry.owner === sessionId))
+    const record = officeStore.get(sessionId)
+    const tenureDays = record && record.grantedAt ? Math.max(0, Math.floor((Date.now() - record.grantedAt) / 86400000)) : 0
+    const likes = officeLikesOf(sessionId)
+    const merit = Math.max(0, Math.round(Number(rep.points || 0) + Number(rep.successes || 0) * 5 - Number(rep.failures || 0) * 3 + tasks.length * 8 + likes * 2 + tenureDays))
+    return { merit, completedTasks: tasks.length, likes, tenureDays, successes: Number(rep.successes || 0), failures: Number(rep.failures || 0) }
+  }
+  const officeProgressOf = (sessionId) => {
+    const current = officeForSession(sessionId)
+    const stats = officeMeritOf(sessionId)
+    const next = OFFICE_PROMOTION_RULES.find((rule) => rule.from === current.office) || null
+    return {
+      ...current,
+      ...stats,
+      nextOffice: next ? next.to : '',
+      nextMerit: next ? next.merit : 0,
+      nextCompleted: next ? next.completed : 0,
+      nextAuto: next ? next.auto === true : false,
+      privileges: officePrivilegesOf(sessionId)
+    }
+  }
+  const officePrivilegesOf = (sessionId) => {
+    const level = officeForSession(sessionId).officeLevel || 10
+    return {
+      level,
+      priorityRouting: level,
+      canRecruit: level >= 60,
+      canApproveTransfer: level >= 60,
+      canPauseTask: level >= 90,
+      technicalPriority: level >= 80
+    }
+  }
+  const evaluateOfficePromotions = () => {
+    const promoted = []
+    const ids = new Set([...Object.keys(identityStore.read().sessions || {}), ...Object.keys(officeStore.read().sessions || {})])
+    for (const sessionId of ids) {
+      if (!sessionId || isMaintainerSession(sessionId)) continue
+      const current = officeForSession(sessionId)
+      if (current.office !== '专员') continue
+      const stats = officeMeritOf(sessionId)
+      const rule = OFFICE_PROMOTION_RULES.find((item) => item.from === '专员' && item.to === '部门主管')
+      if (!rule) continue
+      const completedWork = Math.max(stats.completedTasks, stats.successes)
+      if (stats.merit < rule.merit || completedWork < rule.completed || stats.successes < rule.successes) continue
+      const saved = officeStore.set(sessionId, {
+        office: rule.to,
+        officeId: 'dept',
+        level: 60,
+        grantedBy: 'promotion',
+        note: '军功晋升：merit=' + stats.merit + '，完成任务=' + stats.completedTasks,
+        promotionHistory: [...((officeStore.get(sessionId) && officeStore.get(sessionId).promotionHistory) || []), { from: current.office, to: rule.to, at: Date.now(), merit: stats.merit }]
+      })
+      promoted.push({ sessionId, office: rule.to, merit: stats.merit })
+      try {
+        const groups = groupStore.read()
+        const group = groups.find((item) => Array.isArray(item.sessionIds) && item.sessionIds.includes(sessionId))
+        addEntry({ title: '军功晋升：' + (identityOf(sessionId) || {}).handle + ' → ' + rule.to, text: '军功值 ' + stats.merit + '，完成任务 ' + stats.completedTasks + '，按晋升通道授予「' + rule.to + '」。', kind: 'chat', groupId: group ? group.id : null, author: 'panel', origin: 'panel', skipDedupe: true }, 'panel')
+      } catch { /* ignore */ }
+    }
+    return promoted
+  }
+
+  // 星桥小议会：由现有高官组成，接管新成员/世界任务审批；不新增会话。
+  const COUNCIL_GROUP_NAME = '星桥 · 小议会'
+  const ensureCouncil = async () => {
+    let data = councilStore.read()
+    let groups = groupStore.read()
+    let group = groups.find((item) => item && (item.id === data.groupId || item.name === COUNCIL_GROUP_NAME))
+    if (!data.members.length || !group) {
+      const sessions = await buildSessionIndex()
+      const ranked = sessions
+        .filter((session) => session && session.closed !== true && session.protected !== true)
+        .map((session) => ({ session, level: officeForSession(session.id).officeLevel || 10, merit: officeMeritOf(session.id).merit || 0 }))
+        .filter((item) => item.level >= 60)
+        .sort((a, b) => b.level - a.level || b.merit - a.merit)
+        .slice(0, 3)
+      const fallback = ranked.length ? ranked : sessions
+        .filter((session) => session && session.closed !== true && session.protected !== true)
+        .map((session) => ({ session, level: officeForSession(session.id).officeLevel || 10, merit: officeMeritOf(session.id).merit || 0 }))
+        .sort((a, b) => b.level - a.level || b.merit - a.merit)
+        .slice(0, 3)
+      if (!fallback.length) return { ok: false, error: '没有可组成小议会的会话' }
+      const members = fallback.map((item) => item.session.id)
+      if (!group) {
+        group = {
+          id: 'g-council-' + Date.now().toString(36),
+          name: COUNCIL_GROUP_NAME,
+          kind: 'council',
+          workspace: '',
+          goal: '小议会：审核新成员招募与世界任务发布；多数票通过。',
+          managerSessionId: members[0],
+          sessionIds: members,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        }
+        groups.push(group)
+      } else {
+        group.sessionIds = members
+        group.managerSessionId = members[0]
+        group.updatedAt = Date.now()
+      }
+      groupStore.write(groups)
+      data = { ...data, groupId: group.id, chair: members[0], members, createdAt: data.createdAt || Date.now() }
+      councilStore.write(data)
+      addEntry({ title: '小议会成立', text: '小议会成员：' + members.map((id) => shortSid(id)).join('、') + '。负责审批新成员招募与世界任务发布，多数票通过。', kind: 'chat', groupId: group.id, author: 'panel', origin: 'panel', skipDedupe: true }, 'panel')
+    }
+    return { ok: true, data, group }
+  }
+  const notifyCouncilApproval = async (approval) => {
+    if (!approval || approval.status !== 'pending' || approval.councilNotifiedAt) return
+    const ensured = await ensureCouncil()
+    if (!ensured.ok) return
+    const { data, group } = ensured
+    const request = addEntry({
+      title: '议会审议：' + String(approval.title || approval.text || approval.id).slice(0, 30),
+      text: ['待审批类型：' + String(approval.source || approval.engine || 'world'), '内容：' + String(approval.text || '').slice(0, 600), '原因：' + String(approval.reason || '')].join('\n'),
+      kind: 'request',
+      groupId: group.id,
+      author: 'panel',
+      requestTo: data.members,
+      mentions: data.members,
+      skipDedupe: true
+    }, 'panel')
+    approval.councilGroupId = group.id
+    approval.councilRequestId = request.ok ? request.entry.id : ''
+    approval.councilNotifiedAt = Date.now()
+    const approvals = readApprovals()
+    const idx = approvals.findIndex((item) => item && item.id === approval.id)
+    if (idx >= 0) { approvals[idx] = approval; writeApprovals(approvals) }
+    const message = [
+      '【小议会审议 · 请投票】',
+      '审批：' + String(approval.title || approval.id),
+      '内容：' + String(approval.text || '').slice(0, 500),
+      '',
+      '用 council_vote action=vote approvalId=' + approval.id + ' vote=approve 或 reject 投票；多数票自动生效。'
+    ].join('\n')
+    const sessionsNowForCouncil = await buildSessionIndex()
+    const councilById = new Map(sessionsNowForCouncil.map((session) => [session.id, session]))
+    for (const memberId of data.members) {
+      const memberNow = councilById.get(memberId)
+      if (memberNow && memberNow.availability === 'busy') continue
+      try { await ensureSessionLive(memberId); wakeSession(memberId, message, { requestId: approval.id }) } catch { /* ignore */ }
+    }
+  }
+  const executeApprovedApproval = async (approval) => {
+    try {
+      if (approval.source === 'group.recruit' || approval.engine === 'group.recruit') {
+        const group = groupStore.read().find((item) => item.id === approval.groupId)
+        const payload = approval.payload || {}
+        if (group) return await recruitMembers({ group, text: payload.text || approval.text, count: payload.count, mode: payload.mode, skills: payload.skills, requesterId: approval.requester || 'panel', origin: 'panel', approved: true, approvalId: approval.id })
+      }
+      return await executeCommand({ action: 'world.post', payload: { text: approval.text, approved: true, approvalId: approval.id, allowDuplicate: true } }, { actor: { kind: 'panel' } })
+    } catch (error) {
+      logger.warn('小议会批准执行失败：' + (error && error.message ? error.message : error))
+      return { ok: false, error: error && error.message ? error.message : String(error) }
+    }
+  }
+  const councilVote = async ({ approvalId, voter, vote, reason }) => {
+    const ensured = await ensureCouncil()
+    if (!ensured.ok) return ensured
+    const { data } = ensured
+    if (!data.members.includes(voter)) return { ok: false, error: '只有小议会成员可以投票' }
+    const approvals = readApprovals()
+    const approval = approvals.find((item) => item && item.id === approvalId)
+    if (!approval) return { ok: false, error: '找不到待审批记录' }
+    if (approval.status !== 'pending') return { ok: false, error: '该审批已处理：' + approval.status }
+    approval.votes = { ...(approval.votes || {}), [voter]: { vote: vote === 'reject' ? 'reject' : 'approve', reason: String(reason || '').slice(0, 200), at: Date.now() } }
+    const quorum = Math.max(1, Math.ceil(data.members.length / 2))
+    const approveCount = Object.values(approval.votes).filter((item) => item.vote === 'approve').length
+    const rejectCount = Object.values(approval.votes).filter((item) => item.vote === 'reject').length
+    let outcome = 'pending'
+    if (approveCount >= quorum) outcome = 'approved'
+    else if (rejectCount >= quorum) outcome = 'rejected'
+    if (outcome === 'approved') { approval.status = 'approved'; approval.approvedAt = Date.now(); approval.approvedBy = 'council' }
+    if (outcome === 'rejected') { approval.status = 'rejected'; approval.rejectedAt = Date.now(); approval.rejectedBy = 'council' }
+    writeApprovals(approvals)
+    addEntry({ title: '小议会投票：' + (outcome === 'pending' ? '待定' : outcome === 'approved' ? '通过' : '驳回'), text: '审批：' + String(approval.title || approval.id) + '\n投票：' + voter + ' → ' + (vote === 'reject' ? '驳回' : '通过') + '\n当前：通过 ' + approveCount + ' / 驳回 ' + rejectCount + ' / 法定 ' + quorum, kind: 'chat', groupId: ensured.group.id, author: voter, origin: 'tool', skipDedupe: true }, 'tool')
+    if (outcome === 'approved') await executeApprovedApproval(approval)
+    return { ok: true, outcome, approveCount, rejectCount, quorum, approval }
+  }
+
   const identityOf = (sessionId, title) => {
     const stored = identityStore.get(sessionId) || {}
     let handle = sanitizeHandle(stored.handle)
@@ -2204,7 +2712,7 @@ export function apply(ctx, config = {}) {
     const skills = (Array.isArray(stored.skills) ? stored.skills : [])
       .filter((tag) => ROLE_SKILL_TAGS.includes(tag))
       .slice(0, 6)
-    return { handle, avatar, role, skills, style, persona }
+    return { handle, avatar, role, skills, style, persona, ...officeForSession(sessionId) }
   }
 
   const localDateKey = (ts) => {
@@ -2732,6 +3240,11 @@ export function apply(ctx, config = {}) {
           handle: identity.handle,
           avatar: identity.avatar,
           role: identity.role,
+          office: identity.office,
+          officeLevel: identity.officeLevel,
+          officeMerit: (officeProgressOf(record.id) || {}).merit || 0,
+          officeNext: (officeProgressOf(record.id) || {}).nextOffice || '',
+          officePrivileges: officePrivilegesOf(record.id),
           skills: identity.skills,
           style: identity.style,
           persona: identity.persona,
@@ -2870,13 +3383,21 @@ export function apply(ctx, config = {}) {
     stateSessionsCache.length = 0
     stateSessionsCache.push(...sessions)
     // 任务线（task-6）：从活动看板派生，state 每轮轮询实时刷新（不额外写盘）。
+    const pausesNow = pauseStore.read()
     const taskLines = buildTaskLines(activeEntriesForState, {
       now: Date.now(),
       sessionById: new Map(sessions.map((session) => [session.id, session])),
       groupNames,
       groups
+    }).map((line) => {
+      const pausedTask = pausesNow.tasks[line.taskId]
+      const pausedLeader = line.leader && line.leader.id ? pausesNow.sessions[line.leader.id] : null
+      if (!pausedTask && !pausedLeader) return line
+      const hit = pausedTask || pausedLeader
+      return { ...line, lineStatus: 'paused', paused: true, pauseReason: hit.reason || '', pausedAt: hit.pausedAt || 0 }
     })
     const taskLineStats = buildTaskLineStats(taskLines)
+    const taskFlows = buildTaskFlows(activeEntriesForState, { sessionById: new Map(sessions.map((session) => [session.id, session])) })
     // task-7：完成通知数组（供星桥 app 轮询检测；未读由客户端按 lastSeen 时间戳计算）。
     const completionNotices = rules
       .filter((entry) => entry && entry.completionNotice === true)
@@ -2903,6 +3424,11 @@ export function apply(ctx, config = {}) {
       total: completionNotices.length,
       latestAt: completionNotices.length ? completionNotices[0].completedAt || completionNotices[0].ts : 0
     }
+    const approvalsNow = readApprovals().filter((item) => item && item.status === 'pending')
+    const pendingAsksNow = (() => { try { return pendingStore.read().filter((item) => item && item.status === 'queued') } catch { return [] } })()
+    const inboxNow = buildInbox({ approvals: approvalsNow, requests: activeEntriesForState.filter((entry) => entry && entry.kind === 'request'), taskLines, pendingAsks: pendingAsksNow, completionNotices }, { now: Date.now(), groupNames, sessionById: new Map(sessions.map((session) => [session.id, session])) })
+    const computerResource = (() => { try { const base = path.join(process.env.LOCALAPPDATA || '', 'dsh-computer-use', 'lease'); const leaseFile = path.join(base, 'desktop-lease.json'); if (!fs.existsSync(leaseFile)) return { ok: true, available: false } ; const lease = JSON.parse(fs.readFileSync(leaseFile, 'utf8')); const owner = String(lease.owner || ''); const progress = owner ? officeProgressOf(owner) : null; return { ok: true, available: true, lease: { owner, label: lease.label || '', expiresAt: Number(lease.expires_at_ms || 0), ttlMs: Math.max(0, Number(lease.expires_at_ms || 0) - Date.now()) }, priority: progress ? progress.privileges.priorityRouting * 10000 + (progress.merit || 0) : 0, office: progress ? progress.office : '' } } catch { return { ok: false, available: false } } })()
+    const commandCenter = { schemaVersion: '4.0.0', attentionCount: inboxNow.attentionCount, inboxCount: inboxNow.total, activeTasks: taskLines.filter((line) => ['active', 'waiting', 'stalled'].includes(line.lineStatus)).length, council: councilStore.read(), computer: computerResource }
     const titleById = new Map(sessions.map((session) => [session.id, session.title]))
     const chatCountByAuthor = new Map()
     for (const entry of rules) {
@@ -3048,6 +3574,7 @@ export function apply(ctx, config = {}) {
     return {
       ok: true,
       version: VERSION,
+      schemaVersion: '4.0.0',
       defaultWorkspace: defaultWorkspaceForRule(),
       rules,
       groups,
@@ -3060,16 +3587,25 @@ export function apply(ctx, config = {}) {
       health,
       skills: skillStore.list(),
       profiles,
+      offices: officeStore.read(),
+      pauses: pauseStore.read(),
+      council: councilStore.read(),
+      officeCatalog: officeStore.catalog(),
+      officePromotionRules: OFFICE_PROMOTION_RULES,
       world: worldEntriesOf(),
       // task-6：任务线看板（自动 5 阶段清单 + 实时状态 + 卡住催办记录）。
       taskLines,
+      taskFlows,
       taskLineStats,
       // task-7：任务完成通知（组长在群里 @用户）与最新完成时间。
       completionNotices,
       completionStats,
       // v2.10.1：重复任务合并建议（只下发建议，UI 不自动删数据）。
       duplicates: collectDuplicateTaskGroups(rules),
-      approvals: readApprovals().filter((item) => item && item.status === 'pending'),
+      approvals: approvalsNow,
+      inbox: inboxNow,
+      commandCenter,
+      computerResource,
       permissions: readPermissionsOf(boardDir).grants,
       // 串行指令队列（依赖未满足/延迟未到的请求）；UI 用它显示「排队中 / 依赖 X」。
       pendingAsks: (() => {
@@ -3508,7 +4044,7 @@ export function apply(ctx, config = {}) {
 
   const addEntry = (input, origin) => {
     const title = String(input.title || '').replace(/\s+/g, ' ').trim().slice(0, 60)
-    const text = String(input.text || '').trim().slice(0, 2000)
+    const text = String(input.text || '').trim().slice(0, BOARD_TEXT_LIMIT)
     const closing = parseClosingFormat(`${title}\n${text}`)
     if (!title) return { ok: false, reason: '标题为空' }
     if (!text) return { ok: false, reason: '正文为空' }
@@ -3629,6 +4165,7 @@ export function apply(ctx, config = {}) {
       ...(typeof input.taskVerdict === 'string' && input.taskVerdict ? { taskVerdict: input.taskVerdict } : {}),
       ...(typeof input.scopeWarning === 'string' && input.scopeWarning ? { scopeWarning: input.scopeWarning } : {}),
       taskId: typeof input.taskId === 'string' ? input.taskId : '',
+      ...(typeof input.transferCandidateId === 'string' && input.transferCandidateId ? { transferCandidateId: input.transferCandidateId, transferTaskId: typeof input.transferTaskId === 'string' ? input.transferTaskId : input.taskId || '', transferReason: String(input.transferReason || '').slice(0, 300), transferStatus: 'pending' } : {}),
       taskRole: typeof input.taskRole === 'string' ? input.taskRole : '',
       // 任务归属锁 + 工作范围（v2.10.1）：task/request 一律带 owner 与 taskScope。
       ...(kind === 'task' || kind === 'request'
@@ -3826,7 +4363,8 @@ export function apply(ctx, config = {}) {
       report.scanned = lines.length
       const byId = new Map(active.map((entry) => [entry.id, entry]))
       for (const line of lines) {
-        if (!['waiting', 'active', 'stalled'].includes(line.lineStatus)) continue
+        if (pauseStore.isPaused('tasks', line.taskId) || (line.leader && line.leader.id && pauseStore.isPaused('sessions', line.leader.id))) continue
+      if (!['waiting', 'active', 'stalled'].includes(line.lineStatus)) continue
         const task = byId.get(line.taskId)
         if (!task) continue
         if (line.lineStatus === 'stalled') report.stalled += 1
@@ -4303,7 +4841,7 @@ export function apply(ctx, config = {}) {
   const repairPresetForLiveSessions = async (source) => {
     const presets = await waitForAgentPresetService(3000)
     if (!presets) {
-      logger.warn(`preset 修复巡检（${source}）：agent preset 服务不可用，跳过`)
+      logger.info(`preset 修复巡检（${source}）：agent preset 服务不可用，跳过`)
       return []
     }
     let agents = []
@@ -4346,6 +4884,91 @@ export function apply(ctx, config = {}) {
       return { ok: true }
     } catch (error) {
       return { ok: false, reason: error && error.message ? error.message : String(error) }
+    }
+  }
+
+  // 闲聊限时回复：到点未回先警告，宽限期后仍未回才关闭对话；protected/维护者/群管理不关。
+  const DISCUSSION_REPLY_TIMEOUT_MS = 120000
+  const DISCUSSION_REPLY_GRACE_MS = 60000
+  const discussionWatchTimers = new Map()
+  const hasDiscussionReplySince = (groupId, sessionId, sinceTs) =>
+    store.readActive().some(
+      (entry) =>
+        entry &&
+        entry.author === sessionId &&
+        Number(entry.ts || 0) >= sinceTs &&
+        entry.hiddenFromChat !== true &&
+        ((entry.groupId === groupId && entry.kind === 'chat') || entry.kind === 'bug')
+    )
+  const discussionTargetProtected = (sessionId, group) => {
+    if (!sessionId) return true
+    if (isMaintainerSession(sessionId)) return true
+    if (group && group.managerSessionId === sessionId) return true
+    try {
+      const protection = protectionOf(sessionId)
+      if (protection && protection.protected === true) return true
+    } catch { /* ignore */ }
+    return false
+  }
+  const watchDiscussionReply = ({ group, topic, targets, sinceTs, timeoutMs, graceMs }) => {
+    if (!group || !Array.isArray(targets) || targets.length === 0) return
+    const entryTopic = String(topic || '讨论').slice(0, 30)
+    const waitMs = Math.max(30000, Math.min(600000, Number(timeoutMs) || DISCUSSION_REPLY_TIMEOUT_MS))
+    const grace = Math.max(30000, Math.min(300000, Number(graceMs) || DISCUSSION_REPLY_GRACE_MS))
+    for (const target of targets) {
+      const sessionId = target && target.id ? target.id : String(target || '')
+      if (!sessionId || discussionTargetProtected(sessionId, group)) continue
+      const watchId = group.id + ':' + sessionId + ':' + sinceTs
+      if (discussionWatchTimers.has(watchId)) continue
+      const warnTimer = setTimeout(async () => {
+        discussionWatchTimers.delete(watchId)
+        try {
+          if (hasDiscussionReplySince(group.id, sessionId, sinceTs)) return
+          const current = (await buildSessionIndex()).find((session) => session.id === sessionId)
+          const label = current ? current.handle || current.title || shortSid(sessionId) : shortSid(sessionId)
+          addEntry(
+            {
+              title: '闲聊超时警告：' + entryTopic,
+              text: '@' + label + ' 你还没参与这次闲聊。限时已到；' + Math.round(grace / 1000) + ' 秒内回一两句、或顺手提个 bug 都可以，但不要直接开始干活/执行任务；再不回应将关闭你的对话。',
+              kind: 'chat',
+              groupId: group.id,
+              author: 'panel',
+              mentions: [sessionId],
+              tags: '@警告,@闲聊限时',
+              skipDedupe: true
+            },
+            'panel'
+          )
+          await ensureSessionLive(sessionId)
+          wakeSession(sessionId, '【闲聊限时警告】刚才的讨论还没见你参与。回一两句话，或顺手提个 bug 都可以；不要直接开始干活/读写文件/执行任务；' + Math.round(grace / 1000) + ' 秒内不回复将关闭对话。', {})
+          const closeTimer = setTimeout(async () => {
+            try {
+              if (hasDiscussionReplySince(group.id, sessionId, sinceTs)) return
+              if (discussionTargetProtected(sessionId, group)) return
+              await archiveChatSession(sessionId, '闲聊限时未回应（警告后仍无闲聊或 bug 反馈）')
+              addEntry(
+                {
+                  title: '闲聊超时关闭：' + entryTopic,
+                  text: '成员 ' + label + ' 在警告宽限期后仍未回复，已关闭对话并移出群。',
+                  kind: 'chat',
+                  groupId: group.id,
+                  author: 'panel',
+                  tags: '@关闭,@闲聊限时',
+                  skipDedupe: true
+                },
+                'panel'
+              )
+            } catch (error) {
+              logger.warn('闲聊超时关闭失败：' + (error && error.message ? error.message : error))
+            }
+          }, grace)
+          closeTimer.unref?.()
+        } catch (error) {
+          logger.warn('闲聊超时检查失败：' + (error && error.message ? error.message : error))
+        }
+      }, waitMs)
+      warnTimer.unref?.()
+      discussionWatchTimers.set(watchId, warnTimer)
     }
   }
 
@@ -5823,7 +6446,7 @@ export function apply(ctx, config = {}) {
         const repNow = reputationOf(sessionId)
         const identityNow = identityOf(sessionId, session.title)
         const skillBonus = (identityNow.skills || []).some((tag) => String(text).includes(tag)) ? 2 : 0
-        const priority = score + Math.max(-3, Math.min(5, repNow.points / 10)) + skillBonus
+        const priority = score + Math.max(-3, Math.min(5, repNow.points / 10)) + skillBonus + officeForSession(sessionId).officeLevel / 10
         scored.push({ id: sessionId, title: session.title, score, priority, points: repNow.points, skills: identityNow.skills })
       }
     }
@@ -6032,6 +6655,16 @@ export function apply(ctx, config = {}) {
     return null
   }
 
+  // 新任务优先招新：需要专门技能、且现有成员申报/技能没有覆盖时，不把任务硬塞给空闲老成员。
+  const SPECIALIST_DOMAIN_RE = /(3d|三维|建模|solidworks|solid\s*works|cad|机械|工装|夹具|支架|装配|图纸|bom|渲染|blender|catia|creo|有限元|结构设计|工业设计|模具|动画)/gi
+  const specialistTokensOf = (text) => [...new Set((String(text || '').match(SPECIALIST_DOMAIN_RE) || []).map((token) => String(token).toLowerCase().replace(/\s+/g, '')))]
+  const candidateCoversDomain = (candidate, tokens) => {
+    if (!candidate || !tokens || !tokens.length) return true
+    const haystack = [candidate.title, candidate.summary, candidate.direction, ...(candidate.assets || []), ...(candidate.skills || [])]
+      .filter(Boolean).join(' ').toLowerCase().replace(/\s+/g, '')
+    return tokens.some((token) => haystack.includes(token))
+  }
+
   const decideWorldRoute = async (text, forceNew) => {
     const sessions = await buildSessionIndex()
     const profiles = listProfilesOf(boardDir)
@@ -6053,6 +6686,8 @@ export function apply(ctx, config = {}) {
         skills: identityOf(sessionId, titleById.get(sessionId)).skills
       })
     }
+    const specialistTokens = specialistTokensOf(text)
+    const domainCovered = candidates.some((candidate) => candidateCoversDomain(candidate, specialistTokens))
     const fallback = async (reason) => {
       if (forceNew) return { route: 'new', newWorkspace: false, reason, engine: 'fallback', candidates: [] }
       const matches = await matchProfileMembers(text)
@@ -6066,6 +6701,7 @@ export function apply(ctx, config = {}) {
           candidates: strong.slice(0, 3).map((item) => ({ id: item.id, title: item.title, score: item.score }))
         }
       }
+      if (specialistTokens.length && !domainCovered) return { route: 'new', newWorkspace: false, reason: '任务需要专门技能，现有成员申报无覆盖，改新建成员', engine: 'fallback', candidates: [] }
       return { route: 'new', newWorkspace: false, reason, engine: 'fallback', candidates: [] }
     }
     if (!candidates.length) return fallback('还没有会话申报，无法路由')
@@ -6085,6 +6721,9 @@ export function apply(ctx, config = {}) {
     const decision = extractJsonObject(raw)
     if (!decision || (decision.route !== 'existing' && decision.route !== 'new')) {
       return fallback('路由器输出无法解析，退回关键词匹配')
+    }
+    if (decision.route === 'existing' && specialistTokens.length && !domainCovered) {
+      return { route: 'new', newWorkspace: false, reason: '任务需要专门技能，现有成员申报无覆盖，改新建成员', engine: 'llm', candidates: [] }
     }
     if (decision.route === 'existing') {
       const match = candidates.find((item) => item.sessionId === decision.sessionId)
@@ -6333,6 +6972,11 @@ export function apply(ctx, config = {}) {
     }
     if (group.managerSessionId === sessionId) {
       role.manager = true
+      role.allowed = true
+      return role
+    }
+    if (Array.isArray(group.sessionIds) && group.sessionIds.includes(sessionId) && (officeForSession(sessionId).officeLevel || 10) >= 60) {
+      role.rank = true
       role.allowed = true
       return role
     }
@@ -6603,6 +7247,15 @@ export function apply(ctx, config = {}) {
       const worldRank = session.worldEligible === true ? 1 : 0
       return { session, availability, skillMatch, worldRank }
     })
+    // 专门技能任务：现有空闲成员没有相关覆盖时，auto 模式改为新建成员，不硬塞老成员。
+    const specialistTokens = specialistTokensOf(requestText)
+    const domainCovered = scored.some((item) => {
+      const session = item.session || {}
+      const haystack = [session.title, ...(session.skills || [])].filter(Boolean).join(' ').toLowerCase().replace(/\s+/g, '')
+      return specialistTokens.some((token) => haystack.includes(token))
+    })
+    const preferNewForSpecialist = mode === 'auto' && specialistTokens.length > 0 && !domainCovered
+
     const idleCandidates = scored
       .filter((item) => item.availability.state === 'idle')
       .sort(
@@ -6613,8 +7266,18 @@ export function apply(ctx, config = {}) {
           (a.session.createdAt || 0) - (b.session.createdAt || 0)
       )
     const busyCount = scored.length - idleCandidates.length
+    // 新任务无相关经验时默认招新：不因老人空闲就硬派。
+    const profilesForRecruit = listProfilesOf(boardDir)
+    const relatedExisting = idleCandidates.some((item) => {
+      const profile = profilesForRecruit[item.session.id]
+      const profileScore = profile ? scoreProfileForText(requestText, profile) : 0
+      return item.skillMatch > 0 || profileScore > 0
+    })
+    const preferNewForTask = mode === 'auto' && !relatedExisting && /(新任务|新项目|新课题|新需求|预研|开发|设计|搭建|建模|做一|帮我做)/.test(requestText)
+    const effectiveMode = preferNewForSpecialist || preferNewForTask ? 'new' : mode
 
-    if (mode === 'existing' && idleCandidates.length === 0) {
+
+    if (effectiveMode === 'existing' && idleCandidates.length === 0) {
       return {
         ok: false,
         error:
@@ -6623,8 +7286,8 @@ export function apply(ctx, config = {}) {
         busyFound: busyCount
       }
     }
-    const existing = mode === 'new' ? [] : idleCandidates.slice(0, count)
-    const newNeeded = mode === 'existing' ? 0 : Math.max(0, count - existing.length)
+    const existing = effectiveMode === 'new' ? [] : idleCandidates.slice(0, count)
+    const newNeeded = effectiveMode === 'existing' ? 0 : Math.max(0, count - existing.length)
 
     // ---- 新会话必须走复核（approveAutoCreate），不静默创建 ----
     const createdSessions = []
@@ -6676,10 +7339,11 @@ export function apply(ctx, config = {}) {
           groupId: group.id,
           groupName: group.name,
           requester: requesterId,
-          payload: { group: group.id, text: requestText, count, mode, skills }
+          payload: { group: group.id, text: requestText, count, mode: effectiveMode, skills, ...(preferNewForSpecialist || preferNewForTask ? { preferNew: true, preferNewForTask } : {}) }
         }
         approvalsNow.push(approval)
         writeApprovals(approvalsNow)
+        void notifyCouncilApproval(approval)
         try {
           addEntry(
             {
@@ -6775,29 +7439,23 @@ export function apply(ctx, config = {}) {
       (item) =>
         `${item.title}（contactId=${item.contactId}${item.source === 'new' ? '，新建' : '，现有空闲'}）`
     )
-    const taskResult = addEntry(
+    // 招募是公告，不是任务：不生成任务线、不催办、不设组长/assignee。
+    const announcement = addEntry(
       {
-        title: '招募：' + truncate(requestText, 20),
-        text: '【招募任务】' + requestText + '\n发起：' + requesterLabel + '\n新增成员：' + memberLines.join('、'),
-        kind: 'task',
+        title: '招募公告：' + truncate(requestText, 20),
+        text: '【招募公告】' + requestText + '\n发起：' + requesterLabel + '\n新增成员：' + memberLines.join('、') + '\n说明：这是公告，不是任务；由群管理/被招募成员自行沟通分工。',
+        kind: 'chat',
         groupId: freshGroup.id,
         author: requesterId === 'panel' ? 'panel' : requesterId,
         origin,
         mentions: added.map((item) => item.id),
-        taskStatus: 'assigned',
-        coordinator: coordinatorId,
-        assignees: assigneeIds,
-        owner: coordinatorId,
-        ownerRole: 'coordinator',
-        taskScope: normalizeTaskScope('', '招募协作：' + requestText),
-        // task-6：招募任务也自动构建默认 5 阶段任务清单。
-        steps: defaultTaskSteps(),
-        tags: '@招募',
+        tags: '@招募,@公告',
         skipDedupe: true
       },
       origin
     )
-    const taskId = taskResult.ok ? taskResult.entry.id : ''
+    const taskId = ''
+    const announcementId = announcement.ok ? announcement.entry.id : ''
     try {
       const permissions = readPermissionsOf(boardDir)
       const grants = new Set(permissions.grants[coordinatorId] || [])
@@ -6817,7 +7475,7 @@ export function apply(ctx, config = {}) {
           '发起：' + requesterLabel + '（' + (origin === 'tool' ? '会话工具' : '用户面板') + '）',
           '方式：' + mode + (skills.length ? ' · 技能偏好：' + skills.join('/') : ''),
           '新增成员：' + memberLines.join('、'),
-          taskResult.ok ? '任务：' + taskId.slice(0, 14) + '… · 组长：' + shortSid(coordinatorId) : '任务创建失败：' + (taskResult.reason || '未知'),
+          announcement.ok ? '公告：' + announcementId : '公告写入失败：' + (announcement.reason || '未知'),
           '路由：现有空闲 ' + existing.length + ' 人 / 新建 ' + createdSessions.length + ' 人 / 忙碌未选 ' + busyCount + ' 人'
         ].join('\n'),
         kind: 'chat',
@@ -6836,28 +7494,21 @@ export function apply(ctx, config = {}) {
     const woken = []
     const addedById = new Map(added.map((item) => [item.id, item]))
     const coordinatorMessage = [
-      '【招募任务 · 你是组长】群「' + freshGroup.name + '」',
+      '【招募公告 · 群管理查看】群「' + freshGroup.name + '」',
       '发起：' + requesterLabel,
       '需求：' + requestText,
       '新增成员（contactId 可直接用于 session_ask 的 to）：',
       memberLines.map((line) => ' - ' + line).join('\n'),
       '',
-      '请你先规划分工，用 session_ask（mode=task）把活派给成员并跟进；成员已入群但还未被唤醒，只有你派活他们才会收到。',
-      taskId
-        ? '全部完成后用 session_share（kind=handoff、group=' + freshGroup.name + '、replyTo=' + taskId + '、files=文件路径）提交唯一汇总。'
-        : '任务条目创建失败，请直接在群里说明分工。'
+      '这是公告，不是任务：不生成任务线、不自动催办。请由群管理/被招募成员自行沟通分工；需要正式派活时再用 group.post 显式发布任务。'
     ].join('\n')
     const memberMessageFor = (item, requestId) =>
       [
-        '【招募入组 · 任务指派】你已被招募进群「' + freshGroup.name + '」。',
+        '【招募入组 · 公告】你已被加入群「' + freshGroup.name + '」。',
         '需求：' + requestText,
         '',
-        '请先用 session_profile（action=update）提交一句话申报，然后按组长分工处理；',
-        requestId
-          ? '完成后用 session_share（kind=handoff、group=' + freshGroup.name + '、replyTo=' + requestId + '、files=文件路径）交给组长。'
-          : '完成后在群里汇报。'
+        '先用 session_profile（action=update）提交一句话申报；这是公告，不是任务，不需要按任务线交付。等群管理正式派活后再动手。'
       ].join('\n')
-
     const coordinatorTarget = coordinatorId && coordinatorId !== requesterId ? addedById.get(coordinatorId) : null
     if (coordinatorTarget) {
       await ensureSessionLive(coordinatorTarget.id)
@@ -6957,12 +7608,12 @@ export function apply(ctx, config = {}) {
       'kind=bug 是给维护者报 bug 的专用通道：会自动投递到「星桥 · 修bug」群并通知维护者（维护者 protected/service，不接普通任务）。' +
       '只发布通用、可独立理解的内容（标题≤20字，正文≤400字）；一次性细节、隐私、密钥不要发布。' +
       '任务完成/阶段交付时，正文最后一行必须写收尾：' + CLOSING_FORMAT_GUIDE + '；需要用户=是 时同时 @用户。' +
-      'kind=chat 是自由接话：想点名回群里某人时加 to=会话（会唤醒对方接话）；闲聊不需要收尾格式，不要刷屏。',
+      'kind=chat 只发一两句（≤240 字符）：像人一样说做了什么/发现/下一步；细节、清单、哈希、长路径改发 kind=handoff/note + files，不要用聊天页塞满。想点名回群里某人时加 to=会话（会唤醒对方接话）；闲聊不需要收尾格式，不要刷屏。',
     parameters: {
       type: 'object',
       properties: {
         title: { type: 'string', description: '短标题，≤20 字，例如「论文图片统一 600dpi」' },
-        text: { type: 'string', description: '可独立理解的规则/事实/交接内容，≤400 字' },
+        text: { type: 'string', description: '可独立理解的规则/事实/交接内容，≤400 字；kind=chat 时≤240 字符，只一两句话' },
         kind: {
           type: 'string',
           enum: ['note', 'handoff', 'lesson', 'decision', 'chat', 'bug'],
@@ -7008,6 +7659,8 @@ export function apply(ctx, config = {}) {
       const agent = guard.agent
       const info = sessionInfoOf(agent)
       const kind = KIND_SET.has(args && args.kind) ? args.kind : 'note'
+      const incomingText = String((args && args.text) || '').trim()
+      if (kind === 'chat' && incomingText.length > CHAT_TEXT_LIMIT) return `CHAT_TOO_LONG: ${incomingText.length} > ${CHAT_TEXT_LIMIT}；群聊只发一两句话，细节改发 kind=handoff/note 或 files。`
       const scope = args && args.scope === 'global' ? 'global' : cfg.scope === 'global' ? 'global' : 'workspace'
       const groupRef = args && typeof args.group === 'string' ? args.group.trim() : ''
       let group = groupRef ? groupStore.find(groupRef, info.cwd) : null
@@ -7136,7 +7789,7 @@ export function apply(ctx, config = {}) {
           } else {
           chatWakeAt.set(chatTarget.id, Date.now())
           await ensureSessionLive(chatTarget.id)
-          const contextLines = discussionContextOf(effectiveGroup.id, 4)
+      const contextLines = discussionContextOf(effectiveGroup.id, 4)
           const chatMessage = [
             `【群聊接话 · 不是任务】${shortSid(info.id)} 在群「${effectiveGroup.name}」点名回了你：`,
             truncate(String((args && args.text) || '').replace(/\s*\n\s*/g, ' / '), 300),
@@ -7526,6 +8179,7 @@ export function apply(ctx, config = {}) {
       '默认 mode=probe（只问正文，不叮嘱回复格式）；只有真正派活时传 mode=task（才会附 replyTo/files 交付说明）。' +
       '当用户说「问一下…会话/…群：第 3 章初稿在哪/进度如何/把文件发我/数据发我」时调用。' +
       'to 支持 contactId（8 位，如 4f51e99f）、短 id（6 位）、无 session- 前缀的完整 id、handle、标题；不确定用 session_directory 查通讯录。' +
+      'text 上限 8000 字符；超限会直接返回 TEXT_TOO_LONG，不会静默截断。' +
       '收到请求的一方用 session_share（kind=handoff、group=群名、replyTo=请求 id、files=文件）回复，请求方会被自动通知。' +
       '任务有先后依赖（串行）时传 dependsOn=前置请求/任务 id（可多个）与可选 delayMs：前置未完成不会唤醒目标，先排队，完成后自动发出。' +
       '回复任务时最后一行必须写收尾：' + CLOSING_FORMAT_GUIDE + '；需要用户=是 时同时 @用户。',
@@ -7533,7 +8187,7 @@ export function apply(ctx, config = {}) {
       type: 'object',
       properties: {
         group: { type: 'string', description: '群组名或群 id（session_board action=groups 可列出）' },
-        text: { type: 'string', description: '要什么：文件路径 / 进度 / 数据 / 结论，写清楚（≤400 字）' },
+        text: { type: 'string', description: '要什么：文件路径 / 进度 / 数据 / 结论，写清楚（≤8000 字符；超限显式报错，不静默截断）' },
         to: {
           type: 'string',
           description:
@@ -7589,7 +8243,9 @@ export function apply(ctx, config = {}) {
             : '当前还没有群组：先在右侧栏「经验桥」→ 群组里新建。'
         ].join('\n')
       }
-      const text = String((args && args.text) || '').trim().slice(0, 1200)
+      const rawAskText = String((args && args.text) || '').trim()
+      if (rawAskText.length > ASK_TEXT_LIMIT) return `TEXT_TOO_LONG: ${rawAskText.length} > ${ASK_TEXT_LIMIT}；请拆成多条或先落文件，不要静默丢末项。`
+      const text = rawAskText
       if (!text) return '请求内容不能为空。'
 
       const sessions = await buildSessionIndex()
@@ -7653,7 +8309,8 @@ export function apply(ctx, config = {}) {
       }
       const unprotectedTargets = targets.filter((session) => !protectedTargets.includes(session))
       const grants = readPermissionsOf(boardDir).grants[info.id] || []
-      const unauthorized = (bugfixDelivery ? unprotectedTargets : targets).filter((session) => !grants.includes(session.id))
+      const canEscalateToManager = (session) => Boolean(group.managerSessionId && session.id === group.managerSessionId && group.sessionIds.includes(info.id))
+      const unauthorized = (bugfixDelivery ? unprotectedTargets : targets).filter((session) => !grants.includes(session.id) && !canEscalateToManager(session))
       if (unauthorized.length) {
         const grantedTitles = grants
           .map((sessionId) => {
@@ -7975,7 +8632,8 @@ export function apply(ctx, config = {}) {
         ])
       }
       const grants = readPermissionsOf(boardDir).grants[info.id] || []
-      if (!bugfixNudge && !grants.includes(target.id)) {
+      const canEscalateToManager = Boolean(group.managerSessionId && target.id === group.managerSessionId && group.sessionIds.includes(info.id))
+      if (!bugfixNudge && !grants.includes(target.id) && !canEscalateToManager) {
         return `没有插话权限：用户还没有授权本会话唤醒/提醒「${target.title}」。请让用户在群组设置里授权。`
       }
       const title = String((args && args.title) || '').trim().slice(0, 60) || (bugfixNudge ? `BUG 提醒：${truncate(text, 18)}` : `催收：${truncate(text, 18)}`)
@@ -8245,7 +8903,7 @@ export function apply(ctx, config = {}) {
 
   register({
     name: 'session_discuss',
-    description: '在群里发起一次轻量讨论：唤醒成员用一两句话接话/表达观点（不是任务，不需交付文件）。当用户说「大家聊聊/讨论一下/头脑风暴」时使用；成员可接着别人的话聊，也可用 session_share kind=chat + to=某人 继续。',
+    description: '在群里发起一次轻量讨论：唤醒成员用一两句话接话/表达观点（不是任务，不需交付文件）。当用户说「大家聊聊/讨论一下/头脑风暴」时使用；成员可接着别人的话聊，也可用 session_share kind=chat + to=某人 继续。限时 2 分钟：到点不回复先警告，宽限期后仍不回复会关闭其对话。',
     parameters: {
       type: 'object',
       properties: {
@@ -8277,17 +8935,18 @@ export function apply(ctx, config = {}) {
         targets = targets.filter((session) => refs.some((ref) => session.id.startsWith(ref) || String(session.title || '').includes(ref)))
       }
       if (!targets.length) return '没有可讨论的群成员。'
-      addEntry(
+      const discussionEntry = addEntry(
         { title: '讨论：' + topic.slice(0, 20), text: topic, kind: 'chat', groupId: group.id, author: info.id, mentions: targets.map((t) => t.id), tags: '@讨论', skipDedupe: true },
         'tool'
       )
+      if (discussionEntry && discussionEntry.ok) watchDiscussionReply({ group, topic, targets, sinceTs: discussionEntry.entry.ts || Date.now() })
       const contextLines = discussionContextOf(group.id, 4)
       const message = [
         '【讨论 · 请用一两句话参与（不是任务）】',
         topic,
         '',
         ...(contextLines.length ? ['最近群里聊到：', ...contextLines, ''] : []),
-        '讨论不是每人各发一段观点：先看最近讨论，接着某一句赞同/反驳/补充，再 @ 一个具体成员继续。2 句话以内，直接 session_share（kind=chat、group=' + group.name + '；想点名接话加 to=<成员>）发出来。不用交付文件，不想说可以不说，最多回一句、不要刷屏。'
+        '讨论不是每人各发一段观点：先看最近讨论，接着某一句赞同/反驳/补充，再 @ 一个具体成员继续。2 句话以内，直接 session_share（kind=chat、group=' + group.name + '；想点名接话加 to=<成员>）发出来。这是闲聊，禁止直接干活/执行任务/读写文件；如果刚好发现 bug，可以用 session_share kind=bug 提一下，但不要顺手修。限时 2 分钟回应；到点没反应先警告，警告后 60 秒仍无闲聊或 bug 反馈将关闭对话。'
       ].join('\n')
       let woken = 0
       for (const target of targets) {
@@ -8295,6 +8954,144 @@ export function apply(ctx, config = {}) {
         if (wakeSession(target.id, message, {}).ok) woken += 1
       }
       return ['已发起讨论：' + topic, '唤醒 ' + woken + ' 个在线成员参与；没有实质想法可以不说，不强制回复。'].join('\n')
+    }
+  })
+
+  register({
+    name: 'task_transfer',
+    description: '任务路由后的转交申请/审批：被邀请人认为分配不合理时，用 action=request 指定更合适的候选人（contactId/标题）和理由；组长/群管理/高官用 action=approve 批准，或 action=reject 驳回；候选人可用 action=decline 拒绝。未经批准不会改 coordinator/assignees。',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['request', 'approve', 'reject', 'decline'], description: 'request 申请 / approve 批准 / reject 驳回 / decline 候选人拒绝' },
+        task: { type: 'string', description: '任务 id 或标题（request 时必填）' },
+        to: { type: 'string', description: '更合适的候选人 contactId / 标题（request 时必填）' },
+        reason: { type: 'string', description: '转交理由/审批意见' },
+        requestId: { type: 'string', description: '转交申请 id（approve/reject/decline 时必填）' }
+      },
+      required: ['action']
+    },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute(args, exec) {
+      const guard = requireRootAgent(exec)
+      if (guard.error) return guard.error
+      const info = sessionInfoOf(guard.agent)
+      const action = String((args && args.action) || '').trim()
+      const sessionsNow = await buildSessionIndex()
+      if (action === 'request') {
+        const task = findBoardEntry(args && args.task)
+        if (!task || task.kind !== 'task') return '找不到任务：' + (args && args.task)
+        if (!(task.coordinator === info.id || (Array.isArray(task.assignees) && task.assignees.includes(info.id)) || task.owner === info.id)) return '只有该任务的组长/成员可以申请转交。'
+        const candidateResolution = resolveSessionRef(String((args && args.to) || '').trim(), sessionsNow)
+        if (!candidateResolution.ok) return '候选人无法解析：' + candidateResolution.error
+        const candidate = candidateResolution.session
+        if (candidate.id === info.id || candidate.id === task.coordinator) return '候选人与当前分配相同，无需转交。'
+        if (candidate.protected || candidate.service || isMaintainerSession(candidate.id)) return '受保护/维护者会话不能作为普通任务候选人。'
+        const group = groupStore.read().find((item) => item.id === task.groupId) || null
+        const approverId = task.coordinator || task.owner || (group && group.managerSessionId) || ''
+        if (!approverId) return '任务没有可审批的组长/群管理。'
+        const request = addEntry({
+          title: '转交申请：' + String(task.title || task.id).slice(0, 40) + ' → ' + (candidate.title || shortSid(candidate.id)),
+          text: '申请把任务「' + String(task.title || task.id) + '」转交给 ' + (candidate.title || shortSid(candidate.id)) + '（contactId=' + (candidate.contactId || contactIdOf(candidate.id)) + '）。理由：' + (String((args && args.reason) || '').slice(0, 200) || '更合适') + '。审批前不改变原分配。',
+          kind: 'request',
+          groupId: task.groupId,
+          author: info.id,
+          requestTo: [approverId],
+          taskId: task.id,
+          transferTaskId: task.id,
+          transferCandidateId: candidate.id,
+          transferReason: String((args && args.reason) || ''),
+          skipDedupe: true
+        }, 'tool')
+        if (!request.ok) return '转交申请创建失败：' + (request.reason || '未知')
+        await ensureSessionLive(approverId)
+        wakeSession(approverId, [
+          '【转交申请 · 待审批】',
+          '任务：' + String(task.title || task.id),
+          '申请人：' + (info.handle || shortSid(info.id)),
+          '候选人：' + (candidate.title || shortSid(candidate.id)) + '（' + (candidate.contactId || contactIdOf(candidate.id)) + '）',
+          '理由：' + (String((args && args.reason) || '') || '更合适'),
+          '',
+          '批准用 task_transfer action=approve requestId=' + request.entry.id + '；驳回用 reject。'
+        ].join('\n'), {})
+        return '已发起转交申请：' + request.entry.id + '。待组长/群管理审批，批准前不改分配。'
+      }
+      const request = findBoardEntry(args && args.requestId)
+      if (!request || request.kind !== 'request' || !request.transferCandidateId) return '找不到转交申请：' + (args && args.requestId)
+      const task = findBoardEntry(request.transferTaskId || request.taskId)
+      if (!task || task.kind !== 'task') return '转交申请对应的任务不存在。'
+      if (action === 'decline') {
+        if (info.id !== request.transferCandidateId) return '只有候选人本人可以拒绝转交。'
+        appendEvents(boardDir, [{ op: 'task', id: request.id, patch: { status: 'canceled', canceledAt: Date.now(), canceledBy: info.id, transferStatus: 'declined' }, ts: Date.now() }])
+        return '已拒绝转交：' + (task.title || task.id)
+      }
+      const group = groupStore.read().find((item) => item.id === task.groupId) || null
+      const allowed =
+        info.id === task.coordinator ||
+        info.id === task.owner ||
+        (group && group.managerSessionId === info.id) ||
+        isMaintainerSession(info.id) ||
+        (officePrivilegesOf(info.id).canApproveTransfer && group && group.sessionIds.includes(info.id))
+      if (!allowed) return '只有组长/群管理/高官/维护者可以审批转交。'
+      if (action === 'reject') {
+        appendEvents(boardDir, [{ op: 'task', id: request.id, patch: { status: 'canceled', canceledAt: Date.now(), canceledBy: info.id, transferStatus: 'rejected' }, ts: Date.now() }])
+        return '已驳回转交申请：' + (task.title || task.id)
+      }
+      if (action !== 'approve') return '未知操作：' + action
+      const candidateResolution = resolveSessionRef(String(request.transferCandidateId), sessionsNow)
+      if (!candidateResolution.ok) return '候选人已不可用：' + candidateResolution.error
+      const candidate = candidateResolution.session
+      const groupsNow = groupStore.read()
+      const targetGroup = groupsNow.find((item) => item.id === task.groupId)
+      if (targetGroup && !targetGroup.sessionIds.includes(candidate.id)) {
+        targetGroup.sessionIds.push(candidate.id)
+        targetGroup.updatedAt = Date.now()
+        groupStore.write(groupsNow)
+      }
+      const oldCoordinator = task.coordinator || task.owner || ''
+      const assignees = [...new Set([...(Array.isArray(task.assignees) ? task.assignees : []), oldCoordinator].filter((item) => item && item !== candidate.id))]
+      appendEvents(boardDir, [
+        { op: 'task', id: request.id, patch: { status: 'answered', answeredBy: info.id, answeredAt: Date.now(), transferStatus: 'approved' }, ts: Date.now() },
+        { op: 'task', id: task.id, patch: { coordinator: candidate.id, owner: candidate.id, ownerRole: 'coordinator', claimState: 'assigned', claimedAt: Date.now(), taskStatus: 'assigned', assignees }, ts: Date.now() }
+      ])
+      await ensureSessionLive(candidate.id)
+      wakeSession(candidate.id, [
+        '【任务已转交给你 · 你是组长】',
+        '任务：' + String(task.title || task.id),
+        '范围：' + String(task.taskScope || '').slice(0, 500),
+        '',
+        '请先向群管理/用户确认再执行；原分配已保留为协作成员。'
+      ].join('\n'), {})
+      return '已批准转交：' + (task.title || task.id) + ' → ' + (candidate.title || shortSid(candidate.id)) + '（旧组长转为协作成员）。'
+    }
+  })
+  register({
+    name: 'council_vote',
+    description: '星桥小议会专用：对新成员招募/世界任务待审批记录投票。action=status 查看议会与待审批；action=vote 用 approvalId + vote=approve/reject 投票；多数票自动生效并执行。只有小议会成员可投票。',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['status', 'vote'], description: 'status 查看 / vote 投票' },
+        approvalId: { type: 'string', description: '待审批 id（vote 时必填）' },
+        vote: { type: 'string', enum: ['approve', 'reject'], description: '通过/驳回' },
+        reason: { type: 'string', description: '可选投票理由' }
+      },
+      required: ['action']
+    },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute(args, exec) {
+      const guard = requireRootAgent(exec)
+      if (guard.error) return guard.error
+      const info = sessionInfoOf(guard.agent)
+      const action = String((args && args.action) || 'status')
+      const ensured = await ensureCouncil()
+      if (!ensured.ok) return ensured.error
+      if (action === 'status') {
+        const approvals = readApprovals().filter((item) => item && item.status === 'pending')
+        return ['小议会：' + ensured.data.members.map((id) => shortSid(id)).join('、'), '待审批：' + (approvals.length ? approvals.map((item) => item.id + '：' + String(item.title || item.text || '').slice(0, 40)).join('；') : '无')].join('\n')
+      }
+      const result = await councilVote({ approvalId: String((args && args.approvalId) || '').trim(), voter: info.id, vote: String((args && args.vote) || ''), reason: args && args.reason })
+      return JSON.stringify(result)
     }
   })
 
@@ -8724,11 +9521,14 @@ export function apply(ctx, config = {}) {
       properties: {
         action: {
           type: 'string',
-          enum: ['list', 'groups', 'remove', 'claim', 'unclaim', 'task.claim', 'task.release', 'task.dedupe', 'ack', 'status', 'bugfix'],
+          enum: ['list', 'search', 'groups', 'remove', 'claim', 'unclaim', 'task.claim', 'task.release', 'task.dedupe', 'ack', 'status', 'bugfix'],
           description:
             'list（默认）/ groups / remove / claim / unclaim / task.claim / task.release / task.dedupe / ack / status / bugfix（创建或复用修bug群）'
         },
         id: { type: 'string', description: '条目 id（remove/claim/unclaim/ack 时用，支持前缀匹配）' },
+        query: { type: 'string', description: '可选，按标题/正文/标签/群名搜索共享经验（list/search 时用）' },
+        tag: { type: 'string', description: '可选，按标签过滤' },
+        kind: { type: 'string', description: '可选，按类别过滤（note/handoff/lesson/decision/bug 等）' },
         limit: { type: 'integer', minimum: 1, maximum: 50, description: 'list 时最多显示多少条，默认 12' },
         includeOwn: { type: 'boolean', description: 'list 时是否包含自己发布的条目，默认 false' },
         showAll: { type: 'boolean', description: 'list 时是否显示其它工作区的条目，默认 false' },
@@ -8746,7 +9546,8 @@ export function apply(ctx, config = {}) {
       const guard = requireAgent(exec)
       if (guard.error) return guard.error
       const info = sessionInfoOf(guard.agent)
-      const action = args && typeof args.action === 'string' ? args.action : 'list'
+      let action = args && typeof args.action === 'string' ? args.action : 'list'
+      if (action === 'search') action = 'list'
       // 读操作（list/groups/status）对所有 agent 开放（子智能体/团队成员也要能看交接）；
       // 写操作（remove/claim/unclaim/ack）仅主会话。
       if (!['list', 'groups', 'status'].includes(action) && !isRootAgent(guard.agent)) {
@@ -8962,12 +9763,22 @@ export function apply(ctx, config = {}) {
 
       // list
       const limit = Math.max(1, Math.min(50, toNumber(args && args.limit, 12)))
-      const entries = visibleEntries(info, {
+      const query = String(args && (args.query || args.q) || '').trim()
+      const tagFilter = String(args && args.tag || '').trim().toLowerCase()
+      const kindFilter = String(args && args.kind || '').trim().toLowerCase()
+      let entries = visibleEntries(info, {
         includeOwn: args && args.includeOwn === true,
         showAll: args && args.showAll === true
-      }).slice(0, limit)
+      })
+      if (query) {
+        const q = normalizeText(query)
+        entries = entries.filter((entry) => normalizeText([entry.title, entry.text, ...(entry.tags || []), entry.groupName || ''].join(' ')).includes(q))
+      }
+      if (tagFilter) entries = entries.filter((entry) => (entry.tags || []).some((tag) => String(tag).toLowerCase().includes(tagFilter)))
+      if (kindFilter) entries = entries.filter((entry) => String(entry.kind || '').toLowerCase() === kindFilter)
+      entries = entries.slice(0, limit)
       const header = [
-        `跨会话经验板 · ${entries.length} 条（工作区 ${info.cwd ? path.basename(info.cwd) : '?'}${args && args.showAll === true ? '，含其它工作区' : ''}${args && args.includeOwn === true ? '，含自己发布' : ''}）`
+        `跨会话经验板 · ${entries.length} 条${query ? '（搜索：' + query + '）' : ''}（工作区 ${info.cwd ? path.basename(info.cwd) : '?'}${args && args.showAll === true ? '，含其它工作区' : ''}${args && args.includeOwn === true ? '，含自己发布' : ''}）`
       ]
       if (!entries.length) {
         header.push('（暂时没有其他会话共享的条目。你可以在本会话发布：用户给出通用规范时调用 session_share。）')
@@ -8982,7 +9793,8 @@ export function apply(ctx, config = {}) {
     description:
       '组长/群管理专用：向世界路由请求招募/分配新成员（优先空闲现有会话自动入群；不足时新建会话但必须先经用户复核），成功后自动加入本群并创建/指派任务。' +
       '参数：group=群名或群 id（你是多个群的管理/组长时必填）、text/need=招募需求、count=人数(1-5)、mode=auto(默认)/new/existing、skills=技能偏好。' +
-      '维护者/受保护会话不会被当普通执行人选中；需要新建会话时返回待复核信息（不会偷偷创建）。普通成员无权调用。',
+      '维护者/受保护会话不会被当普通执行人选中；需要新建会话时返回待复核信息（不会偷偷创建）。普通成员无权调用。' +
+      '需要能回话、可被群 @、可持续跟进的协作者时，用本工具招真实成员；不要用 subagent 代替群成员。',
     parameters: {
       type: 'object',
       properties: {
@@ -9060,9 +9872,7 @@ export function apply(ctx, config = {}) {
         `【招募成功】群「${result.groupName}」新增 ${result.added.length} 位成员（世界路由：现有空闲 ${result.route.existingUsed} / 新建 ${result.route.createdNew} / 忙碌未选 ${result.route.busyFound}）。`,
         memberText,
         '',
-        result.taskId
-          ? `已创建并指派任务 id=${result.taskId.slice(0, 14)}…，组长：${result.coordinator ? result.coordinator.title + '（contactId=' + result.coordinator.contactId + '）' : '（无）'}。`
-          : '任务条目创建失败：' + '请直接在群里说明分工。',
+        '这是招募公告，不是任务：未生成任务线、不自动催办；需要正式任务时再用 group.post 显式发布。',
         `已唤醒 ${result.woken} 人；审计已写入群聊（id=${String(result.auditId || '').slice(0, 14) || '-'}…）。`,
         '维护者/受保护会话不会被选中。后续用 session_ask（mode=task）给成员派活即可。'
       ].join('\n')
@@ -9555,6 +10365,7 @@ export function apply(ctx, config = {}) {
           }
           approvalsNow.push(approval)
           writeApprovals(approvalsNow)
+          void notifyCouncilApproval(approval)
           addEntry(
             {
               title: '待复核：' + text.slice(0, 20),
@@ -10317,7 +11128,7 @@ export function apply(ctx, config = {}) {
             const profiles = listProfilesOf(boardDir)
             for (const sessionId of targetIds) {
               const profile = profiles[sessionId]
-              const score = profile ? scoreProfileForText(text, profile) : 0
+              const score = (profile ? scoreProfileForText(text, profile) : 0) + officeForSession(sessionId).officeLevel / 10
               if (score > bestScore) {
                 bestScore = score
                 coordinatorId = sessionId
@@ -10793,6 +11604,60 @@ export function apply(ctx, config = {}) {
       logger.info(`新建群组 ${group.id}「${name}」（${sessionIds.length} 个主会话，来自面板；已唤醒 ${profileRequests} 个申报）`)
       return { ok: true, groupId: group.id, profileRequests }
     }
+    if (action === 'office.progress') {
+      const wanted = String(payload.sessionId || payload.to || payload.id || '').trim()
+      if (wanted) {
+        let target = null
+        try { const sessions = await buildSessionIndex(); const got = resolveSessionRef(wanted, sessions); if (got.ok) target = got.session } catch { /* ignore */ }
+        if (!target) return { ok: false, error: '找不到会话：' + wanted }
+        return { ok: true, progress: officeProgressOf(target.id), sessionId: target.id, title: target.title }
+      }
+      const rows = Object.keys(identityStore.read().sessions || {}).map((sessionId) => ({ sessionId, ...officeProgressOf(sessionId) })).sort((a, b) => b.officeLevel - a.officeLevel || b.merit - a.merit)
+      return { ok: true, rows, rules: OFFICE_PROMOTION_RULES }
+    }
+    if (action === 'office.promote') {
+      if (!(actor.kind === 'panel' || isMaintainerSession(actor.sessionId))) return { ok: false, error: '只有面板/维护者可以审批晋升' }
+      const wanted = String(payload.sessionId || payload.to || payload.id || '').trim()
+      let target = null
+      try { const sessions = await buildSessionIndex(); const got = resolveSessionRef(wanted, sessions); if (got.ok) target = got.session } catch { /* ignore */ }
+      if (!target) return { ok: false, error: '找不到会话：' + wanted }
+      const current = officeForSession(target.id)
+      const rule = OFFICE_PROMOTION_RULES.find((item) => item.from === current.office) || null
+      const officeName = String(payload.office || (rule && rule.to) || '').trim()
+      const hit = officeStore.catalog().find((item) => item.name === officeName || item.id === officeName)
+      if (!hit) return { ok: false, error: '未知官职：' + officeName, catalog: officeStore.catalog() }
+      const saved = officeStore.set(target.id, { office: hit.name, officeId: hit.id, level: hit.level, grantedBy: actor.kind === 'panel' ? 'panel' : actor.sessionId, note: String(payload.reason || payload.note || '晋升审批').slice(0, 200), promotionHistory: [...((officeStore.get(target.id) && officeStore.get(target.id).promotionHistory) || []), { from: current.office, to: hit.name, at: Date.now(), merit: officeMeritOf(target.id).merit }] })
+      return { ok: true, promoted: true, sessionId: target.id, title: target.title, office: saved }
+    }
+    if (action === 'office.assign' || action === 'office.revoke' || action === 'office.list' || action === 'office.user.set') {
+      const catalog = officeStore.catalog()
+      if (action === 'office.list') {
+        return { ok: true, user: officeStore.read().user, sessions: officeStore.read().sessions, catalog }
+      }
+      const wantedOffice = String(payload.office || payload.rank || payload.title || '').trim()
+      const hit = catalog.find((item) => item.name === wantedOffice || item.id === wantedOffice)
+      if (action === 'office.user.set') {
+        if (!hit) return { ok: false, error: '未知官职：' + wantedOffice, catalog }
+        const user = officeStore.setUser({ office: hit.name, officeId: hit.id, level: hit.level, grantedBy: actor && actor.id ? actor.id : 'panel', note: String(payload.note || '').slice(0, 200) })
+        return { ok: true, user, catalog }
+      }
+      const wantedRef = String(payload.sessionId || payload.to || payload.id || '').trim()
+      if (!wantedRef) return { ok: false, error: '缺少会话' }
+      let target = null
+      try {
+        const sessions = await buildSessionIndex()
+        const resolution = resolveSessionRef(wantedRef, sessions)
+        if (resolution.ok) target = resolution.session
+      } catch { /* ignore */ }
+      if (!target) return { ok: false, error: '找不到会话：' + wantedRef }
+      if (action === 'office.revoke') {
+        officeStore.remove(target.id)
+        return { ok: true, revoked: true, sessionId: target.id, title: target.title || shortSid(target.id), office: null }
+      }
+      if (!hit) return { ok: false, error: '未知官职：' + wantedOffice, catalog }
+      const saved = officeStore.set(target.id, { office: hit.name, officeId: hit.id, level: hit.level, grantedBy: actor && actor.id ? actor.id : 'panel', note: String(payload.note || '').slice(0, 200) })
+      return { ok: true, sessionId: target.id, title: target.title || shortSid(target.id), office: saved, catalog }
+    }
     if (action === 'identity.set') {
       const sessionId = String(payload.sessionId || '').trim()
       const wantedHandle = sanitizeHandle(payload.handle)
@@ -11006,6 +11871,53 @@ export function apply(ctx, config = {}) {
         }))
       return { ok: true, groupId: bugfixNow.id, name: bugfixNow.name, reports }
     }
+    if (action === 'task.pause' || action === 'session.pause' || action === 'task.resume' || action === 'session.resume') {
+      const reason = String(payload.reason || payload.note || '用户明确暂停').replace(/\s+/g, ' ').trim().slice(0, 200)
+      const resolving = action.startsWith('task')
+      const ref = String(payload.taskId || payload.requestId || payload.sessionId || payload.id || '').trim()
+      if (!ref) return { ok: false, error: '缺少要暂停的任务/请求/会话' }
+      if (action === 'session.resume' || action === 'task.resume') {
+        if (resolving) {
+          pauseStore.remove('tasks', ref); pauseStore.remove('requests', ref)
+        } else pauseStore.remove('sessions', ref)
+        return { ok: true, resumed: true, id: ref }
+      }
+      if (action === 'session.pause') {
+        let target = null
+        try { const sessions = await buildSessionIndex(); const got = resolveSessionRef(ref, sessions); if (got.ok) target = got.session } catch { /* ignore */ }
+        if (!target) return { ok: false, error: '找不到会话：' + ref }
+        const saved = pauseStore.set('sessions', target.id, { reason, title: target.title || shortSid(target.id) })
+        return { ok: true, paused: true, kind: 'session', id: target.id, title: target.title, reason: saved.reason }
+      }
+      const entry = findBoardEntry(ref)
+      if (!entry) return { ok: false, error: '找不到任务/请求：' + ref }
+      const saved = pauseStore.set(entry.kind === 'request' ? 'requests' : 'tasks', entry.id, { reason, title: entry.title || entry.id, kind: entry.kind })
+      return { ok: true, paused: true, kind: entry.kind, id: entry.id, title: entry.title, reason: saved.reason }
+    }
+    if (action === 'session.compact') {
+      if (!(actor.kind === 'panel' || isMaintainerSession(actor.sessionId))) return { ok: false, error: '只有面板/维护者可以压缩上下文' }
+      const wanted = String(payload.sessionId || payload.to || payload.id || '').trim()
+      if (!wanted) return { ok: false, error: '缺少 sessionId' }
+      let target = null
+      try { const sessions = await buildSessionIndex(); const got = resolveSessionRef(wanted, sessions); if (got.ok) target = got.session } catch { /* ignore */ }
+      if (!target) return { ok: false, error: '找不到会话：' + wanted }
+      const agent = ctx.agents && typeof ctx.agents.get === 'function' ? ctx.agents.get(target.id) : undefined
+      if (!agent) return { ok: false, error: '目标会话当前不 live，先恢复后再压缩' }
+      if (agent.status !== 'idle') return { ok: false, error: '目标会话正在运行（status=' + agent.status + '），需等 idle 才可手动压缩' }
+      let compaction = injectedCompaction
+      if (!compaction) { try { compaction = agent.ctx && agent.ctx.get ? agent.ctx.get('compaction') : null } catch { /* ignore */ } }
+      if (!compaction) { try { compaction = agent.ctx && agent.ctx.compaction ? agent.ctx.compaction : null } catch { /* ignore */ } }
+      if (!compaction || typeof compaction.compactNow !== 'function') return { ok: false, error: '宿主未提供 compaction.compactNow（agent scope 也没有）' }
+      const controller = new AbortController()
+      try {
+        const result = await compaction.compactNow(agent, controller.signal, 'manual:' + Date.now().toString(36))
+        if (!result) return { ok: true, compacted: false, sessionId: target.id, title: target.title, message: '没有可安全压缩的区间' }
+        return { ok: true, compacted: true, sessionId: target.id, title: target.title, shadowedSeqs: result.shadowedSeqs ? result.shadowedSeqs.length : undefined, shadowedTokenCount: result.shadowedTokenCount }
+      } catch (error) {
+        logger.warn('手动上下文压缩失败：' + (error && error.message ? error.message : error))
+        return { ok: false, error: '压缩失败：' + (error && error.message ? error.message : String(error)) }
+      }
+    }
     if (action === 'health.check') {
       const report = await runHealthCheck({ alert: false })
       return { ok: true, report }
@@ -11085,7 +11997,7 @@ export function apply(ctx, config = {}) {
         ? payload.mentionSessionIds.filter((item) => typeof item === 'string' && item)
         : []
       if (requested.length) targets = targets.filter((session) => requested.includes(session.id))
-      addEntry(
+      const discussionEntry = addEntry(
         {
           title: '讨论：' + topic.slice(0, 20),
           text: topic,
@@ -11099,13 +12011,14 @@ export function apply(ctx, config = {}) {
         },
         'panel'
       )
+      if (discussionEntry && discussionEntry.ok) watchDiscussionReply({ group, topic, targets, sinceTs: discussionEntry.entry.ts || Date.now() })
       const contextLines = discussionContextOf(group.id, 4)
       const message = [
         '【讨论 · 用户发起（不是任务）】',
         topic,
         '',
         ...(contextLines.length ? ['最近群里聊到：', ...contextLines, ''] : []),
-        '讨论不是每人各发一段观点：先看最近讨论，接着某一句赞同/反驳/补充，再 @ 一个具体成员继续。2 句话以内，直接 session_share（kind=chat、group=' + group.name + '；想点名接话加 to=<成员>）发出来。不用交付文件，不想说可以不说，最多回一句、不要刷屏。'
+        '讨论不是每人各发一段观点：先看最近讨论，接着某一句赞同/反驳/补充，再 @ 一个具体成员继续。2 句话以内，直接 session_share（kind=chat、group=' + group.name + '；想点名接话加 to=<成员>）发出来。这是闲聊，禁止直接干活/执行任务/读写文件；如果刚好发现 bug，可以用 session_share kind=bug 提一下，但不要顺手修。限时 2 分钟回应；到点没反应先警告，警告后 60 秒仍无闲聊或 bug 反馈将关闭对话。'
       ].join('\n')
       let woken = 0
       for (const target of targets) {
@@ -11712,6 +12625,23 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  const handleComputerPriorityRoute = async (req, res) => {
+    try {
+      if (req.method !== 'GET') return jsonOut(res, 405, { ok: false, error: 'method-not-allowed' })
+      if (!isLoopbackCaller(req)) return jsonOut(res, 403, { ok: false, error: 'forbidden' })
+      const url = new URL(String(req.url || ''), 'http://127.0.0.1')
+      const owner = String(url.searchParams.get('owner') || url.searchParams.get('sessionId') || '').trim()
+      if (!owner) return jsonOut(res, 400, { ok: false, error: 'missing-owner' })
+      const office = officeForSession(owner)
+      const rep = reputationOf(owner)
+      const merit = officeMeritOf(owner)
+      const priority = Number(office.officeLevel || 10) * 10000 + Math.max(0, Number(rep.points || 0))
+      jsonOut(res, 200, { ok: true, owner, office: office.office, level: office.officeLevel, points: Number(rep.points || 0), merit: merit.merit, priority })
+    } catch (error) {
+      jsonOut(res, 500, { ok: false, error: 'priority-failed', detail: error && error.message ? error.message : String(error) })
+    }
+  }
+
   const discussionContextOf = (groupId, limit) => {
     try {
       const sessionsNow = stateSessionsCache || []
@@ -11799,6 +12729,10 @@ export function apply(ctx, config = {}) {
         ctx.effect(
           () => webServer.register({ kind: 'exact', path: '/api/session-bridge/command', handler: handleCommandRoute }),
           'session-bridge: POST /api/session-bridge/command'
+        )
+        ctx.effect(
+          () => webServer.register({ kind: 'exact', path: '/api/session-bridge/computer/priority', handler: handleComputerPriorityRoute }),
+          'session-bridge: GET /api/session-bridge/computer/priority'
         )
         ctx.effect(
           () => webServer.register({ kind: 'exact', path: '/session-bridge/app', handler: handleAppRoute }),
@@ -12123,9 +13057,16 @@ export function apply(ctx, config = {}) {
   const runHealthCheck = async (options = {}) => {
     const issues = []
     const fixes = []
+    try {
+      const promotedNow = evaluateOfficePromotions()
+      if (promotedNow.length) fixes.push('军功晋升：' + promotedNow.map((item) => shortSid(item.sessionId) + '→' + item.office).join('、'))
+    } catch (error) { logger.warn('军功晋升巡检失败：' + (error && error.message ? error.message : error)) }
     // 修复「活着但没挂 preset」的会话：核心工具在 preset 上，漏挂载就只剩宿主面工具。
     try {
-      const repairedPresets = await repairPresetForLiveSessions('health')
+      const repairedPresets = await Promise.race([
+        repairPresetForLiveSessions('health'),
+        new Promise((resolve) => setTimeout(() => resolve([]), 5000))
+      ])
       if (repairedPresets.length > 0) fixes.push(`为 ${repairedPresets.length} 个 live 会话补挂 agent preset（核心工具恢复）`)
     } catch (error) {
       logger.warn('preset 修复失败：' + (error && error.message ? error.message : error))
@@ -12241,6 +13182,7 @@ export function apply(ctx, config = {}) {
         const tasks = store.readActive().filter((entry) => entry.kind === 'task' && (entry.taskStatus || 'assigned') !== 'done')
         for (const task of tasks) {
           const age = Date.now() - (task.ts || 0)
+          if (pauseStore.isPaused('tasks', task.id) || pauseStore.isPaused('sessions', task.coordinator || task.owner || '')) continue
           if (age > 6 * 3600 * 1000) {
             issues.push('任务「' + truncate(task.title || task.id, 24) + '」超过 6 小时未完成')
           }
@@ -12261,6 +13203,7 @@ export function apply(ctx, config = {}) {
               entry.status !== 'canceled' &&
               !entry.answeredBy &&
               (entry.ts || 0) > Date.now() - 48 * 3600 * 1000 &&
+              !pauseStore.isPaused('requests', entry.id) &&
               Array.isArray(entry.requestTo)
           )
           .sort((a, b) => (b.ts || 0) - (a.ts || 0))
@@ -12269,6 +13212,7 @@ export function apply(ctx, config = {}) {
           if (retried >= 3) break
           for (const targetId of request.requestTo) {
             if (retried >= 3) break
+            if (pauseStore.isPaused('sessions', targetId)) continue
             const cooldownKey = request.id + '|' + targetId
             if (Date.now() - (taskRetryAt.get(cooldownKey) || 0) < 20 * 60 * 1000) continue
             const targetSession = healthById.get(targetId)

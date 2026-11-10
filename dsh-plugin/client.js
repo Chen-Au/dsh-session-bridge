@@ -355,6 +355,197 @@ window.__ModuleLoader__.load({
       return out
     }
 
+    // ---------------------------------------------------------------- 4.0 指挥中心数据（防御性归一化）
+    /**
+     * 收件箱条目：宿主 4.0 state.inbox.items 的降级形态。
+     * 正式契约见 docs/API-V4.md §2.5（id=<kind>:<业务id>、target、actions、unread…），
+     * 旧宿主可能只有 id/kind/priority/ts/title/detail/groupId/action；缺失字段一律给默认值。
+     */
+    function normalizeInboxItem(raw) {
+      var src = isPlainObject(raw) ? raw : {}
+      var target = isPlainObject(src.target) ? src.target : {}
+      return {
+        id: asString(src.id),
+        kind: asString(src.kind, 'notice'),
+        category: asString(src.category),
+        priority: asNumber(src.priority, 0),
+        ts: asTimestamp(src.ts),
+        title: asString(src.title),
+        detail: asString(src.detail),
+        groupId: asString(src.groupId || target.groupId),
+        groupName: asString(src.groupName),
+        action: asString(src.action),
+        taskId: asString(src.taskId || target.taskId),
+        sessionId: asString(src.sessionId || target.sessionId || src.author),
+        approvalId: asString(src.approvalId || target.approvalId),
+        requestId: asString(src.requestId),
+        target: {
+          view: asString(target.view),
+          groupId: asString(target.groupId),
+          taskId: asString(target.taskId),
+          approvalId: asString(target.approvalId),
+          sessionId: asString(target.sessionId)
+        },
+        unread: src.unread === true,
+        read: src.unread !== true,
+        createdAt: asTimestamp(src.createdAt),
+        expiresAt: asTimestamp(src.expiresAt)
+      }
+    }
+
+    /** state.inbox：{items, attention, total, attentionCount, unreadCount, generatedAt}。 */
+    function normalizeInbox(raw) {
+      var src = isPlainObject(raw) ? raw : {}
+      var items = asArray(src.items)
+        .filter(isPlainObject)
+        .map(normalizeInboxItem)
+        .filter(function (item) {
+          return item.id !== '' || item.title !== ''
+        })
+      var attention = asArray(src.attention)
+        .filter(isPlainObject)
+        .map(normalizeInboxItem)
+        .filter(function (item) {
+          return item.id !== '' || item.title !== ''
+        })
+      var total = asNumber(src.total, items.length)
+      var attentionCount = asNumber(src.attentionCount, attention.length || items.filter(function (item) { return item.priority >= 75 }).length)
+      var unreadCount = asNumber(src.unreadCount, items.filter(function (item) { return item.unread === true }).length)
+      return {
+        items: items,
+        attention: attention,
+        total: Math.max(0, total),
+        attentionCount: Math.max(0, attentionCount),
+        unreadCount: Math.max(0, unreadCount),
+        generatedAt: asTimestamp(src.generatedAt)
+      }
+    }
+
+    /** 小议会（state.council：members 是会话 id 数组）。 */
+    function normalizeCouncil(raw) {
+      var src = isPlainObject(raw) ? raw : {}
+      return {
+        version: asNumber(src.version, 1),
+        groupId: asString(src.groupId),
+        chair: asString(src.chair),
+        members: asArray(src.members)
+          .map(function (item) { return asString(item) })
+          .filter(function (item) { return item !== '' }),
+        createdAt: asTimestamp(src.createdAt),
+        updatedAt: asTimestamp(src.updatedAt)
+      }
+    }
+
+    /** computer-use 桌面租约（state.computerResource，见 docs/API-V4.md §2.7）。 */
+    function normalizeComputerResource(raw) {
+      var src = isPlainObject(raw) ? raw : {}
+      var lease = isPlainObject(src.lease) ? src.lease : null
+      var available = src.available === true
+      var priorityRaw = src.priority
+      var priority = isPlainObject(priorityRaw)
+        ? {
+            current: asNumber(priorityRaw.current, 0),
+            office: asString(priorityRaw.office),
+            officeLevel: asNumber(priorityRaw.officeLevel, 0),
+            points: asNumber(priorityRaw.points, 0),
+            scale: asString(priorityRaw.scale)
+          }
+        : {
+            current: asNumber(priorityRaw, 0),
+            office: asString(src.office),
+            officeLevel: 0,
+            points: 0,
+            scale: ''
+          }
+      return {
+        schemaVersion: asString(src.schemaVersion),
+        ok: src.ok !== false,
+        available: available,
+        resourceId: asString(src.resourceId, 'desktop'),
+        label: asString(src.label),
+        priority: priority,
+        office: priority.office,
+        queue: asArray(src.queue),
+        degraded: src.degraded === true,
+        degradedReason: asString(src.degradedReason),
+        observedAt: asTimestamp(src.observedAt),
+        lease: available && lease
+          ? {
+              owner: asString(lease.owner),
+              ownerName: asString(lease.ownerName),
+              label: asString(lease.label),
+              acquiredAt: asTimestamp(lease.acquiredAt),
+              expiresAt: asTimestamp(lease.expiresAt),
+              ttlMs: asNumber(lease.ttlMs, 0),
+              heldByMe: lease.heldByMe === true
+            }
+          : null
+      }
+    }
+
+    /** commandCenter：4.0 控制面摘要（正式契约见 docs/API-V4.md §2.6）。 */
+    function normalizeCommandCenter(raw) {
+      var src = isPlainObject(raw) ? raw : {}
+      var council = isPlainObject(src.council) ? src.council : {}
+      var computer = isPlainObject(src.computer) ? src.computer : {}
+      var membersRaw = council.members
+      return {
+        schemaVersion: asString(src.schemaVersion, ''),
+        attentionCount: asNumber(src.attentionCount, 0),
+        inboxCount: asNumber(src.inboxCount, 0),
+        unreadCount: asNumber(src.unreadCount, 0),
+        activeTasks: asNumber(src.activeTasks, 0),
+        stalledTasks: asNumber(src.stalledTasks, 0),
+        pausedTasks: asNumber(src.pausedTasks, 0),
+        approvalTimeoutCount: asNumber(src.approvalTimeoutCount, 0),
+        council: {
+          members: Array.isArray(membersRaw) ? membersRaw.length : asNumber(membersRaw, 0),
+          chair: asString(council.chair),
+          pendingApprovals: asNumber(council.pendingApprovals, 0)
+        },
+        computer: {
+          available: computer.available === true,
+          owner: asString(computer.owner),
+          ttlMs: asNumber(computer.ttlMs, 0),
+          degraded: computer.degraded === true
+        }
+      }
+    }
+
+    /** 待复核/待议会审批记录。 */
+    function normalizeApproval(raw) {
+      var src = isPlainObject(raw) ? raw : {}
+      return {
+        id: asString(src.id),
+        title: asString(src.title),
+        text: asString(src.text),
+        reason: asString(src.reason),
+        status: asString(src.status, 'pending'),
+        source: asString(src.source),
+        groupId: asString(src.groupId),
+        createdAt: asTimestamp(src.createdAt)
+      }
+    }
+
+    /** 任务线统计（卡住数等）：优先用宿主给的任务线，缺失时从 taskLineStats 兜底。 */
+    function normalizeTaskLineStats(rawStats, rawLines) {
+      var src = isPlainObject(rawStats) ? rawStats : {}
+      var lines = asArray(rawLines).filter(isPlainObject)
+      var countStatus = function (status) {
+        return lines.filter(function (line) { return asString(line.lineStatus) === status }).length
+      }
+      return {
+        total: asNumber(src.total, lines.length),
+        waiting: asNumber(src.waiting, countStatus('waiting')),
+        active: asNumber(src.active, countStatus('active')),
+        stalled: asNumber(src.stalled, countStatus('stalled')),
+        paused: asNumber(src.paused, countStatus('paused')),
+        done: asNumber(src.done, countStatus('done')),
+        canceled: asNumber(src.canceled, countStatus('canceled')),
+        nudged: asNumber(src.nudged, 0)
+      }
+    }
+
     /** 把任意响应体收敛成面板可安全消费的形状；缺失字段一律补默认值。 */
     function normalizeState(raw) {
       var src = isPlainObject(raw) ? raw : {}
@@ -483,9 +674,44 @@ window.__ModuleLoader__.load({
           boardDir: asString(src.config.boardDir)
         }
       }
+      var inbox = normalizeInbox(src.inbox)
+      var council = normalizeCouncil(
+        isPlainObject(src.council) ? src.council : isPlainObject(src.commandCenter) ? src.commandCenter.council : null
+      )
+      var computerResource = normalizeComputerResource(
+        isPlainObject(src.computerResource) ? src.computerResource : isPlainObject(src.commandCenter) ? src.commandCenter.computer : null
+      )
+      var approvals = asArray(src.approvals)
+        .filter(isPlainObject)
+        .map(normalizeApproval)
+        .filter(function (item) {
+          return item.id !== ''
+        })
+      var taskLineStats = normalizeTaskLineStats(src.taskLineStats, src.taskLines)
+      var taskFlows = isPlainObject(src.taskFlows) ? src.taskFlows : {}
+      var commandCenter = normalizeCommandCenter(src.commandCenter)
+      // 老宿主没有 commandCenter 时，用 inbox / approvals / taskLineStats 派生同一份摘要。
+      if (!commandCenter.schemaVersion) commandCenter.schemaVersion = asString(src.schemaVersion)
+      if (!commandCenter.attentionCount) commandCenter.attentionCount = inbox.attentionCount
+      if (!commandCenter.inboxCount) commandCenter.inboxCount = inbox.total
+      if (!commandCenter.unreadCount) commandCenter.unreadCount = inbox.unreadCount
+      if (!commandCenter.council.pendingApprovals) {
+        commandCenter.council.pendingApprovals = approvals.filter(function (item) { return item.status === 'pending' }).length
+      }
+      if (!commandCenter.council.members) commandCenter.council.members = council.members.length
+      if (!commandCenter.council.chair) commandCenter.council.chair = council.chair
+      if (!commandCenter.stalledTasks) commandCenter.stalledTasks = taskLineStats.stalled
+      if (!commandCenter.pausedTasks) commandCenter.pausedTasks = taskLineStats.paused
+      if (!commandCenter.computer.available) {
+        commandCenter.computer.available = computerResource.available
+        commandCenter.computer.owner = computerResource.lease ? computerResource.lease.owner : ''
+        commandCenter.computer.ttlMs = computerResource.lease ? computerResource.lease.ttlMs : 0
+        commandCenter.computer.degraded = computerResource.degraded
+      }
       return {
         ok: src.ok !== false,
         version: asString(src.version),
+        schemaVersion: asString(src.schemaVersion),
         config: config,
         reputation: reputation,
         rules: rules,
@@ -496,6 +722,13 @@ window.__ModuleLoader__.load({
         sessions: sessions,
         profiles: profiles,
         deliveries: normalizeDeliveries(src.deliveries),
+        inbox: inbox,
+        commandCenter: commandCenter,
+        council: council,
+        computerResource: computerResource,
+        taskFlows: taskFlows,
+        taskLineStats: taskLineStats,
+        approvals: approvals,
         stats: {
           rules: asNumber(rawStats.rules, rules.length),
           groups: asNumber(rawStats.groups, groups.length),
@@ -1084,7 +1317,79 @@ window.__ModuleLoader__.load({
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-word',
         marginBottom: 10
-      }
+      },
+      // ---- 4.0 指挥中心（右侧栏常驻摘要 · 默认折叠，低打扰） ----
+      commandStrip: {
+        flex: 'none',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        padding: '7px 10px',
+        borderBottom: '0.5px solid var(--dsw-alias-border-l3)',
+        background: 'color-mix(in srgb, var(--dsw-alias-bg-layer-2) 55%, transparent)'
+      },
+      commandRow: { display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' },
+      commandTitle: {
+        fontSize: 12,
+        fontWeight: 600,
+        color: 'var(--dsw-alias-label-primary)',
+        flex: 'none',
+        marginRight: 1
+      },
+      commandSpacer: { flex: 1, minWidth: 4 },
+      statChip: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 3,
+        padding: '1px 7px',
+        borderRadius: 999,
+        border: '0.5px solid var(--dsw-alias-border-l3)',
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-secondary)',
+        fontSize: 10.5,
+        lineHeight: 1.5,
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        whiteSpace: 'nowrap'
+      },
+      statChipAlert: {
+        borderColor: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary) 45%, transparent)',
+        background: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, transparent)'
+      },
+      statNum: { fontWeight: 700, color: 'var(--dsw-alias-label-primary)' },
+      statNumAlert: { color: 'var(--dsw-alias-state-warn-primary)' },
+      cmdInboxList: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 1,
+        marginTop: 1
+      },
+      cmdInboxRow: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        minWidth: 0,
+        padding: '3px 5px',
+        border: '0.5px solid transparent',
+        borderRadius: 6,
+        background: 'transparent',
+        color: 'inherit',
+        textAlign: 'left',
+        cursor: 'pointer',
+        fontFamily: 'inherit'
+      },
+      cmdInboxKind: { flex: 'none', width: 15, textAlign: 'center', fontSize: 11, lineHeight: 1.4 },
+      cmdInboxTitle: {
+        flex: 1,
+        minWidth: 0,
+        fontSize: 11.5,
+        color: 'var(--dsw-alias-label-primary)',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap'
+      },
+      cmdInboxTime: { flex: 'none', fontSize: 10, color: 'var(--dsw-alias-label-tertiary)' },
+      cmdEmpty: { fontSize: 10.5, color: 'var(--dsw-alias-label-tertiary)', padding: '2px 4px' }
     }
     //#endregion
 
@@ -4109,6 +4414,473 @@ window.__ModuleLoader__.load({
     }
     //#endregion
 
+    //#region 4.0 指挥中心（右侧栏常驻摘要 + 收起式收件箱）
+    var APP_URL = '/session-bridge/app'
+    var APP_WINDOW_NAME = 'nebula-bridge'
+    var APP_WINDOW_FEATURES = 'width=1280,height=860'
+
+    function clipText(value, max) {
+      var s = asString(value)
+      if (!max || s.length <= max) return s
+      return s.slice(0, max).replace(/\s+$/, '') + '…'
+    }
+
+    function inboxKindIcon(kind) {
+      var k = asString(kind)
+      if (k === 'approval') return '🛡️'
+      if (k === 'approval-timeout') return '⏰'
+      if (k === 'urgent-request') return '⚡'
+      if (k === 'lease-wait') return '🖥️'
+      if (k === 'request') return '📨'
+      if (k === 'stuck-task') return '⏳'
+      if (k === 'paused-task') return '⏸️'
+      if (k === 'queued-ask') return '🧾'
+      if (k === 'completion') return '✅'
+      return '•'
+    }
+
+    /**
+     * 收件箱条目 → 独立 app 跳转目标。
+     * 契约（docs/API-V4.md §6）：能否跳转只看 `target` 字段，不用标题猜；
+     * 老宿主没有 target 时按 action / kind 兜底。
+     */
+    function targetRouteOf(item) {
+      var src = isPlainObject(item) ? item : {}
+      var target = isPlainObject(src.target) ? src.target : {}
+      var view = asString(target.view)
+      var action = asString(src.action)
+      var id = asString(src.id)
+      if (!view) {
+        if (action === 'open-approval') view = 'approvals'
+        else if (action === 'open-task') view = 'tasks'
+        else if (action === 'open-group' || action === 'open-session') view = 'groups'
+        else if (action === 'open-resource') view = 'resource'
+        else if (action === 'open-world') view = 'world'
+      }
+      var approvalId = asString(src.approvalId || target.approvalId)
+      var taskId = asString(src.taskId || target.taskId)
+      var groupId = asString(src.groupId || target.groupId)
+      var sessionId = asString(src.sessionId || target.sessionId)
+      var bizId = id.indexOf(':') > 0 ? id.slice(id.indexOf(':') + 1) : id
+      if (view === 'approvals') {
+        return {
+          route: 'approvals',
+          approvalId: approvalId || bizId,
+          filter: 'approval',
+          itemId: id
+        }
+      }
+      if (view === 'tasks') return { route: 'tasks', taskId: taskId || bizId, itemId: id }
+      if (view === 'groups') {
+        return sessionId && !groupId
+          ? { route: 'groups', sessionId: sessionId, itemId: id }
+          : { route: 'groups', groupId: groupId, itemId: id }
+      }
+      if (view === 'resource') return { route: 'resource', itemId: id }
+      if (view === 'world') return { route: 'world', entryId: bizId, itemId: id }
+      return { route: 'inbox', itemId: id }
+    }
+
+    function inboxItemNav(item) {
+      var src = isPlainObject(item) ? item : {}
+      var nav = targetRouteOf(src)
+      if (nav.route !== 'inbox') return nav
+      var kind = asString(src.kind)
+      if (kind === 'stuck-task' || kind === 'paused-task' || kind === 'completion') {
+        return { route: 'tasks', taskId: asString(src.taskId) || asString(src.id) }
+      }
+      if (kind === 'request' || kind === 'urgent-request' || kind === 'queued-ask' || kind === 'lease-wait') {
+        return asString(src.groupId) ? { route: 'groups', groupId: asString(src.groupId) } : { route: 'inbox' }
+      }
+      if (kind === 'approval' || kind === 'approval-timeout') {
+        return { route: 'approvals', approvalId: asString(src.approvalId) || asString(src.id), filter: 'approval' }
+      }
+      return { route: 'inbox' }
+    }
+
+    /** nav → 独立 app 的 hash 深链（docs/API-V4.md §6）。 */
+    function navigationHash(nav) {
+      var target = isPlainObject(nav) ? nav : {}
+      var route = asString(target.route || target.view)
+      var query = []
+      var push = function (key, value) {
+        var text = asString(value)
+        if (text !== '') query.push(key + '=' + encodeURIComponent(text))
+      }
+      var suffix = function () {
+        return query.length ? '?' + query.join('&') : ''
+      }
+      if (route === 'approvals') {
+        push('approvalId', target.approvalId || target.id || target.itemId)
+        push('filter', target.filter || 'approval')
+        return '#/approvals' + suffix()
+      }
+      if (route === 'tasks') {
+        push('taskId', target.taskId || target.id)
+        return '#/tasks' + suffix()
+      }
+      if (route === 'groups') {
+        push('groupId', target.groupId)
+        push('sessionId', target.sessionId)
+        return '#/groups' + suffix()
+      }
+      if (route === 'resource') return '#/resource/desktop'
+      if (route === 'world') {
+        push('entryId', target.entryId || target.id)
+        return '#/world' + suffix()
+      }
+      if (route === 'inbox') {
+        push('itemId', target.itemId || target.id)
+        push('filter', target.filter)
+        return '#/inbox' + suffix()
+      }
+      return ''
+    }
+
+    function clickFirstInDoc(doc, selector) {
+      try {
+        var node = doc.querySelector(selector)
+        if (node && typeof node.click === 'function') {
+          node.click()
+          return true
+        }
+      } catch (error) {
+        /* ignore */
+      }
+      return false
+    }
+
+    function clickByAttrInDoc(doc, selector, attr, value) {
+      if (!value) return false
+      try {
+        var nodes = doc.querySelectorAll(selector)
+        for (var i = 0; i < nodes.length; i += 1) {
+          if (nodes[i] && nodes[i].getAttribute(attr) === value && typeof nodes[i].click === 'function') {
+            nodes[i].click()
+            return true
+          }
+        }
+      } catch (error) {
+        /* ignore */
+      }
+      return false
+    }
+
+    /**
+     * 打开独立「星桥指挥中心」：URL 带 docs/API-V4.md §6 的 hash 深链（#/approvals、
+     * #/tasks、#/groups、#/resource/desktop、#/world…）；app 尚未消费 hash 时，再用
+     * 同源窗口 DOM 做「尽力导航」（点 tab / 群 / 收件箱条目），任何异常都静默放弃。
+     */
+    function openBridgeApp(nav) {
+      var target = isPlainObject(nav) ? nav : {}
+      var hash = ''
+      try {
+        hash = navigationHash(target)
+      } catch (error) {
+        hash = ''
+      }
+      var url = APP_URL + hash
+      var win = null
+      try {
+        win = window.open(url, APP_WINDOW_NAME, APP_WINDOW_FEATURES)
+      } catch (error) {
+        win = null
+      }
+      if (!win) {
+        try {
+          window.open(url, '_blank')
+        } catch (error) {
+          /* ignore */
+        }
+        return null
+      }
+      try {
+        win.focus()
+      } catch (error) {
+        /* ignore */
+      }
+      driveAppNavigation(win, target)
+      return win
+    }
+
+    /**
+     * app 目前不解析 URL：#4.0 用同源窗口 DOM 做「尽力导航」——等它挂载后点对应 tab /
+     * 群 / 收件箱条目；任何异常（跨域、窗口被关）都静默放弃，绝不影响侧栏。
+     */
+    function driveAppNavigation(win, nav) {
+      if (!win || typeof window === 'undefined') return
+      // 浏览器里 window.setTimeout === setTimeout；桩环境里只提供全局 setTimeout 时也降级可用。
+      var later =
+        typeof window.setTimeout === 'function'
+          ? function (fn, ms) { return window.setTimeout(fn, ms) }
+          : typeof setTimeout === 'function'
+            ? function (fn, ms) { return setTimeout(fn, ms) }
+            : function () {}
+      var target = isPlainObject(nav) ? nav : {}
+      var attempts = 0
+      var viewSwitched = false
+      var tick = function () {
+        attempts += 1
+        if (attempts > 40) return
+        try {
+          if (win.closed) return
+          var doc = win.document
+          if (!doc || !doc.querySelector) {
+            later(tick, 250)
+            return
+          }
+          if (doc.readyState && doc.readyState !== 'complete') {
+            later(tick, 250)
+            return
+          }
+          var tabs = doc.querySelectorAll('.tab[data-view]')
+          if (!tabs || !tabs.length) {
+            later(tick, 250)
+            return
+          }
+          var route = asString(target.route || target.view)
+          // 路由 → app 现有 tab（app 的 hash 深链由另一任务补齐；这里先按 tab/DOM 尽力跳）。
+          var view = 'home'
+          if (route === 'approvals' || route === 'inbox') view = 'inbox'
+          else if (route === 'groups') view = 'groups'
+          else if (route === 'tasks') view = 'tasks'
+          else if (route === 'world') view = 'world'
+          if (!route) return
+          if (!viewSwitched) {
+            clickFirstInDoc(doc, '.tab[data-view="' + view + '"]')
+            viewSwitched = true
+          }
+          var resolved = false
+          if (view === 'inbox') {
+            if (route === 'approvals' || target.filter) {
+              clickByAttrInDoc(doc, '[data-inbox-filter]', 'data-inbox-filter', target.filter || 'approval')
+            }
+            var itemId = asString(target.itemId)
+            var approvalId = asString(target.approvalId)
+            if (itemId) {
+              resolved = clickByAttrInDoc(doc, '[data-inbox-open]', 'data-inbox-open', itemId)
+            }
+            if (!resolved && approvalId) {
+              resolved =
+                clickByAttrInDoc(doc, '[data-inbox-open]', 'data-inbox-open', approvalId) ||
+                clickByAttrInDoc(doc, '[data-inbox-id]', 'data-inbox-id', approvalId)
+            }
+            if (!resolved && !itemId && !approvalId) {
+              if (target.groupId) {
+                resolved = clickByAttrInDoc(doc, '[data-inbox-group]', 'data-inbox-group', target.groupId)
+              } else {
+                resolved = true
+              }
+            }
+          } else if (view === 'groups') {
+            if (target.groupId) resolved = clickByAttrInDoc(doc, '[data-group]', 'data-group', target.groupId)
+            if (!resolved && target.sessionId) resolved = clickByAttrInDoc(doc, '[data-jump]', 'data-jump', target.sessionId)
+            if (!target.groupId && !target.sessionId) resolved = true
+          } else if (view === 'tasks') {
+            if (target.taskId) {
+              resolved = clickByAttrInDoc(doc, '[data-task-detail]', 'data-task-detail', target.taskId)
+            } else {
+              resolved = true
+            }
+          } else {
+            resolved = true
+          }
+          if (resolved) return
+          later(tick, 250)
+        } catch (error) {
+          /* 跨域/窗口关闭等：静默放弃 */
+          return
+        }
+      }
+      later(tick, 350)
+    }
+
+    /** 单个摘要数字（chip）：默认只读展示，点击可跳到独立 app 对应视图。 */
+    function CommandCenterChip(props) {
+      var alert = props && props.alert === true
+      return h(
+        'button',
+        {
+          type: 'button',
+          'data-cmd-stat': props && props.name ? String(props.name) : '',
+          title: props && props.title ? String(props.title) : undefined,
+          onClick: props && typeof props.onClick === 'function' ? props.onClick : undefined,
+          style: mergeStyle(styles.statChip, alert ? styles.statChipAlert : null)
+        },
+        h('span', null, props && props.label ? String(props.label) : ''),
+        h('span', { style: mergeStyle(styles.statNum, alert ? styles.statNumAlert : null) }, props && props.value !== undefined ? String(props.value) : '0')
+      )
+    }
+
+    /**
+     * 4.0 右侧栏顶部「指挥中心」常驻摘要：
+     *  - 一行显示 待处理 / 卡住 / 议会待批 / computer-use 占用；
+     *  - 默认折叠（低打扰），点「收件箱」或「待处理」展开前 5 条；
+     *  - 「打开星桥指挥中心」打开独立窗口，并尽力跳到对应视图/群/任务。
+     * 任何字段缺失/轮询失败都只显示「—」或 0，不抛异常。
+     */
+    function CommandCenterStrip(props) {
+      var expandedState = React.useState(false)
+      var expanded = expandedState[0]
+      var setExpanded = expandedState[1]
+      var state = isPlainObject(props && props.state) ? props.state : {}
+      var hasData = props && props.hasData === true
+      var inbox = isPlainObject(state.inbox) ? state.inbox : {}
+      var commandCenter = isPlainObject(state.commandCenter) ? state.commandCenter : {}
+      var computer = isPlainObject(state.computerResource) ? state.computerResource : {}
+      var ccCouncil = isPlainObject(commandCenter.council) ? commandCenter.council : {}
+      var ccComputer = isPlainObject(commandCenter.computer) ? commandCenter.computer : {}
+      var taskStats = isPlainObject(state.taskLineStats) ? state.taskLineStats : {}
+      var items = asArray(inbox.items)
+      var approvals = asArray(state.approvals)
+      var pendingCount = asNumber(inbox.attentionCount, asNumber(commandCenter.attentionCount, asArray(inbox.attention).length))
+      var stalledCount = asNumber(
+        commandCenter.stalledTasks,
+        asNumber(
+          taskStats.stalled,
+          items.filter(function (item) {
+            return asString(item.kind) === 'stuck-task'
+          }).length
+        )
+      )
+      // 议会待批：优先宿主摘要 commandCenter.council.pendingApprovals。
+      var councilPending = asNumber(ccCouncil.pendingApprovals, 0)
+      if (!councilPending) {
+        councilPending = approvals.filter(function (item) {
+          return asString(item.status) === 'pending'
+        }).length
+      }
+      if (!councilPending) {
+        councilPending = items.filter(function (item) {
+          return asString(item.kind) === 'approval' || asString(item.kind) === 'approval-timeout'
+        }).length
+      }
+      var lease = isPlainObject(computer.lease) ? computer.lease : null
+      var computerOwner = lease !== null ? asString(lease.owner) : asString(ccComputer.owner)
+      var computerBusy = computer.available === true || ccComputer.available === true
+      if (computerOwner === '') computerBusy = false
+      var computerDegraded = computer.degraded === true || ccComputer.degraded === true
+      var totalCount = asNumber(inbox.total, items.length)
+      var displayNumber = function (value) {
+        return hasData ? String(Math.max(0, asNumber(value, 0))) : '—'
+      }
+      var computerLabel = hasData ? (computerDegraded ? '—' : computerBusy ? '占用' : '空闲') : '—'
+      var computerTitle =
+        'computer-use 桌面：' +
+        (computerDegraded
+          ? '租约读不到（degraded）'
+          : computerBusy
+            ? asString(lease && (lease.ownerName || lease.label)) || shortId(computerOwner) || '占用'
+            : '当前空闲')
+      var openApp = function (nav) {
+        if (props && typeof props.onOpenApp === 'function') {
+          props.onOpenApp(nav)
+          return
+        }
+        openBridgeApp(nav)
+      }
+      var toggle = function () {
+        setExpanded(!expanded)
+      }
+      var rows = items.slice(0, 5).map(function (item) {
+        var nav = inboxItemNav(item)
+        return h(
+          'button',
+          {
+            key: asString(item.id) || asString(item.title),
+            type: 'button',
+            'data-cmd-inbox-item': asString(item.id),
+            title: (asString(item.detail) || asString(item.title)) + '（点击打开指挥中心对应位置）',
+            onClick: function () {
+              openApp(nav)
+            },
+            style: styles.cmdInboxRow
+          },
+          h('span', { style: styles.cmdInboxKind }, inboxKindIcon(item.kind)),
+          h('span', { style: styles.cmdInboxTitle }, clipText(item.title || item.detail, 30)),
+          h('span', { style: styles.cmdInboxTime }, item.ts > 0 ? formatLocalTime(item.ts) : '')
+        )
+      })
+      return h(
+        'div',
+        { style: styles.commandStrip, 'data-session-bridge-command-center': true },
+        h(
+          'div',
+          { style: styles.commandRow },
+          h('span', { style: styles.commandTitle }, '指挥中心'),
+          h(CommandCenterChip, {
+            name: 'pending',
+            label: '待处理',
+            value: displayNumber(pendingCount),
+            alert: hasData && pendingCount > 0,
+            title: '待处理 ' + displayNumber(pendingCount) + ' 项（收件箱共 ' + displayNumber(totalCount) + ' 条）',
+            onClick: toggle
+          }),
+          h(CommandCenterChip, {
+            name: 'stalled',
+            label: '卡住',
+            value: displayNumber(stalledCount),
+            alert: hasData && stalledCount > 0,
+            title: '卡住/暂停的任务（点击打开指挥中心任务视图）',
+            onClick: function () {
+              openApp({ route: 'tasks' })
+            }
+          }),
+          h(CommandCenterChip, {
+            name: 'council',
+            label: '议会待批',
+            value: displayNumber(councilPending),
+            alert: hasData && councilPending > 0,
+            title: '等待小议会审批的事项（点击打开审批详情）',
+            onClick: function () {
+              openApp({ route: 'approvals', filter: 'approval' })
+            }
+          }),
+          h(CommandCenterChip, {
+            name: 'computer',
+            label: 'computer-use',
+            value: computerLabel,
+            alert: computerBusy,
+            title: computerTitle,
+            onClick: function () {
+              openApp({ route: 'resource' })
+            }
+          }),
+          h('span', { style: styles.commandSpacer }),
+          h(
+            Btn,
+            { variant: 'ghost', title: expanded ? '收起收件箱' : '展开收件箱（最多 5 条）', onClick: toggle, style: { fontSize: 11, padding: '2px 6px' } },
+            expanded ? '收起 ▲' : '收件箱 ▼'
+          ),
+          h(
+            Btn,
+            {
+              variant: 'primary',
+              title: '打开星桥指挥中心（独立窗口）',
+              ariaLabel: '打开星桥指挥中心',
+              onClick: function () {
+                openApp({})
+              },
+              style: { fontSize: 11, padding: '2px 7px' }
+            },
+            '打开星桥指挥中心'
+          )
+        ),
+        expanded
+          ? h(
+              'div',
+              { style: styles.cmdInboxList, 'data-cmd-inbox': true },
+              !hasData
+                ? h('div', { style: styles.cmdEmpty }, '状态加载中…')
+                : rows.length
+                  ? rows
+                  : h('div', { style: styles.cmdEmpty }, '暂无待处理事项；点「打开星桥指挥中心」查看全部')
+            )
+          : null
+      )
+    }
+    //#endregion
+
     //#region 面板主体
     function TabBar(props) {
       var tabs = [
@@ -4316,16 +5088,13 @@ window.__ModuleLoader__.load({
             Btn,
             {
               variant: 'primary',
-              title: '在新窗口打开星桥 1.0',
-              ariaLabel: '打开独立浮窗',
+              title: '在新窗口打开星桥指挥中心',
+              ariaLabel: '打开星桥指挥中心',
               onClick: function () {
-                var url = '/session-bridge/app'
-                var win = window.open(url, 'nebula-bridge', 'width=1280,height=860')
-                if (!win) window.open(url, '_blank')
-                else win.focus()
+                openBridgeApp({})
               }
             },
-            '🪟 浮窗'
+            '🪟 指挥中心'
           ),
           h(
             Btn,
@@ -4339,6 +5108,13 @@ window.__ModuleLoader__.load({
             busy ? '刷新中…' : '↻ 刷新'
           )
         ),
+        h(CommandCenterStrip, {
+          state: state,
+          hasData: data !== null,
+          busy: busy,
+          onOpenApp: openBridgeApp,
+          onRefresh: refresh
+        }),
         h(ErrorBanner, {
           message: hasError ? error : null,
           onDismiss: function () {
@@ -4610,8 +5386,78 @@ window.__ModuleLoader__.load({
     }
 
     //#region 插件注册
+    /**
+     * 4.0：恢复「右侧栏常驻入口」——注册星桥 tab 类型 + pane 主体（顶部指挥中心摘要 +
+     * 原世界/群组/设置面板），并保留左侧栏底部入口（打开独立指挥中心窗口）。
+     * 独立窗口仍承载完整 4.0 指挥中心；右侧栏只做低打扰摘要，默认折叠。
+     * 任何注册失败都只降级（例如宿主版本没有 sidebarRightTabs），不能影响侧栏其它功能。
+     */
     function apply(ctx) {
-      // 不再注册右侧栏 Tab / 面板：星桥只做独立窗口。
+      // ① 右侧栏 tab 类型
+      try {
+        if (ctx && ctx.sidebarRightTabs && typeof ctx.sidebarRightTabs.register === 'function') {
+          ctx.effect(
+            function () {
+              return ctx.sidebarRightTabs.register({
+                id: PLUGIN_ID,
+                kind: TAB_KIND,
+                multiple: false,
+                keepMounted: true,
+                title: function () {
+                  return '星桥'
+                },
+                guide: [
+                  {
+                    id: 'open',
+                    order: 5,
+                    title: function () {
+                      return '星桥指挥中心'
+                    },
+                    description: function () {
+                      return '待处理 / 卡住任务 / 议会待批 / computer-use 摘要'
+                    }
+                  }
+                ]
+              })
+            },
+            'session-bridge: tab type'
+          )
+        }
+      } catch (error) {
+        try {
+          console.warn('[session-bridge] 注册右侧栏 tab 失败（降级为底部入口）：', error)
+        } catch (e) {
+          /* ignore */
+        }
+      }
+
+      // ② 右侧栏 pane 主体（带 ErrorBoundary 的面板）
+      try {
+        if (ctx && ctx.slots && typeof ctx.slots.inject === 'function') {
+          ctx.effect(
+            function () {
+              return ctx.slots.inject('sidebar.right.pane.tab', function () {
+                return ctx.slots.register(
+                  {
+                    name: 'sidebar.right.pane.tab',
+                    key: PLUGIN_ID
+                  },
+                  SessionBridgePanel
+                )
+              })
+            },
+            'session-bridge: pane body'
+          )
+        }
+      } catch (error) {
+        try {
+          console.warn('[session-bridge] 注册右侧栏面板失败：', error)
+        } catch (e) {
+          /* ignore */
+        }
+      }
+
+      // ③ 左侧栏底部入口（保留原功能：打开独立指挥中心窗口）
       ctx.effect(
         function () {
           return ctx.slots.inject('sidebar.footer.action', function () {
@@ -4631,7 +5477,7 @@ window.__ModuleLoader__.load({
     //#endregion
 
     exports.apply = apply
-    exports.inject = ['slots']
+    exports.inject = ['slots', 'sidebarRightTabs', 'sidebarRight']
     exports.SessionBridgePanel = SessionBridgePanel
     exports.SessionBridgePanelInner = SessionBridgePanelInner
     exports.PanelErrorBoundary = PanelErrorBoundary
@@ -4657,6 +5503,11 @@ window.__ModuleLoader__.load({
     exports.SessionsSection = SessionsSection
     exports.SettingsSection = SettingsSection
     exports.OpenBoardButton = OpenBoardButton
+    // 4.0 右侧栏指挥中心（供冒烟/静态检查使用）
+    exports.CommandCenterStrip = CommandCenterStrip
+    exports.CommandCenterChip = CommandCenterChip
+    exports.inboxItemNav = inboxItemNav
+    exports.openBridgeApp = openBridgeApp
     exports.KIND_LABELS = KIND_LABELS
     exports.PLUGIN_ID = PLUGIN_ID
     exports.TAB_KIND = TAB_KIND

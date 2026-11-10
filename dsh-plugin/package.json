@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-session-bridge",
-  "version": "3.0.2",
+  "version": "4.0.0",
   "private": true,
   "description": "跨会话经验桥：同一工作区的 DSH 会话自动同步通用注意事项、经验教训与任务交接；右侧栏看板可查看规矩、送达/接受情况并管理群组",
   "type": "module",
