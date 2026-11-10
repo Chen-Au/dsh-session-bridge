@@ -1389,7 +1389,188 @@ window.__ModuleLoader__.load({
         whiteSpace: 'nowrap'
       },
       cmdInboxTime: { flex: 'none', fontSize: 10, color: 'var(--dsw-alias-label-tertiary)' },
-      cmdEmpty: { fontSize: 10.5, color: 'var(--dsw-alias-label-tertiary)', padding: '2px 4px' }
+      cmdEmpty: { fontSize: 10.5, color: 'var(--dsw-alias-label-tertiary)', padding: '2px 4px' },
+      // ---- 4.1 无感入口（header chip / composer dock / 注意力气泡） ----
+      ambientChipWrap: { position: 'relative', display: 'inline-flex', alignItems: 'center', minWidth: 0 },
+      ambientChip: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        maxWidth: 360,
+        minWidth: 0,
+        padding: '2px 8px',
+        borderRadius: 999,
+        border: '0.5px solid color-mix(in srgb, var(--dsw-alias-brand-primary) 35%, transparent)',
+        background: 'color-mix(in srgb, var(--dsw-alias-brand-primary) 8%, transparent)',
+        color: 'var(--dsw-alias-label-primary)',
+        fontFamily: FONT_STACK,
+        fontSize: 11,
+        lineHeight: 1.5,
+        cursor: 'pointer',
+        transition: 'box-shadow 0.25s ease, transform 0.25s ease'
+      },
+      ambientChipOpen: { boxShadow: '0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 28%, transparent)' },
+      ambientChipPulse: {
+        transform: 'scale(1.04)',
+        boxShadow: '0 0 0 4px color-mix(in srgb, var(--dsw-alias-brand-primary) 22%, transparent)'
+      },
+      ambientChipText: {
+        minWidth: 0,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap'
+      },
+      ambientChipBadge: {
+        flex: 'none',
+        minWidth: 15,
+        height: 15,
+        padding: '0 4px',
+        borderRadius: 999,
+        background: 'var(--dsw-alias-state-warn-primary)',
+        color: 'var(--dsw-alias-bg-layer-1)',
+        fontSize: 9.5,
+        fontWeight: 700,
+        lineHeight: '15px',
+        textAlign: 'center'
+      },
+      ambientPopover: {
+        position: 'fixed',
+        zIndex: 9999,
+        width: 360,
+        maxWidth: 'calc(100vw - 24px)',
+        maxHeight: '70vh',
+        overflowY: 'auto',
+        padding: '10px 11px 9px',
+        borderRadius: 12,
+        border: '0.5px solid var(--dsw-alias-border-l3)',
+        background: 'var(--dsw-alias-bg-layer-1)',
+        color: 'var(--dsw-alias-label-primary)',
+        boxShadow: '0 16px 42px rgba(0,0,0,.32)',
+        fontFamily: FONT_STACK,
+        fontSize: 12,
+        boxSizing: 'border-box'
+      },
+      ambientDock: {
+        width: '100%',
+        boxSizing: 'border-box',
+        borderRadius: 10,
+        border: '0.5px solid color-mix(in srgb, var(--dsw-alias-brand-primary) 28%, transparent)',
+        background: 'color-mix(in srgb, var(--dsw-alias-brand-primary) 6%, transparent)',
+        color: 'var(--dsw-alias-label-primary)',
+        fontFamily: FONT_STACK,
+        fontSize: 11.5,
+        overflow: 'hidden',
+        margin: '4px 0'
+      },
+      ambientDockRow: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 },
+      ambientDockMain: {
+        flex: 1,
+        minWidth: 0,
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '5px 9px',
+        border: 'none',
+        background: 'transparent',
+        color: 'inherit',
+        fontFamily: 'inherit',
+        fontSize: 11.5,
+        textAlign: 'left',
+        cursor: 'pointer'
+      },
+      ambientDockBadge: { flex: 'none', fontSize: 12 },
+      ambientDockText: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      ambientDockAction: {
+        flex: 'none',
+        border: 'none',
+        background: 'transparent',
+        color: 'var(--dsw-alias-brand-primary)',
+        fontFamily: 'inherit',
+        fontSize: 11,
+        padding: '4px 6px',
+        borderRadius: 6,
+        cursor: 'pointer'
+      },
+      ambientPanel: { display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 },
+      ambientPanelHead: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+      ambientPanelTitle: { fontSize: 12.5, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
+      ambientPanelMuted: { fontSize: 10.5, color: 'var(--dsw-alias-label-tertiary)', fontWeight: 400 },
+      ambientPanelClose: {
+        marginLeft: 'auto',
+        border: 'none',
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-tertiary)',
+        fontFamily: 'inherit',
+        fontSize: 13,
+        lineHeight: 1,
+        padding: '0 2px',
+        cursor: 'pointer'
+      },
+      ambientSection: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 5,
+        padding: '7px 8px',
+        borderRadius: 8,
+        border: '0.5px solid var(--dsw-alias-border-l2)',
+        background: 'var(--dsw-alias-bg-layer-2)'
+      },
+      ambientSectionHead: { fontSize: 11.5, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
+      ambientTaskTitle: { fontSize: 12, color: 'var(--dsw-alias-label-primary)', wordBreak: 'break-word' },
+      ambientMetaRow: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 10.5, color: 'var(--dsw-alias-label-secondary)' },
+      ambientProgressTrack: { height: 5, borderRadius: 999, background: 'var(--dsw-alias-border-l2)', overflow: 'hidden' },
+      ambientProgressBar: { height: '100%', borderRadius: 999, background: 'var(--dsw-alias-brand-primary)' },
+      ambientSteps: { display: 'flex', flexDirection: 'column', gap: 2 },
+      ambientStep: { fontSize: 10.5, color: 'var(--dsw-alias-label-secondary)' },
+      ambientStepActive: { color: 'var(--dsw-alias-brand-primary)', fontWeight: 600 },
+      ambientFlows: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2 },
+      ambientFlowLine: { fontSize: 10, color: 'var(--dsw-alias-label-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis' },
+      ambientFlowTime: { marginRight: 5, color: 'var(--dsw-alias-label-tertiary)' },
+      ambientItem: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 3,
+        padding: '5px 6px',
+        borderRadius: 6,
+        background: 'color-mix(in srgb, var(--dsw-alias-bg-layer-1) 70%, transparent)'
+      },
+      ambientItemHead: { display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'space-between', fontSize: 11.5, color: 'var(--dsw-alias-label-primary)', minWidth: 0 },
+      ambientItemDetail: { fontSize: 10.5, color: 'var(--dsw-alias-label-secondary)', wordBreak: 'break-word' },
+      ambientTemplate: { fontSize: 10, color: 'var(--dsw-alias-label-tertiary)', fontFamily: 'ui-monospace, Consolas, monospace', wordBreak: 'break-all' },
+      ambientBtnRow: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+      ambientBtn: {
+        border: '0.5px solid var(--dsw-alias-border-l3)',
+        borderRadius: 6,
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-primary)',
+        fontFamily: 'inherit',
+        fontSize: 10.5,
+        lineHeight: 1.4,
+        padding: '2px 8px',
+        cursor: 'pointer',
+        whiteSpace: 'nowrap'
+      },
+      ambientBtnPrimary: {
+        border: '0.5px solid transparent',
+        background: 'var(--dsw-alias-brand-primary)',
+        color: 'var(--dsw-alias-bg-layer-1)',
+        fontWeight: 600
+      },
+      ambientPanelFoot: { display: 'flex', flexDirection: 'column', gap: 4, paddingTop: 2 },
+      ambientPanelNotice: {
+        fontSize: 10.5,
+        color: 'var(--dsw-alias-state-success-primary)',
+        background: 'color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent)',
+        borderRadius: 6,
+        padding: '3px 6px'
+      },
+      ambientPanelError: {
+        fontSize: 10.5,
+        color: 'var(--dsw-alias-state-error-primary)',
+        background: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent)',
+        borderRadius: 6,
+        padding: '3px 6px'
+      }
     }
     //#endregion
 
@@ -4881,6 +5062,1650 @@ window.__ModuleLoader__.load({
     }
     //#endregion
 
+    //#region 4.1 无感入口（ambientStore + header chip + composer dock + 注意力气泡）
+    /**
+     * 4.1 Ambient Entry：DSH 原生会话页里的零切换入口。
+     *  - 模块级 ambientStore：所有组件共享同一条 /ambient 轮询（引用计数、document.hidden 暂停）；
+     *  - header chip（conversation.session.header.utilities）：任务/阶段/待办/资源冲突；
+     *  - composer dock（conversation.composer.dock）：可选全宽 1 行任务条；
+     *  - 注意力气泡：attention.count>0 时自动展开一次（轻 pulse），列 top3，1-click 处理。
+     * 任何失败/字段缺失/过期数据 → 组件直接不渲染，不抛错、不影响输入。
+     */
+    var AMBIENT_URL = '/api/session-bridge/ambient'
+    var AMBIENT_POLL_MS = 4000
+    /** 超过这么久没有一次成功的 /ambient，就视为 stale：隐藏 chip/气泡。 */
+    var AMBIENT_STALE_MS = 30000
+    var AMBIENT_ACK_STORAGE_PREFIX = 'session-bridge.ack.'
+    var AMBIENT_MAX_ATTENTION = 3
+
+    /** /ambient 响应归一化（docs/4.1-ambient-plan.md §3.7 + 实际 host buildAmbientFromState）。 */
+    function normalizeAmbient(raw) {
+      var src = isPlainObject(raw) ? raw : {}
+      var sessionSrc = isPlainObject(src.session) ? src.session : {}
+      var task = null
+      if (isPlainObject(src.task)) {
+        var t = src.task
+        var taskId = asString(t.id || t.taskId)
+        if (taskId !== '' || asString(t.title) !== '') {
+          task = {
+            id: taskId,
+            title: asString(t.title),
+            lineStatus: asString(t.lineStatus),
+            stage: asNumber(t.stage, 0),
+            stageText: asString(t.stageText),
+            stageTotal: asNumber(t.stageTotal, 5),
+            progress: asNumber(t.progress, 0),
+            leader: isPlainObject(t.leader)
+              ? { id: asString(t.leader.id), handle: asString(t.leader.handle || t.leader.title) }
+              : null,
+            steps: asArray(t.steps)
+              .filter(isPlainObject)
+              .slice(0, 5)
+              .map(function (step) {
+                return {
+                  i: asNumber(step.i, 0),
+                  text: asString(step.text),
+                  status: asString(step.status, 'pending')
+                }
+              }),
+            flows: asArray(t.flows)
+              .filter(isPlainObject)
+              .slice(-3)
+              .map(function (flow) {
+                return {
+                  ts: asTimestamp(flow.ts),
+                  action: asString(flow.action || flow.kind),
+                  detail: asString(flow.detail),
+                  fromName: asString(flow.fromName || flow.from)
+                }
+              })
+          }
+        }
+      }
+      var attentionSrc = isPlainObject(src.attention) ? src.attention : {}
+      var attentionItems = asArray(attentionSrc.items)
+        .filter(isPlainObject)
+        .map(function (item) {
+          return {
+            id: asString(item.id),
+            kind: asString(item.kind, 'notice'),
+            priority: asNumber(item.priority, 0),
+            ts: asTimestamp(item.ts),
+            title: asString(item.title),
+            detail: asString(item.detail),
+            approvalId: asString(item.approvalId),
+            requestId: asString(item.requestId),
+            taskId: asString(item.taskId),
+            groupId: asString(item.groupId),
+            sessionId: asString(item.sessionId),
+            from: asString(item.from),
+            fromHandle: asString(item.fromHandle || item.authorHandle),
+            action: asString(item.action)
+          }
+        })
+        .filter(function (item) {
+          return item.id !== '' || item.title !== ''
+        })
+      attentionItems.sort(function (a, b) {
+        return b.priority - a.priority || b.ts - a.ts
+      })
+      var pendingSrc = isPlainObject(src.pending) ? src.pending : {}
+      var requests = asArray(pendingSrc.requests)
+        .filter(isPlainObject)
+        .map(function (item) {
+          return {
+            id: asString(item.id || item.requestId),
+            title: asString(item.title),
+            detail: asString(item.detail),
+            groupId: asString(item.groupId),
+            from: asString(item.from || item.author),
+            fromHandle: asString(item.fromHandle || item.authorHandle || item.fromName),
+            requestTo: asArray(item.requestTo)
+              .map(function (entry) {
+                return asString(entry)
+              })
+              .filter(function (entry) {
+                return entry !== ''
+              }),
+            tool: asString(item.tool, 'session_ask')
+          }
+        })
+        .filter(function (item) {
+          return item.id !== '' || item.title !== ''
+        })
+      var transfers = asArray(pendingSrc.transfers)
+        .filter(isPlainObject)
+        .map(function (item) {
+          return {
+            id: asString(item.id || item.requestId || item.transferId),
+            requestId: asString(item.requestId || item.id),
+            taskId: asString(item.taskId),
+            title: asString(item.title),
+            detail: asString(item.detail),
+            from: asString(item.from || item.author),
+            fromHandle: asString(item.fromHandle || item.authorHandle || item.fromName)
+          }
+        })
+        .filter(function (item) {
+          return item.id !== '' || item.title !== ''
+        })
+      var approvals = asArray(pendingSrc.approvals)
+        .filter(isPlainObject)
+        .map(function (item) {
+          return {
+            id: asString(item.id),
+            title: asString(item.title),
+            source: asString(item.source),
+            reason: asString(item.reason)
+          }
+        })
+        .filter(function (item) {
+          return item.id !== ''
+        })
+      var councilSrc = isPlainObject(pendingSrc.council) ? pendingSrc.council : {}
+      var resourceSrc = isPlainObject(src.resource) ? src.resource : {}
+      var actions = asArray(src.actions)
+        .filter(isPlainObject)
+        .map(function (item) {
+          return {
+            id: asString(item.id),
+            kind: asString(item.kind),
+            label: asString(item.label),
+            tool: asString(item.tool),
+            command: asString(item.command),
+            target: asString(item.target),
+            payload: isPlainObject(item.payload) ? item.payload : {}
+          }
+        })
+      return {
+        ok: src.ok !== false,
+        schemaVersion: asString(src.schemaVersion),
+        generatedAt: asTimestamp(src.generatedAt),
+        stale: src.stale === true,
+        session: {
+          id: asString(sessionSrc.id),
+          title: asString(sessionSrc.title),
+          availability: asString(sessionSrc.availability)
+        },
+        task: task,
+        attention: {
+          count: Math.max(0, asNumber(attentionSrc.count, attentionItems.length)),
+          items: attentionItems.slice(0, AMBIENT_MAX_ATTENTION)
+        },
+        pending: {
+          requests: requests,
+          transfers: transfers,
+          approvals: approvals,
+          council: {
+            members: asNumber(councilSrc.members, 0),
+            chair: asString(councilSrc.chair),
+            isMember: councilSrc.isMember === true,
+            pendingApprovals: asNumber(councilSrc.pendingApprovals, approvals.length)
+          }
+        },
+        resource: {
+          available: resourceSrc.available === true,
+          degraded: resourceSrc.degraded === true,
+          owner: asString(resourceSrc.owner),
+          ownerName: asString(resourceSrc.ownerName),
+          heldByMe: resourceSrc.heldByMe === true,
+          ttlMs: asNumber(resourceSrc.ttlMs, 0),
+          priority: isPlainObject(resourceSrc.priority)
+            ? asNumber(resourceSrc.priority.current, 0)
+            : asNumber(resourceSrc.priority, 0)
+        },
+        actions: actions
+      }
+    }
+
+    /** localStorage 兜底 ack：kind:id:ts + 纯 id 双 key，刷新后不重复冒泡。 */
+    function ambientReadAcked(sessionId) {
+      var out = {}
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          var raw = window.localStorage.getItem(AMBIENT_ACK_STORAGE_PREFIX + asString(sessionId))
+          var parsed = raw ? JSON.parse(raw) : null
+          if (isPlainObject(parsed)) out = parsed
+        }
+      } catch (error) {
+        out = {}
+      }
+      return out
+    }
+
+    function ambientWriteAcked(sessionId, acked) {
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          window.localStorage.setItem(AMBIENT_ACK_STORAGE_PREFIX + asString(sessionId), JSON.stringify(acked || {}))
+        }
+      } catch (error) {
+        /* 存储不可用时静默 */
+      }
+    }
+
+    function ambientAckKeysOf(id, ts) {
+      var raw = asString(id)
+      var keys = []
+      if (raw === '') return keys
+      keys.push(raw)
+      keys.push(raw + ':' + String(asNumber(ts, 0)))
+      var colon = raw.lastIndexOf(':')
+      if (colon > 0 && colon < raw.length - 1) keys.push(raw.slice(colon + 1))
+      return keys
+    }
+
+    function ambientIsAcked(acked, item) {
+      if (!isPlainObject(acked) || !item) return false
+      var keys = ambientAckKeysOf(item.id, item.ts)
+      for (var i = 0; i < keys.length; i += 1) {
+        if (acked[keys[i]] === 1 || acked[keys[i]] === true) return true
+      }
+      return false
+    }
+
+    /** 把本地已读应用到一条 ambient（过滤 attention / approvals，重算 count）。 */
+    function ambientApplyLocalAcks(sessionId, ambient) {
+      var acked = ambientReadAcked(sessionId)
+      if (!isPlainObject(ambient)) return ambient
+      var total = asNumber(ambient.attention.count, 0)
+      var original = asArray(ambient.attention.items)
+      var filtered = []
+      var removed = 0
+      for (var i = 0; i < original.length; i += 1) {
+        if (ambientIsAcked(acked, original[i])) removed += 1
+        else filtered.push(original[i])
+      }
+      if (removed > 0) {
+        ambient.attention.items = filtered
+        ambient.attention.count = total <= original.length ? filtered.length : Math.max(0, total - removed)
+      }
+      ambient.pending.approvals = asArray(ambient.pending.approvals).filter(function (approval) {
+        return !ambientIsAcked(acked, { id: approval.id, ts: 0 })
+      })
+      return ambient
+    }
+
+    function ambientIsUsable(entry, sessionId) {
+      if (!isPlainObject(entry) || !isPlainObject(entry.ambient)) return false
+      var ambient = entry.ambient
+      if (ambient.ok === false || ambient.stale === true) return false
+      if (asString(ambient.session.id) !== asString(sessionId)) return false
+      if (!(entry.lastGoodAt > 0)) return false
+      return Date.now() - entry.lastGoodAt <= AMBIENT_STALE_MS
+    }
+
+    /** 模块级共享 ambientStore：同页多组件只轮询一份。 */
+    function createAmbientStore() {
+      var entries = {}
+      var listeners = {}
+      var timer = null
+      var visibilityInstalled = false
+      var autoOpened = {}
+      var requestSeq = 0
+
+      function listenerList(sessionId) {
+        return listeners[sessionId] || []
+      }
+      function hasListeners() {
+        for (var key in listeners) {
+          if (Object.prototype.hasOwnProperty.call(listeners, key) && listeners[key].length > 0) return true
+        }
+        return false
+      }
+      function snapshot(sessionId) {
+        return entries[asString(sessionId)] || null
+      }
+      function notify(sessionId) {
+        var list = listenerList(sessionId).slice()
+        for (var i = 0; i < list.length; i += 1) {
+          try {
+            list[i]()
+          } catch (error) {
+            /* 单个订阅者异常不能影响其它组件 */
+          }
+        }
+      }
+      function isDocumentHidden() {
+        try {
+          return typeof document !== 'undefined' && document.hidden === true
+        } catch (error) {
+          return false
+        }
+      }
+      function tick() {
+        if (isDocumentHidden()) return
+        var ids = Object.keys(listeners)
+        for (var i = 0; i < ids.length; i += 1) {
+          var sid = ids[i]
+          if (listenerList(sid).length === 0) continue
+          var previous = entries[sid] || null
+          // 连续失败退避：旧宿主没有 /ambient 或后端未实现时，每 60s 探测一次即可，不刷 404。
+          if (
+            previous &&
+            asNumber(previous.errorCount, 0) >= 5 &&
+            Date.now() - asNumber(previous.lastAttemptAt, 0) < 60000
+          ) {
+            continue
+          }
+          fetchOne(sid, false)
+        }
+      }
+      function ensureTimer() {
+        if (timer !== null || !hasListeners()) return
+        if (typeof window === 'undefined' || typeof window.setInterval !== 'function') return
+        timer = window.setInterval(tick, AMBIENT_POLL_MS)
+        tick()
+      }
+      function stopTimer() {
+        if (timer === null) return
+        try {
+          if (typeof window !== 'undefined' && typeof window.clearInterval === 'function') window.clearInterval(timer)
+        } catch (error) {
+          /* ignore */
+        }
+        timer = null
+      }
+      function installVisibility() {
+        if (visibilityInstalled) return
+        visibilityInstalled = true
+        try {
+          if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return
+          document.addEventListener('visibilitychange', function () {
+            try {
+              if (document.hidden === true) stopTimer()
+              else ensureTimer()
+            } catch (error) {
+              /* ignore */
+            }
+          })
+        } catch (error) {
+          /* ignore */
+        }
+      }
+      function fetchOne(sessionId, force) {
+        var sid = asString(sessionId)
+        if (sid === '') return Promise.resolve(null)
+        var existing = entries[sid] || null
+        if (existing && existing.inFlight && force !== true) return existing.inFlight
+        if (typeof fetch !== 'function') {
+          entries[sid] = {
+            ambient: existing ? existing.ambient : null,
+            lastGoodAt: existing ? existing.lastGoodAt : 0,
+            lastAttemptAt: Date.now(),
+            inFlight: null,
+            error: 'fetch-unavailable',
+            errorCount: asNumber(existing ? existing.errorCount : 0, 0) + 1
+          }
+          notify(sid)
+          return Promise.resolve(null)
+        }
+        var seq = ++requestSeq
+        var promise = fetchJson(AMBIENT_URL + '?sessionId=' + encodeURIComponent(sid), {
+          method: 'GET',
+          headers: { accept: 'application/json' }
+        }).then(
+          function (payload) {
+            var ambient = normalizeAmbient(payload)
+            var usable =
+              ambient.ok === true &&
+              asString(ambient.session.id) === sid &&
+              ambient.generatedAt > 0 &&
+              ambient.stale !== true
+            if (!usable) {
+              var previous = entries[sid] || null
+              entries[sid] = {
+                ambient: previous ? previous.ambient : null,
+                lastGoodAt: previous ? previous.lastGoodAt : 0,
+                lastAttemptAt: Date.now(),
+                inFlight: null,
+                error: 'invalid-ambient',
+                errorCount: asNumber(previous ? previous.errorCount : 0, 0) + 1
+              }
+              notify(sid)
+              return null
+            }
+            ambientApplyLocalAcks(sid, ambient)
+            entries[sid] = {
+              ambient: ambient,
+              lastGoodAt: Date.now(),
+              lastAttemptAt: Date.now(),
+              inFlight: null,
+              error: '',
+              errorCount: 0
+            }
+            notify(sid)
+            return ambient
+          },
+          function (error) {
+            var previous = entries[sid] || null
+            entries[sid] = {
+              ambient: previous ? previous.ambient : null,
+              lastGoodAt: previous ? previous.lastGoodAt : 0,
+              lastAttemptAt: Date.now(),
+              inFlight: null,
+              error: errorMessage(error),
+              errorCount: asNumber(previous ? previous.errorCount : 0, 0) + 1
+            }
+            notify(sid)
+            return null
+          }
+        )
+        entries[sid] = {
+          ambient: existing ? existing.ambient : null,
+          lastGoodAt: existing ? existing.lastGoodAt : 0,
+          lastAttemptAt: Date.now(),
+          inFlight: promise,
+          error: existing ? existing.error : '',
+          errorCount: existing ? asNumber(existing.errorCount, 0) : 0
+        }
+        // seq 只用于调试；多请求时以最后一次落地为准（后写覆盖，无需丢弃旧响应）。
+        void seq
+        return promise
+      }
+      function subscribe(sessionId, listener) {
+        var sid = asString(sessionId)
+        if (sid === '' || typeof listener !== 'function') return function () {}
+        if (!listeners[sid]) listeners[sid] = []
+        listeners[sid].push(listener)
+        installVisibility()
+        ensureTimer()
+        if (!entries[sid] || !entries[sid].lastGoodAt) fetchOne(sid, false)
+        return function () {
+          var list = listeners[sid] || []
+          var index = list.indexOf(listener)
+          if (index >= 0) list.splice(index, 1)
+          if (!list.length) delete listeners[sid]
+          if (!hasListeners()) stopTimer()
+        }
+      }
+      function refresh(sessionId) {
+        return fetchOne(sessionId, true)
+      }
+      /** 本地已读 + 后端 inbox.ack（后端失败保留本地已读，避免重复打扰）。 */
+      function ack(sessionId, ids) {
+        var sid = asString(sessionId)
+        var list = asArray(ids)
+          .map(function (id) {
+            return asString(id)
+          })
+          .filter(function (id) {
+            return id !== ''
+          })
+        if (list.length === 0) return Promise.resolve({ ok: true })
+        var entry = entries[sid]
+        var ambient = entry && entry.ambient
+        if (ambient) {
+          var acked = ambientReadAcked(sid)
+          for (var i = 0; i < list.length; i += 1) {
+            var keys = ambientAckKeysOf(list[i], 0)
+            for (var k = 0; k < keys.length; k += 1) acked[keys[k]] = 1
+          }
+          var attentionItems = asArray(ambient.attention.items)
+          var kept = []
+          var removed = 0
+          for (var j = 0; j < attentionItems.length; j += 1) {
+            if (ambientIsAcked(acked, attentionItems[j])) removed += 1
+            else kept.push(attentionItems[j])
+          }
+          var total = asNumber(ambient.attention.count, 0)
+          ambient.attention.items = kept
+          ambient.attention.count = total <= attentionItems.length ? kept.length : Math.max(0, total - removed)
+          ambient.pending.approvals = asArray(ambient.pending.approvals).filter(function (approval) {
+            return !ambientIsAcked(acked, { id: approval.id, ts: 0 })
+          })
+          ambientWriteAcked(sid, acked)
+          notify(sid)
+        }
+        return sendCommand('inbox.ack', { ids: list }).then(
+          function () {
+            refresh(sid)
+            return { ok: true }
+          },
+          function (error) {
+            return { ok: false, local: true, error: errorMessage(error) }
+          }
+        )
+      }
+      function approve(sessionId, approvalId) {
+        var sid = asString(sessionId)
+        var id = asString(approvalId)
+        if (id === '') return Promise.resolve({ ok: false, error: '缺少审批 id' })
+        return sendCommand('approval.approve', { id: id }).then(
+          function () {
+            refresh(sid)
+            return { ok: true }
+          },
+          function (error) {
+            return { ok: false, error: errorMessage(error) }
+          }
+        )
+      }
+      function reject(sessionId, approvalId) {
+        var sid = asString(sessionId)
+        var id = asString(approvalId)
+        if (id === '') return Promise.resolve({ ok: false, error: '缺少审批 id' })
+        return sendCommand('approval.reject', { id: id }).then(
+          function () {
+            refresh(sid)
+            return { ok: true }
+          },
+          function (error) {
+            return { ok: false, error: errorMessage(error) }
+          }
+        )
+      }
+      /** 宿主允许时用 ambient.act steer 当前会话；未知 action 会 reject，由调用方降级复制模板。 */
+      function steer(sessionId, act) {
+        var sid = asString(sessionId)
+        if (sid === '') return Promise.resolve({ ok: false, error: '缺少会话 id' })
+        return sendCommand('ambient.act', { sessionId: sid, act: isPlainObject(act) ? act : {} }).then(
+          function () {
+            refresh(sid)
+            return { ok: true }
+          },
+          function (error) {
+            return { ok: false, error: errorMessage(error) }
+          }
+        )
+      }
+      function shouldAutoOpen(sessionId, signature) {
+        var sid = asString(sessionId)
+        var sig = asString(signature)
+        if (sid === '' || sig === '') return false
+        return autoOpened[sid] !== sig
+      }
+      function markAutoOpened(sessionId, signature) {
+        autoOpened[asString(sessionId)] = asString(signature)
+      }
+      return {
+        subscribe: subscribe,
+        snapshot: snapshot,
+        refresh: refresh,
+        ack: ack,
+        approve: approve,
+        reject: reject,
+        steer: steer,
+        shouldAutoOpen: shouldAutoOpen,
+        markAutoOpened: markAutoOpened,
+        stop: stopTimer
+      }
+    }
+
+    var ambientStore = createAmbientStore()
+
+    // ---- 纯展示/交互工具 ----
+    function ambientClip(value, max) {
+      var text = asString(value)
+      var limit = asNumber(max, 24)
+      if (limit <= 0 || text.length <= limit) return text
+      return text.slice(0, limit).replace(/\s+$/, '') + '…'
+    }
+
+    function ambientKindIcon(kind) {
+      var k = asString(kind)
+      if (k === 'approval') return '🛡️'
+      if (k === 'approval-timeout') return '⏰'
+      if (k === 'urgent-request') return '⚡'
+      if (k === 'request') return '📨'
+      if (k === 'stuck-task') return '⏳'
+      if (k === 'paused-task') return '⏸️'
+      if (k === 'lease-wait') return '🖥️'
+      if (k === 'queued-ask') return '🧾'
+      if (k === 'completion') return '✅'
+      return '•'
+    }
+
+    function ambientAttentionSignature(ambient) {
+      if (!isPlainObject(ambient) || !isPlainObject(ambient.attention)) return ''
+      var items = asArray(ambient.attention.items)
+      var parts = []
+      for (var i = 0; i < items.length; i += 1) parts.push(asString(items[i].id) + ':' + String(asNumber(items[i].ts, 0)))
+      return parts.join('|')
+    }
+
+    function ambientHasTask(ambient) {
+      return isPlainObject(ambient) && isPlainObject(ambient.task) && (asString(ambient.task.id) !== '' || asString(ambient.task.title) !== '')
+    }
+
+    function ambientAttentionCount(ambient) {
+      return ambient && isPlainObject(ambient.attention) ? Math.max(0, asNumber(ambient.attention.count, 0)) : 0
+    }
+
+    function ambientPendingCount(ambient) {
+      if (!isPlainObject(ambient) || !isPlainObject(ambient.pending)) return 0
+      return (
+        asArray(ambient.pending.requests).length +
+        asArray(ambient.pending.transfers).length +
+        asArray(ambient.pending.approvals).length
+      )
+    }
+
+    /** chip 只在「有任务」或「有 attention」时出现（无任务无 attention 完全零占位）。 */
+    function ambientChipVisible(ambient) {
+      return ambientHasTask(ambient) || ambientAttentionCount(ambient) > 0
+    }
+
+    /** dock 条在有任何态势时出现（含待协作/待审批）。 */
+    function ambientDockVisible(ambient) {
+      return ambientHasTask(ambient) || ambientAttentionCount(ambient) > 0 || ambientPendingCount(ambient) > 0
+    }
+
+    function ambientResourceConflict(ambient, sessionId) {
+      if (!isPlainObject(ambient) || !isPlainObject(ambient.resource)) return null
+      var resource = ambient.resource
+      if (resource.available !== true || resource.degraded === true) return null
+      if (asString(resource.owner) === '' || resource.heldByMe === true) return null
+      if (asString(resource.owner) === asString(sessionId)) return null
+      return resource
+    }
+
+    function ambientOwnerText(resource) {
+      if (!isPlainObject(resource)) return '其他会话'
+      var name = asString(resource.ownerName)
+      if (name !== '') return ambientClip(name, 16)
+      return shortId(resource.owner)
+    }
+
+    function ambientProgressPercent(task) {
+      if (!isPlainObject(task)) return 0
+      var value = asNumber(task.progress, 0)
+      if (value < 0) value = 0
+      if (value > 100) value = 100
+      return value
+    }
+
+    function ambientTaskStageText(task) {
+      if (!isPlainObject(task)) return ''
+      var stageText = asString(task.stageText)
+      var stage = Math.max(0, asNumber(task.stage, 0))
+      var total = Math.max(0, asNumber(task.stageTotal, 0))
+      if (total > 0) return (stageText !== '' ? stageText + ' ' : '') + stage + '/' + total
+      return stageText
+    }
+
+    function ambientReplyTemplate(request) {
+      var item = isPlainObject(request) ? request : {}
+      var id = asString(item.id || item.requestId)
+      var title = ambientClip(item.title || item.detail, 60)
+      var groupHint = asString(item.groupId) !== '' ? asString(item.groupId) : '同一群'
+      var toHint = asString(item.fromHandle || item.from) !== '' ? asString(item.fromHandle || item.from) : '请求方'
+      return (
+        '【星桥内联动作】请用 session_ask 处理请求 ' +
+        id +
+        '：' +
+        title +
+        '（group=' +
+        groupHint +
+        '，to=' +
+        toHint +
+        '；拿到结果后用 session_share kind=handoff replyTo=' +
+        id +
+        ' 回复）。'
+      )
+    }
+
+    function ambientTransferTemplate(transfer, approve) {
+      var item = isPlainObject(transfer) ? transfer : {}
+      var id = asString(item.id || item.requestId)
+      return (
+        '【星桥内联动作】请用 task_transfer action=' +
+        (approve === true ? 'approve' : 'reject') +
+        ' requestId=' +
+        id +
+        ' 处理这条转交申请。'
+      )
+    }
+
+    function copyAmbientText(text) {
+      var value = asString(text)
+      if (value === '') return false
+      try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          navigator.clipboard.writeText(value)
+          return true
+        }
+      } catch (error) {
+        /* fall through */
+      }
+      try {
+        if (typeof document !== 'undefined' && document.body && typeof document.createElement === 'function') {
+          var node = document.createElement('textarea')
+          node.value = value
+          node.setAttribute('readonly', 'readonly')
+          node.style.position = 'fixed'
+          node.style.opacity = '0'
+          document.body.appendChild(node)
+          node.select()
+          var copied = document.execCommand && document.execCommand('copy')
+          document.body.removeChild(node)
+          return copied === true
+        }
+      } catch (error) {
+        /* ignore */
+      }
+      return false
+    }
+
+    /** 订阅当前会话的 ambient；模块级 store 共享一份轮询。 */
+    function useAmbientEntry(sessionId) {
+      var state = React.useState(function () {
+        return ambientStore.snapshot(sessionId)
+      })
+      var entry = state[0]
+      var setEntry = state[1]
+      React.useEffect(
+        function () {
+          var disposed = false
+          var update = function () {
+            if (!disposed) setEntry(ambientStore.snapshot(sessionId))
+          }
+          var unsubscribe = ambientStore.subscribe(sessionId, update)
+          update()
+          return function () {
+            disposed = true
+            unsubscribe()
+          }
+        },
+        [sessionId]
+      )
+      return entry
+    }
+
+    /** 供 slot 注册用：所有 ambient 组件都包一层现有 ErrorBoundary，渲染异常只隐藏自己。 */
+    function ambientSafeComponent(Component) {
+      return function SessionBridgeAmbientSlot(props) {
+        return h(PanelErrorBoundary, null, h(Component, props))
+      }
+    }
+
+    function AmbientChip(props) {
+      var sessionId = asString(props && props.ambientSessionId)
+      var entry = useAmbientEntry(sessionId)
+      var openState = React.useState(false)
+      var open = openState[0]
+      var setOpen = openState[1]
+      var pulseState = React.useState(false)
+      var pulse = pulseState[0]
+      var setPulse = pulseState[1]
+      var anchorState = React.useState({ top: 56, right: 12 })
+      var anchor = anchorState[0]
+      var setAnchor = anchorState[1]
+      var rootRef = React.useRef(null)
+      var panelRef = React.useRef(null)
+      var pulseTimer = React.useRef(null)
+      var autoSigRef = React.useRef('')
+      var ambient = entry && isPlainObject(entry.ambient) ? entry.ambient : null
+      var usable = ambientIsUsable(entry, sessionId)
+
+      // 新 attention（签名变化）自动展开一次 + 轻 pulse；处理后不再自动。
+      React.useEffect(
+        function () {
+          if (!usable) return
+          var count = ambientAttentionCount(ambient)
+          if (count <= 0) return
+          var signature = ambientAttentionSignature(ambient)
+          if (signature === '' || signature === autoSigRef.current) return
+          autoSigRef.current = signature
+          if (!ambientStore.shouldAutoOpen(sessionId, signature)) return
+          ambientStore.markAutoOpened(sessionId, signature)
+          setOpen(true)
+          setPulse(true)
+          if (pulseTimer.current) {
+            try {
+              clearTimeout(pulseTimer.current)
+            } catch (error) {
+              /* ignore */
+            }
+          }
+          pulseTimer.current = setTimeout(function () {
+            setPulse(false)
+          }, 1400)
+        },
+        [usable, ambient, sessionId, setOpen, setPulse]
+      )
+
+      // 关闭时清理 pulse 定时器。
+      React.useEffect(function () {
+        return function () {
+          if (pulseTimer.current) {
+            try {
+              clearTimeout(pulseTimer.current)
+            } catch (error) {
+              /* ignore */
+            }
+          }
+        }
+      }, [])
+
+      // 点击外部 / Escape 关闭 popover。
+      React.useEffect(
+        function () {
+          if (!open) return undefined
+          var onPointerDown = function (event) {
+            try {
+              var target = event && event.target
+              if (rootRef.current && rootRef.current.contains(target)) return
+              if (panelRef.current && panelRef.current.contains(target)) return
+              setOpen(false)
+            } catch (error) {
+              /* ignore */
+            }
+          }
+          var onKeyDown = function (event) {
+            if (event && event.key === 'Escape') setOpen(false)
+          }
+          try {
+            if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+              document.addEventListener('pointerdown', onPointerDown, true)
+              document.addEventListener('keydown', onKeyDown, true)
+            }
+          } catch (error) {
+            /* ignore */
+          }
+          return function () {
+            try {
+              if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+                document.removeEventListener('pointerdown', onPointerDown, true)
+                document.removeEventListener('keydown', onKeyDown, true)
+              }
+            } catch (error) {
+              /* ignore */
+            }
+          }
+        },
+        [open, setOpen]
+      )
+
+      if (!usable || !ambientChipVisible(ambient)) return null
+
+      var task = isPlainObject(ambient.task) ? ambient.task : null
+      var attentionCount = ambientAttentionCount(ambient)
+      var resource = ambientResourceConflict(ambient, sessionId)
+      var parts = []
+      if (task) {
+        var stage = ambientTaskStageText(task)
+        parts.push(
+          '任务：' + ambientClip(task.title, 18) + (stage !== '' ? ' · ' + stage : '') + ' · ' + ambientProgressPercent(task) + '%'
+        )
+      }
+      if (attentionCount > 0) parts.push('待处理 ' + attentionCount)
+      if (task && resource) parts.push('桌面被 ' + ambientOwnerText(resource) + ' 占用')
+      var label = '🌉 星桥 · ' + (parts.length ? parts.join(' · ') : '本会话态势')
+      var tooltipParts = []
+      if (task) {
+        tooltipParts.push('任务：' + task.title + ' · ' + ambientTaskStageText(task) + ' · ' + ambientProgressPercent(task) + '%')
+        if (isPlainObject(task.leader) && asString(task.leader.handle || task.leader.id) !== '') {
+          tooltipParts.push('组长：' + asString(task.leader.handle || task.leader.id))
+        }
+      }
+      if (attentionCount > 0) tooltipParts.push('待处理 ' + attentionCount + ' 条（点开处理）')
+      if (ambientPendingCount(ambient) > 0) tooltipParts.push('待协作/待审批 ' + ambientPendingCount(ambient) + ' 条')
+      if (resource) tooltipParts.push('computer-use 桌面被 ' + ambientOwnerText(resource) + ' 占用（TTL ' + Math.max(0, Math.round(asNumber(resource.ttlMs, 0) / 1000)) + 's）')
+      var onClick = function (event) {
+        try {
+          if (event && event.currentTarget && typeof event.currentTarget.getBoundingClientRect === 'function') {
+            var rect = event.currentTarget.getBoundingClientRect()
+            var viewport = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
+            setAnchor({ top: Math.round(rect.bottom + 6), right: Math.max(8, Math.round(viewport - rect.right)) })
+          }
+        } catch (error) {
+          /* ignore */
+        }
+        setOpen(!open)
+      }
+      var chipStyle = pulse ? mergeStyle(styles.ambientChip, styles.ambientChipPulse) : styles.ambientChip
+      return h(
+        'span',
+        { ref: rootRef, style: styles.ambientChipWrap, 'data-session-bridge-ambient-chip': true },
+        h(
+          'button',
+          {
+            type: 'button',
+            title: tooltipParts.join('\n') || '星桥：本会话态势',
+            'aria-label': '星桥本会话态势',
+            onClick: onClick,
+            style: open ? mergeStyle(chipStyle, styles.ambientChipOpen) : chipStyle
+          },
+          h('span', { style: styles.ambientChipText }, label),
+          attentionCount > 0 ? h('span', { style: styles.ambientChipBadge }, String(attentionCount)) : null
+        ),
+        open
+          ? h(
+              'div',
+              {
+                ref: panelRef,
+                style: mergeStyle(styles.ambientPopover, { top: anchor.top, right: anchor.right }),
+                role: 'dialog',
+                'aria-label': '星桥本会话态势'
+              },
+              h(AmbientDetailPanel, {
+                sessionId: sessionId,
+                ambient: ambient,
+                onClose: function () {
+                  setOpen(false)
+                }
+              })
+            )
+          : null
+      )
+    }
+
+    function AmbientDock(props) {
+      var sessionId = asString(props && props.ambientSessionId)
+      var entry = useAmbientEntry(sessionId)
+      var expandedState = React.useState(false)
+      var expanded = expandedState[0]
+      var setExpanded = expandedState[1]
+      var ambient = entry && isPlainObject(entry.ambient) ? entry.ambient : null
+      var usable = ambientIsUsable(entry, sessionId)
+      if (!usable || !ambientDockVisible(ambient)) return null
+      var task = isPlainObject(ambient.task) ? ambient.task : null
+      var attentionCount = ambientAttentionCount(ambient)
+      var pending = isPlainObject(ambient.pending) ? ambient.pending : {}
+      var resource = ambientResourceConflict(ambient, sessionId)
+      var summary = []
+      if (task) {
+        var stage = ambientTaskStageText(task)
+        summary.push(ambientClip(task.title, 24) + (stage !== '' ? ' · ' + stage : '') + ' · ' + ambientProgressPercent(task) + '%')
+      }
+      if (attentionCount > 0) summary.push('待处理 ' + attentionCount)
+      if (asArray(pending.requests).length > 0) summary.push('待协作 ' + asArray(pending.requests).length)
+      if (asArray(pending.approvals).length > 0) summary.push('待批 ' + asArray(pending.approvals).length)
+      if (resource) summary.push('桌面被 ' + ambientOwnerText(resource) + ' 占用')
+      return h(
+        'div',
+        { style: styles.ambientDock, 'data-session-bridge-ambient-dock': true },
+        h(
+          'div',
+          { style: styles.ambientDockRow },
+          h(
+            'button',
+            {
+              type: 'button',
+              onClick: function () {
+                setExpanded(!expanded)
+              },
+              title: '展开星桥本会话态势',
+              style: styles.ambientDockMain
+            },
+            h('span', { style: styles.ambientDockBadge }, '🌉'),
+            h('span', { style: styles.ambientDockText }, '星桥 · ' + summary.join(' · '))
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              onClick: function () {
+                openBridgeApp({})
+              },
+              title: '打开星桥指挥中心',
+              style: styles.ambientDockAction
+            },
+            '指挥中心 ›'
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              onClick: function () {
+                setExpanded(!expanded)
+              },
+              title: expanded ? '收起' : '详情',
+              style: styles.ambientDockAction
+            },
+            expanded ? '收起' : '详情'
+          )
+        ),
+        expanded
+          ? h(AmbientDetailPanel, {
+              sessionId: sessionId,
+              ambient: ambient,
+              onClose: function () {
+                setExpanded(false)
+              }
+            })
+          : null
+      )
+    }
+
+    /**
+     * 注意力/待办详情面板（header popover 与 composer dock 共用）。
+     * 1-click 动作：approval.approve/reject、inbox.ack（panel 直执行）；
+     * request/transfer 用 ambient.act steer 当前会话（宿主未实现时降级为复制命令模板）。
+     */
+    function AmbientDetailPanel(props) {
+      var sessionId = asString(props && props.sessionId)
+      var ambient = isPlainObject(props && props.ambient) ? props.ambient : null
+      var noticeState = React.useState('')
+      var notice = noticeState[0]
+      var setNotice = noticeState[1]
+      var errorState = React.useState('')
+      var error = errorState[0]
+      var setError = errorState[1]
+      var busyState = React.useState('')
+      var busy = busyState[0]
+      var setBusy = busyState[1]
+      var timerRef = React.useRef(null)
+      var mountedRef = React.useRef(true)
+      React.useEffect(function () {
+        mountedRef.current = true
+        return function () {
+          mountedRef.current = false
+          if (timerRef.current) {
+            try {
+              clearTimeout(timerRef.current)
+            } catch (error) {
+              /* ignore */
+            }
+          }
+        }
+      }, [])
+      if (!ambient) return null
+
+      var showNotice = function (text) {
+        if (!mountedRef.current) return
+        setNotice(asString(text))
+        if (timerRef.current) {
+          try {
+            clearTimeout(timerRef.current)
+          } catch (error) {
+            /* ignore */
+          }
+        }
+        timerRef.current = setTimeout(function () {
+          if (mountedRef.current) setNotice('')
+        }, 3200)
+      }
+      var runAction = function (key, promise, successText) {
+        setBusy(key)
+        setError('')
+        promise.then(
+          function (result) {
+            if (!mountedRef.current) return
+            setBusy('')
+            if (result && result.ok === true) {
+              if (successText) showNotice(successText)
+              if (typeof props.onChanged === 'function') props.onChanged()
+            } else if (result && result.local === true) {
+              showNotice('已标记为已读（后端未确认：' + asString(result.error) + '）')
+              if (typeof props.onChanged === 'function') props.onChanged()
+            } else {
+              setError((result && result.error) || '操作失败')
+            }
+          },
+          function (failure) {
+            if (!mountedRef.current) return
+            setBusy('')
+            setError(errorMessage(failure))
+          }
+        )
+      }
+      var doAck = function (ids) {
+        var list = asArray(ids)
+          .map(function (id) {
+            return asString(id)
+          })
+          .filter(function (id) {
+            return id !== ''
+          })
+        if (list.length === 0) {
+          if (typeof props.onClose === 'function') props.onClose()
+          return
+        }
+        runAction('ack', ambientStore.ack(sessionId, list), '已标记 ' + list.length + ' 条为已读')
+      }
+      var doApprove = function (approvalId) {
+        runAction('approve:' + approvalId, ambientStore.approve(sessionId, approvalId), '已通过审批')
+      }
+      var doReject = function (approvalId) {
+        runAction('reject:' + approvalId, ambientStore.reject(sessionId, approvalId), '已驳回审批')
+      }
+      var doSteerRequest = function (request) {
+        var template = ambientReplyTemplate(request)
+        var act = {
+          kind: 'ask',
+          tool: 'session_ask',
+          requestId: asString(request.id || request.requestId),
+          groupId: asString(request.groupId),
+          text: template
+        }
+        var key = 'steer:' + asString(request.id || request.requestId)
+        setBusy(key)
+        setError('')
+        ambientStore.steer(sessionId, act).then(
+          function (result) {
+            if (!mountedRef.current) return
+            setBusy('')
+            if (result && result.ok === true) {
+              showNotice('已让当前会话用 session_ask 处理（稍后看回复）')
+            } else {
+              var copied = copyAmbientText(template)
+              setError('')
+              showNotice(copied ? '宿主未实现 steer：命令模板已复制，直接粘贴发送即可' : '宿主未实现 steer：请手动用 session_ask 处理 ' + asString(request.id))
+            }
+          },
+          function (failure) {
+            if (!mountedRef.current) return
+            setBusy('')
+            setError(errorMessage(failure))
+          }
+        )
+      }
+      var doSteerTransfer = function (transfer, approve) {
+        var template = ambientTransferTemplate(transfer, approve)
+        var act = {
+          kind: 'transfer',
+          tool: 'task_transfer',
+          requestId: asString(transfer.id || transfer.requestId),
+          action: approve ? 'approve' : 'reject',
+          text: template
+        }
+        var key = 'transfer:' + asString(transfer.id || transfer.requestId) + ':' + (approve ? 'a' : 'r')
+        setBusy(key)
+        setError('')
+        ambientStore.steer(sessionId, act).then(
+          function (result) {
+            if (!mountedRef.current) return
+            setBusy('')
+            if (result && result.ok === true) {
+              showNotice('已让当前会话用 task_transfer 处理')
+            } else {
+              var copied = copyAmbientText(template)
+              setNotice(copied ? '宿主未实现 steer：转交命令模板已复制' : '宿主未实现 steer：请手动用 task_transfer 处理 ' + asString(transfer.id))
+            }
+          },
+          function (failure) {
+            if (!mountedRef.current) return
+            setBusy('')
+            setError(errorMessage(failure))
+          }
+        )
+      }
+
+      var task = isPlainObject(ambient.task) ? ambient.task : null
+      var attention = asArray(ambient.attention.items)
+      var pending = isPlainObject(ambient.pending) ? ambient.pending : { requests: [], transfers: [], approvals: [], council: {} }
+      var requests = asArray(pending.requests)
+      var transfers = asArray(pending.transfers)
+      var approvals = asArray(pending.approvals)
+      var council = isPlainObject(pending.council) ? pending.council : {}
+      var resource = ambientResourceConflict(ambient, sessionId)
+      var attentionIds = []
+      for (var idx = 0; idx < attention.length; idx += 1) attentionIds.push(asString(attention[idx].id))
+      for (var aidx = 0; aidx < approvals.length; aidx += 1) attentionIds.push(asString(approvals[aidx].id))
+      var approvalIdsInAttention = {}
+      for (var aix = 0; aix < attention.length; aix += 1) {
+        if (asString(attention[aix].kind) === 'approval' && asString(attention[aix].approvalId) !== '') {
+          approvalIdsInAttention[asString(attention[aix].approvalId)] = true
+        }
+      }
+      var extraApprovals = approvals.filter(function (approval) {
+        return approvalIdsInAttention[asString(approval.id)] !== true
+      })
+      var visibleRequests = requests.slice(0, 3)
+      var visibleTransfers = transfers.slice(0, 3)
+      var rendered = []
+
+      rendered.push(
+        h(
+          'div',
+          { key: 'head', style: styles.ambientPanelHead },
+          h('span', { style: styles.ambientPanelTitle }, '🌉 星桥 · 本会话'),
+          h('span', { style: styles.ambientPanelMuted }, '自动刷新 · 只读同步'),
+          typeof props.onClose === 'function'
+            ? h(
+                'button',
+                {
+                  type: 'button',
+                  onClick: function () {
+                    props.onClose()
+                  },
+                  title: '关闭',
+                  style: styles.ambientPanelClose
+                },
+                '✕'
+              )
+            : null
+        )
+      )
+
+      if (task) {
+        var percent = ambientProgressPercent(task)
+        rendered.push(
+          h(
+            'div',
+            { key: 'task', style: styles.ambientSection },
+            h('div', { style: styles.ambientSectionHead }, '🎯 当前任务'),
+            h('div', { style: styles.ambientTaskTitle }, task.title || '（未命名任务）'),
+            h(
+              'div',
+              { style: styles.ambientMetaRow },
+              h('span', null, ambientTaskStageText(task) || asString(task.lineStatus) || '进行中'),
+              h('span', null, percent + '%'),
+              isPlainObject(task.leader) && asString(task.leader.handle || task.leader.id) !== ''
+                ? h('span', null, '组长 ' + asString(task.leader.handle || task.leader.id))
+                : null
+            ),
+            h(
+              'div',
+              { style: styles.ambientProgressTrack },
+              h('div', { style: mergeStyle(styles.ambientProgressBar, { width: percent + '%' }) })
+            ),
+            task.steps.length
+              ? h(
+                  'div',
+                  { style: styles.ambientSteps },
+                  task.steps.map(function (step, stepIndex) {
+                    var status = asString(step.status)
+                    var mark = status === 'done' || status === 'completed' ? '☑' : status === 'active' || status === 'current' ? '◉' : '☐'
+                    return h(
+                      'span',
+                      {
+                        key: 'step-' + stepIndex,
+                        style: mergeStyle(styles.ambientStep, status === 'active' || status === 'current' ? styles.ambientStepActive : null)
+                      },
+                      mark + ' ' + (step.text || '步骤 ' + (step.i || stepIndex + 1))
+                    )
+                  })
+                )
+              : null,
+            task.flows.length
+              ? h(
+                  'div',
+                  { style: styles.ambientFlows },
+                  task.flows.slice(0, 3).map(function (flow, flowIndex) {
+                    return h(
+                      'div',
+                      { key: 'flow-' + flowIndex, style: styles.ambientFlowLine },
+                      h('span', { style: styles.ambientFlowTime }, flow.ts > 0 ? formatLocalTime(flow.ts) : ''),
+                      flow.action + (flow.detail ? '：' + ambientClip(flow.detail, 40) : '')
+                    )
+                  })
+                )
+              : null,
+            h(
+              'div',
+              { style: styles.ambientBtnRow },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  style: styles.ambientBtn,
+                  onClick: function () {
+                    openBridgeApp({ route: 'tasks', taskId: asString(task.id) })
+                  }
+                },
+                '查看任务详情 ›'
+              )
+            )
+          )
+        )
+      }
+
+      if (attention.length > 0) {
+        rendered.push(
+          h(
+            'div',
+            { key: 'attention', style: styles.ambientSection },
+            h('div', { style: styles.ambientSectionHead }, '⚠️ 注意力（' + asNumber(ambient.attention.count, attention.length) + '）'),
+            attention.map(function (item, index) {
+              var kind = asString(item.kind)
+              var approvalId = asString(item.approvalId || (kind === 'approval' ? item.id : ''))
+              var buttons = []
+              if (kind === 'approval' || kind === 'approval-timeout') {
+                buttons.push(
+                  h(
+                    'button',
+                    {
+                      key: 'approve',
+                      type: 'button',
+                      disabled: busy !== '',
+                      onClick: function () {
+                        doApprove(approvalId)
+                      },
+                      style: mergeStyle(styles.ambientBtn, styles.ambientBtnPrimary)
+                    },
+                    busy === 'approve:' + approvalId ? '…' : '批准'
+                  ),
+                  h(
+                    'button',
+                    {
+                      key: 'reject',
+                      type: 'button',
+                      disabled: busy !== '',
+                      onClick: function () {
+                        doReject(approvalId)
+                      },
+                      style: styles.ambientBtn
+                    },
+                    busy === 'reject:' + approvalId ? '…' : '驳回'
+                  )
+                )
+              } else if (kind === 'request' || kind === 'urgent-request') {
+                buttons.push(
+                  h(
+                    'button',
+                    {
+                      key: 'reply',
+                      type: 'button',
+                      disabled: busy !== '',
+                      onClick: function () {
+                        doSteerRequest({ id: item.requestId || item.id, title: item.title, detail: item.detail })
+                      },
+                      style: mergeStyle(styles.ambientBtn, styles.ambientBtnPrimary)
+                    },
+                    busy === 'steer:' + asString(item.requestId || item.id) ? '…' : '让当前会话回复'
+                  ),
+                  h(
+                    'button',
+                    {
+                      key: 'ack',
+                      type: 'button',
+                      disabled: busy !== '',
+                      onClick: function () {
+                        doAck([item.id])
+                      },
+                      style: styles.ambientBtn
+                    },
+                    '已读'
+                  )
+                )
+              } else {
+                buttons.push(
+                  h(
+                    'button',
+                    {
+                      key: 'open',
+                      type: 'button',
+                      onClick: function () {
+                        openBridgeApp({ route: 'tasks', taskId: asString(item.taskId) })
+                      },
+                      style: styles.ambientBtn
+                    },
+                    '查看'
+                  ),
+                  h(
+                    'button',
+                    {
+                      key: 'ack',
+                      type: 'button',
+                      disabled: busy !== '',
+                      onClick: function () {
+                        doAck([item.id])
+                      },
+                      style: styles.ambientBtn
+                    },
+                    '已读'
+                  )
+                )
+              }
+              return h(
+                'div',
+                { key: 'att-' + asString(item.id) + '-' + index, style: styles.ambientItem },
+                h(
+                  'div',
+                  { style: styles.ambientItemHead },
+                  h('span', null, ambientKindIcon(kind) + ' ' + ambientClip(item.title || '待处理事项', 40)),
+                  item.ts > 0 ? h('span', { style: styles.ambientPanelMuted }, formatLocalTime(item.ts)) : null
+                ),
+                item.detail ? h('div', { style: styles.ambientItemDetail }, ambientClip(item.detail, 80)) : null,
+                h('div', { style: styles.ambientBtnRow }, buttons)
+              )
+            })
+          )
+        )
+      }
+
+      if (visibleRequests.length > 0) {
+        rendered.push(
+          h(
+            'div',
+            { key: 'requests', style: styles.ambientSection },
+            h('div', { style: styles.ambientSectionHead }, '🤝 待协作（' + requests.length + '）'),
+            visibleRequests.map(function (request, index) {
+              var template = ambientReplyTemplate(request)
+              return h(
+                'div',
+                { key: 'req-' + asString(request.id) + '-' + index, style: styles.ambientItem },
+                h(
+                  'div',
+                  { style: styles.ambientItemHead },
+                  h('span', null, '📨 ' + ambientClip(request.title || request.id, 40)),
+                  request.fromHandle ? h('span', { style: styles.ambientPanelMuted }, '来自 ' + asString(request.fromHandle)) : null
+                ),
+                h('div', { style: styles.ambientTemplate }, ambientClip(template, 120)),
+                h(
+                  'div',
+                  { style: styles.ambientBtnRow },
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      disabled: busy !== '',
+                      onClick: function () {
+                        openBridgeApp({ route: asString(request.groupId) !== '' ? 'groups' : 'inbox', groupId: asString(request.groupId) })
+                      },
+                      style: styles.ambientBtn
+                    },
+                    '打开上下文'
+                  ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      disabled: busy !== '',
+                      onClick: function () {
+                        doSteerRequest(request)
+                      },
+                      style: mergeStyle(styles.ambientBtn, styles.ambientBtnPrimary)
+                    },
+                    busy === 'steer:' + asString(request.id) ? '…' : '让当前会话回复'
+                  )
+                )
+              )
+            })
+          )
+        )
+      }
+
+      if (visibleTransfers.length > 0) {
+        rendered.push(
+          h(
+            'div',
+            { key: 'transfers', style: styles.ambientSection },
+            h('div', { style: styles.ambientSectionHead }, '🔁 转交申请（' + transfers.length + '）'),
+            visibleTransfers.map(function (transfer, index) {
+              return h(
+                'div',
+                { key: 'tr-' + asString(transfer.id) + '-' + index, style: styles.ambientItem },
+                h('div', { style: styles.ambientItemHead }, h('span', null, '🔁 ' + ambientClip(transfer.title || asString(transfer.id), 40))),
+                h(
+                  'div',
+                  { style: styles.ambientBtnRow },
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      disabled: busy !== '',
+                      onClick: function () {
+                        doSteerTransfer(transfer, true)
+                      },
+                      style: mergeStyle(styles.ambientBtn, styles.ambientBtnPrimary)
+                    },
+                    '批准转交'
+                  ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      disabled: busy !== '',
+                      onClick: function () {
+                        doSteerTransfer(transfer, false)
+                      },
+                      style: styles.ambientBtn
+                    },
+                    '驳回'
+                  )
+                )
+              )
+            })
+          )
+        )
+      }
+
+      if (extraApprovals.length > 0) {
+        rendered.push(
+          h(
+            'div',
+            { key: 'approvals', style: styles.ambientSection },
+            h('div', { style: styles.ambientSectionHead }, '🛡️ 待审批（' + extraApprovals.length + '）'),
+            extraApprovals.map(function (approval, index) {
+              return h(
+                'div',
+                { key: 'ap-' + asString(approval.id) + '-' + index, style: styles.ambientItem },
+                h('div', { style: styles.ambientItemHead }, h('span', null, ambientClip(approval.title || asString(approval.id), 40))),
+                approval.reason ? h('div', { style: styles.ambientItemDetail }, ambientClip(approval.reason, 80)) : null,
+                h(
+                  'div',
+                  { style: styles.ambientBtnRow },
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      disabled: busy !== '',
+                      onClick: function () {
+                        doApprove(approval.id)
+                      },
+                      style: mergeStyle(styles.ambientBtn, styles.ambientBtnPrimary)
+                    },
+                    busy === 'approve:' + asString(approval.id) ? '…' : '批准'
+                  ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      disabled: busy !== '',
+                      onClick: function () {
+                        doReject(approval.id)
+                      },
+                      style: styles.ambientBtn
+                    },
+                    '驳回'
+                  )
+                )
+              )
+            })
+          )
+        )
+      }
+
+      if (council.isMember === true && asNumber(council.pendingApprovals, 0) > 0) {
+        rendered.push(
+          h(
+            'div',
+            { key: 'council', style: styles.ambientSection },
+            h('div', { style: styles.ambientSectionHead }, '🏛️ 小议会'),
+            h(
+              'div',
+              { style: styles.ambientItemDetail },
+              '你是议员：有 ' + asNumber(council.pendingApprovals, 0) + ' 条待批。请让当前会话用 council_vote 投票（UI 不代投）。'
+            ),
+            h(
+              'div',
+              { style: styles.ambientBtnRow },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  disabled: busy !== '',
+                  onClick: function () {
+                    var template = '【星桥内联动作】请用 council_vote action=status 查看待批，再用 action=vote vote=approve|reject 处理。'
+                    var act = { kind: 'council', tool: 'council_vote', text: template }
+                    setBusy('council')
+                    setError('')
+                    ambientStore.steer(sessionId, act).then(
+                      function (result) {
+                        if (!mountedRef.current) return
+                        setBusy('')
+                        if (result && result.ok === true) showNotice('已让当前会话用 council_vote 处理')
+                        else if (copyAmbientText(template)) showNotice('已复制投票指令模板')
+                      },
+                      function (failure) {
+                        if (!mountedRef.current) return
+                        setBusy('')
+                        setError(errorMessage(failure))
+                      }
+                    )
+                  },
+                  style: styles.ambientBtn
+                },
+                '让当前会话投票'
+              )
+            )
+          )
+        )
+      }
+
+      if (resource) {
+        rendered.push(
+          h(
+            'div',
+            { key: 'resource', style: styles.ambientSection },
+            h('div', { style: styles.ambientSectionHead }, '🖥️ computer-use 资源'),
+            h(
+              'div',
+              { style: styles.ambientItemDetail },
+              '桌面被 ' +
+                ambientOwnerText(resource) +
+                ' 占用（TTL ' +
+                Math.max(0, Math.round(asNumber(resource.ttlMs, 0) / 1000)) +
+                's）。不要抢，先等待或询问用户。'
+            )
+          )
+        )
+      }
+
+      rendered.push(
+        h(
+          'div',
+          { key: 'foot', style: styles.ambientPanelFoot },
+          notice !== '' ? h('div', { style: styles.ambientPanelNotice }, notice) : null,
+          error !== '' ? h('div', { style: styles.ambientPanelError }, error) : null,
+          h(
+            'div',
+            { style: styles.ambientBtnRow },
+            h(
+              'button',
+              {
+                type: 'button',
+                disabled: busy !== '' || attentionIds.length === 0,
+                onClick: function () {
+                  doAck(attentionIds)
+                },
+                style: mergeStyle(styles.ambientBtn, styles.ambientBtnPrimary)
+              },
+              busy === 'ack' ? '…' : '全部已读'
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                onClick: function () {
+                  openBridgeApp({})
+                },
+                style: styles.ambientBtn
+              },
+              '打开星桥指挥中心'
+            ),
+            h('span', { style: styles.ambientPanelMuted }, ambient.generatedAt > 0 ? '更新于 ' + formatLocalTime(ambient.generatedAt) : '')
+          )
+        )
+      )
+
+      return h('div', { style: styles.ambientPanel, 'data-session-bridge-ambient-panel': true }, rendered)
+    }
+    //#endregion
+
     //#region 面板主体
     function TabBar(props) {
       var tabs = [
@@ -5473,6 +7298,65 @@ window.__ModuleLoader__.load({
         },
         'session-bridge: footer action'
       )
+
+      // ④ 4.1 无感入口：会话 header 任务 chip / composer 任务条 / 注意力气泡。
+      //    session 作用域 slot 的 inject(sessionId) 会拿到当前会话 id；组件内用共享 ambientStore。
+      try {
+        if (ctx && ctx.slots && typeof ctx.slots.inject === 'function') {
+          ctx.effect(
+            function () {
+              return ctx.slots.inject('conversation.session.header.utilities', function () {
+                return ctx.slots.register(
+                  {
+                    name: 'conversation.session.header.utilities',
+                    id: 'session-bridge-ambient-chip',
+                    order: -10,
+                    inject: function (sessionId) {
+                      return { ambientSessionId: asString(sessionId) }
+                    }
+                  },
+                  ambientSafeComponent(AmbientChip)
+                )
+              })
+            },
+            'session-bridge: ambient header chip'
+          )
+        }
+      } catch (error) {
+        try {
+          console.warn('[session-bridge] 注册 header 无感入口失败（降级隐藏）：', error)
+        } catch (e) {
+          /* ignore */
+        }
+      }
+      try {
+        if (ctx && ctx.slots && typeof ctx.slots.inject === 'function') {
+          ctx.effect(
+            function () {
+              return ctx.slots.inject('conversation.composer.dock', function () {
+                return ctx.slots.register(
+                  {
+                    name: 'conversation.composer.dock',
+                    id: 'session-bridge-ambient-dock',
+                    order: 15,
+                    inject: function (sessionId) {
+                      return { ambientSessionId: asString(sessionId) }
+                    }
+                  },
+                  ambientSafeComponent(AmbientDock)
+                )
+              })
+            },
+            'session-bridge: ambient composer dock'
+          )
+        }
+      } catch (error) {
+        try {
+          console.warn('[session-bridge] 注册 composer 无感入口失败（降级隐藏）：', error)
+        } catch (e) {
+          /* ignore */
+        }
+      }
     }
     //#endregion
 
@@ -5503,6 +7387,14 @@ window.__ModuleLoader__.load({
     exports.SessionsSection = SessionsSection
     exports.SettingsSection = SettingsSection
     exports.OpenBoardButton = OpenBoardButton
+    // 4.1 无感入口（ambient store + header chip + composer dock + 注意力气泡），供冒烟/静态检查使用。
+    exports.normalizeAmbient = normalizeAmbient
+    exports.ambientStore = ambientStore
+    exports.ambientIsUsable = ambientIsUsable
+    exports.AmbientChip = AmbientChip
+    exports.AmbientDock = AmbientDock
+    exports.AmbientDetailPanel = AmbientDetailPanel
+    exports.ambientSafeComponent = ambientSafeComponent
     // 4.0 右侧栏指挥中心（供冒烟/静态检查使用）
     exports.CommandCenterStrip = CommandCenterStrip
     exports.CommandCenterChip = CommandCenterChip
