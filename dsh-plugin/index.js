@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '4.1.0'
+const VERSION = '4.1.1'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -10987,6 +10987,26 @@ const inboxAckStore = createInboxAckStore(boardDir)
       }
       logger.info(`会话 ${shortSid(sessionId)} 补挂到工作区 ${workspace.path}${renamed ? `，改名 ${renamed}` : ''}`)
       return { ok: true, sessionId, workspacePath: workspace.path, workspaceTitle: workspace.title, renamed }
+    }
+    if (action === 'ambient.act') {
+      const targetSession = String((payload && payload.sessionId) || '').trim()
+      const act = payload && payload.act && typeof payload.act === 'object' ? payload.act : {}
+      const tool = String(act.tool || '').trim()
+      const allowed = new Set(['session_ask', 'session_share', 'group_recruit', 'task_transfer'])
+      if (!targetSession) return { ok: false, error: '缺少 sessionId' }
+      if (!allowed.has(tool)) return { ok: false, error: '该内联动作未授权：' + tool }
+      const text = String(act.text || act.message || '').trim().slice(0, 1200)
+      if (!text) return { ok: false, error: '缺少动作内容' }
+      const instruction = [
+        '【星桥内联动作】用户已在本会话页点了「' + (act.label || tool) + '」。',
+        '请直接调用工具 ' + tool + ' 完成下面这件事；不要先问用户，也不要改开子代理。',
+        '参数/内容：',
+        text
+      ].join('\n')
+      try { await ensureSessionLive(targetSession) } catch { /* 离线时 wake 会返回 not-live */ }
+      const woke = wakeSession(targetSession, instruction, { requestId: act.requestId || '', source: 'ambient.act' })
+      if (!woke.ok) return { ok: false, error: '当前会话不在线，无法 steer：' + (woke.reason || 'not-live') }
+      return { ok: true, steered: true, sessionId: targetSession, tool }
     }
     if (action === 'inbox.ack') {
       const ids = Array.isArray(payload && payload.ids) ? payload.ids.map((id) => String(id || '').trim()).filter(Boolean).slice(0, 100) : []
