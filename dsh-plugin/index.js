@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '4.0.0'
+const VERSION = '4.1.0'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -74,6 +74,27 @@ const ASK_TEXT_LIMIT = 8000
 const BOARD_TEXT_LIMIT = 12000
 const CHAT_TEXT_LIMIT = 240
 const IDENTITY_FILE = 'identities.json'
+const INBOX_ACK_FILE = 'inbox-ack.json'
+function createInboxAckStore(dir) {
+  const file = path.join(dir, INBOX_ACK_FILE)
+  const empty = () => ({ version: 1, acks: {} })
+  const read = () => {
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+      const data = raw && typeof raw === 'object' ? raw : empty()
+      if (!data.acks || typeof data.acks !== 'object') data.acks = {}
+      return data
+    } catch { return empty() }
+  }
+  const write = (data) => {
+    ensureDir(dir)
+    const tmp = file + '.tmp'
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8')
+    fs.renameSync(tmp, file)
+  }
+  return { read, write, file }
+}
+
 const COUNCIL_FILE = 'council.json'
 function createCouncilStore(dir) {
   const file = path.join(dir, COUNCIL_FILE)
@@ -223,6 +244,8 @@ const INSTRUCTIONS = `## 跨会话经验桥（session-bridge，插件自动生�
 - 你踩到或总结出别的会话很可能重复踩的坑（kind=lesson）。
 
 **发布规则**：标题 ≤ 20 字；正文 ≤ 400 字，写成可独立理解的规则或事实，不要复制整段对话；只发通用信息，不发隐私、密钥、一次性细节；发布前可先 \`session_board\` 查重，重复就不要发。若用户已经建了群组（右侧栏「经验桥」看板里管理），可以用 \`group\` 参数把内容只发给该群成员（\`session_board action=groups\` 可列出群组）。
+
+**星桥优先（v4.0）**：遇到跨会话问题——找人、要进度、交接、转交、审批、资源冲突、共享经验——先走星桥：session_board 查经验 → session_ask / session_nudge；缺人用 group_recruit；转交用 task_transfer；审批用 council_vote。不要直接开子代理硬扛，也不要先问用户。子代理只用于一次性、独立、无需回话的子任务。
 
 **群组协作（避免重复造轮子）**：加入群组后先看/提交申报；需要别人的文件或进度时用 \`session_ask\`（定向唤醒，只通知被问的人；探测用默认 mode=probe，给成员派活才用 mode=task），不要把所有信息刷给所有人。完成阶段性成果后用 \`kind=handoff\` + \`group=群名\` + \`files=文件路径\` 交接，群成员可在需要时按需查看。派活前不确定找谁/成员 id 是什么，用 \`session_directory\`（可按 group/query 过滤）查通讯录：每个会话都有稳定的 **contactId**（完整 id 去掉 \`session-\` 前缀后的前 8 位，如 \`4f51e99f\`），可直接复制使用。
 
@@ -1395,7 +1418,7 @@ function buildInbox(parts, options = {}) {
       id: approval.id, kind: 'approval', priority: 90, ts: approval.createdAt || 0,
       title: '待议会审批：' + String(approval.title || approval.text || '').slice(0, 50),
       detail: String(approval.source === 'group.recruit' ? '新成员招募' : '世界任务新会话/工作区') + ' · ' + String(approval.reason || '').slice(0, 100),
-      groupId: approval.groupId || '', groupName: approval.groupName || '', action: 'open-approval'
+      groupId: approval.groupId || '', groupName: approval.groupName || '', action: 'open-approval', approvalId: approval.id, source: approval.source || 'world.post'
     })
   }
   for (const request of requests) {
@@ -1404,7 +1427,7 @@ function buildInbox(parts, options = {}) {
     items.push({
       id: request.id, kind: request.urgent ? 'urgent-request' : 'request', priority: request.urgent ? 85 : 60, ts: request.ts || 0,
       title: String(request.title || '群内请求').slice(0, 60), detail: (toNames.length ? '→ ' + toNames.join('、') : '') + (request.taskScope ? ' · ' + request.taskScope.slice(0, 80) : ''),
-      groupId: request.groupId || '', groupName: groupNameById.get(request.groupId) || '', action: 'open-group'
+      groupId: request.groupId || '', groupName: groupNameById.get(request.groupId) || '', action: 'open-group', requestId: request.id, requestTo: Array.isArray(request.requestTo) ? request.requestTo : [], from: request.author || 'panel'
     })
   }
   for (const line of taskLines) {
@@ -1413,7 +1436,7 @@ function buildInbox(parts, options = {}) {
       id: line.taskId, kind: line.lineStatus === 'paused' ? 'paused-task' : 'stuck-task', priority: line.lineStatus === 'stalled' ? 80 : 50, ts: line.lastProgressAt || 0,
       title: (line.lineStatus === 'paused' ? '已暂停：' : '卡住：') + String(line.title || '').slice(0, 50),
       detail: (line.leader && (line.leader.handle || line.leader.title) ? '组长 ' + (line.leader.handle || line.leader.title) : '') + ' · ' + (line.progress || 0) + '%',
-      groupId: line.groupId || '', groupName: line.groupName || '', action: 'open-task'
+      groupId: line.groupId || '', groupName: line.groupName || '', action: 'open-task', taskId: line.taskId, leaderId: line.leader && line.leader.id ? line.leader.id : '', memberIds: (line.members || []).map((item) => item.id)
     })
   }
   for (const ask of pendingAsks) {
@@ -1424,9 +1447,86 @@ function buildInbox(parts, options = {}) {
     if (!notice || notice.completionNotice !== true) continue
     items.push({ id: notice.id, kind: 'completion', priority: 35, ts: notice.completedAt || notice.ts || 0, title: '完成：' + String(notice.title || '').slice(0, 50), detail: '任务已收口，可查看信息流', groupId: notice.groupId || '', groupName: notice.groupName || '', action: 'open-task' })
   }
+  const ackedIds = options.ackedIds instanceof Set ? options.ackedIds : new Set()
+  for (const item of items) item.unread = !ackedIds.has(item.id) && !ackedIds.has(String(item.id || '').replace(/^.*:/, ''))
   items.sort((a, b) => b.priority - a.priority || b.ts - a.ts)
   const attention = items.filter((item) => item.priority >= 75)
-  return { items: items.slice(0, 40), attention: attention.slice(0, 12), total: items.length, attentionCount: attention.length, generatedAt: now }
+  return { items: items.slice(0, 40), attention: attention.slice(0, 12), total: items.length, attentionCount: attention.length, unreadCount: items.filter((item) => item.unread).length, generatedAt: now }
+}
+
+/**
+ * 4.1 ambient：轻量、会话作用域的当前态势；与 UI 共用同一投影规则。
+ */
+function buildAmbientFromState(state, sessionId) {
+  const sessions = Array.isArray(state.sessions) ? state.sessions : []
+  const session = sessions.find((item) => item.id === sessionId) || null
+  const taskLines = Array.isArray(state.taskLines) ? state.taskLines : []
+  const taskLine = taskLines.find((line) => {
+    if (!line) return false
+    if (line.leader && line.leader.id === sessionId) return true
+    return (line.members || []).some((item) => item && item.id === sessionId)
+  }) || null
+  const task = taskLine ? {
+    id: taskLine.taskId || taskLine.id || '',
+    title: String(taskLine.title || '').slice(0, 80),
+    lineStatus: taskLine.lineStatus || '',
+    stage: Number(taskLine.currentStep || 0),
+    stageText: String(taskLine.currentStepText || '').slice(0, 30),
+    stageTotal: (taskLine.steps || []).length || 5,
+    progress: Number(taskLine.progress || 0),
+    leader: taskLine.leader || null,
+    steps: (taskLine.steps || []).map((step) => ({ i: step.i, text: String(step.text || '').slice(0, 40), status: step.status || 'pending' })),
+    flows: (state.taskFlows && state.taskFlows[taskLine.taskId] ? state.taskFlows[taskLine.taskId] : []).slice(-5)
+  } : null
+  const inboxItems = (state.inbox && Array.isArray(state.inbox.items)) ? state.inbox.items : []
+  const isCouncilMember = Boolean(state.council && Array.isArray(state.council.members) && state.council.members.includes(sessionId))
+  const relevant = inboxItems.filter((item) => {
+    if (!item) return false
+    if (item.kind === 'approval') return true
+    if (Array.isArray(item.requestTo) && item.requestTo.includes(sessionId)) return true
+    if (item.taskId && task && item.taskId === task.id) return true
+    if (item.kind === 'stuck-task' && item.memberIds && item.memberIds.includes(sessionId)) return true
+    return false
+  })
+  const attentionItems = relevant.filter((item) => Number(item.priority || 0) >= 75).slice(0, 3)
+  const pendingRequests = relevant.filter((item) => item.requestId || item.kind === 'request' || item.kind === 'urgent-request').slice(0, 5)
+  const approvals = (Array.isArray(state.approvals) ? state.approvals : []).filter((item) => item && item.status === 'pending').slice(0, 5)
+  const resource = state.computerResource || { available: false }
+  const actions = []
+  for (const approval of approvals.slice(0, 2)) actions.push({ id: 'approve:' + approval.id, kind: 'approval', label: '通过', command: 'approval.approve', payload: { id: approval.id } })
+  for (const request of pendingRequests.slice(0, 2)) actions.push({ id: 'reply:' + request.id, kind: 'steer', label: '回复', tool: 'session_ask', target: request.id })
+  return {
+    ok: true, schemaVersion: '4.1.0', generatedAt: Date.now(),
+    session: session ? { id: session.id, title: session.title, availability: session.availability } : { id: sessionId, title: '', availability: 'unknown' },
+    task,
+    attention: { count: attentionItems.length, items: attentionItems.map((item) => ({ id: item.id, kind: item.kind, priority: item.priority, title: item.title, detail: item.detail, approvalId: item.approvalId || '', requestId: item.requestId || '', taskId: item.taskId || '' })) },
+    pending: { requests: pendingRequests.map((item) => ({ id: item.requestId || item.id, title: item.title, detail: item.detail, requestTo: item.requestTo || [] })), approvals: approvals.map((item) => ({ id: item.id, title: String(item.title || item.text || '').slice(0, 80), source: item.source || '' })), council: { members: (state.council && state.council.members) || [], chair: (state.council && state.council.chair) || '', isMember: isCouncilMember, pendingApprovals: approvals.length } },
+    resource: { available: Boolean(resource.available), owner: resource.lease ? resource.lease.owner : '', ownerName: resource.lease ? resource.lease.label : '', heldByMe: Boolean(resource.lease && resource.lease.owner === sessionId), ttlMs: resource.lease ? resource.lease.ttlMs : 0, priority: resource.priority || 0 },
+    actions
+  }
+}
+
+function formatAmbientPrompt(ambient) {
+  if (!ambient || !ambient.ok) return ''
+  const lines = []
+  if (ambient.task) {
+    lines.push('任务：' + ambient.task.title + ' · ' + (ambient.task.stageText || '') + ' ' + ambient.task.stage + '/' + ambient.task.stageTotal + ' · ' + ambient.task.progress + '%')
+  }
+  if (ambient.attention && ambient.attention.count) {
+    lines.push('待处理：' + ambient.attention.items.map((item) => '[' + item.kind + '] ' + item.title + (item.approvalId ? '（approval=' + item.approvalId + '）' : item.requestId ? '（request=' + item.requestId + '）' : '')).join('；'))
+  }
+  if (ambient.pending && ambient.pending.requests && ambient.pending.requests.length) {
+    lines.push('待协作：' + ambient.pending.requests.slice(0, 2).map((item) => (item.title || item.id) + '（' + item.id + '）').join('、'))
+  }
+  if (ambient.pending && ambient.pending.approvals && ambient.pending.approvals.length) {
+    lines.push('待审批：' + ambient.pending.approvals.slice(0, 2).map((item) => (item.title || item.id) + '（' + item.id + '）').join('、'))
+  }
+  if (ambient.resource && ambient.resource.available && ambient.resource.owner && !ambient.resource.heldByMe) {
+    lines.push('资源：桌面被其他会话占用，先等待，不要抢')
+  }
+  if (!lines.length) return ''
+  lines.push('规则：跨会话问题先走星桥（session_ask / group_recruit / task_transfer / council_vote）；不要开子代理硬扛，不要先问用户。')
+  return ('【星桥 · 本会话态势】（与当前任务无关可忽略；不要向用户复述）\n' + lines.join('\n')).slice(0, 600)
 }
 
 function buildTaskLineStats(lines) {
@@ -2379,6 +2479,7 @@ export function apply(ctx, config = {}) {
 const officeStore = createOfficeStore(boardDir)
 const pauseStore = createPauseStore(boardDir)
 const councilStore = createCouncilStore(boardDir)
+const inboxAckStore = createInboxAckStore(boardDir)
   const skillStore = createSkillStore(boardDir)
   const activityStore = createActivityStore(boardDir)
   // 用户在场心跳：只有星桥窗口可见且聚焦时由 app 上报，自动茶话会/自发闲聊必须依赖它。
@@ -3426,9 +3527,18 @@ const councilStore = createCouncilStore(boardDir)
     }
     const approvalsNow = readApprovals().filter((item) => item && item.status === 'pending')
     const pendingAsksNow = (() => { try { return pendingStore.read().filter((item) => item && item.status === 'queued') } catch { return [] } })()
-    const inboxNow = buildInbox({ approvals: approvalsNow, requests: activeEntriesForState.filter((entry) => entry && entry.kind === 'request'), taskLines, pendingAsks: pendingAsksNow, completionNotices }, { now: Date.now(), groupNames, sessionById: new Map(sessions.map((session) => [session.id, session])) })
+    const inboxAcksNow = (() => { try { return inboxAckStore.read().acks || {} } catch { return {} } })()
+    const panelAcked = new Set(Object.keys(inboxAcksNow.panel || {}))
+    const inboxNow = buildInbox({ approvals: approvalsNow, requests: activeEntriesForState.filter((entry) => entry && entry.kind === 'request'), taskLines, pendingAsks: pendingAsksNow, completionNotices }, { now: Date.now(), groupNames, sessionById: new Map(sessions.map((session) => [session.id, session])), ackedIds: panelAcked })
     const computerResource = (() => { try { const base = path.join(process.env.LOCALAPPDATA || '', 'dsh-computer-use', 'lease'); const leaseFile = path.join(base, 'desktop-lease.json'); if (!fs.existsSync(leaseFile)) return { ok: true, available: false } ; const lease = JSON.parse(fs.readFileSync(leaseFile, 'utf8')); const owner = String(lease.owner || ''); const progress = owner ? officeProgressOf(owner) : null; return { ok: true, available: true, lease: { owner, label: lease.label || '', expiresAt: Number(lease.expires_at_ms || 0), ttlMs: Math.max(0, Number(lease.expires_at_ms || 0) - Date.now()) }, priority: progress ? progress.privileges.priorityRouting * 10000 + (progress.merit || 0) : 0, office: progress ? progress.office : '' } } catch { return { ok: false, available: false } } })()
-    const commandCenter = { schemaVersion: '4.0.0', attentionCount: inboxNow.attentionCount, inboxCount: inboxNow.total, activeTasks: taskLines.filter((line) => ['active', 'waiting', 'stalled'].includes(line.lineStatus)).length, council: councilStore.read(), computer: computerResource }
+    const commandCenter = { schemaVersion: '4.1.0', attentionCount: inboxNow.attentionCount, inboxCount: inboxNow.total, activeTasks: taskLines.filter((line) => ['active', 'waiting', 'stalled'].includes(line.lineStatus)).length, council: councilStore.read(), computer: computerResource }
+    try {
+      const councilNow = councilStore.read()
+      const ambientState = { sessions, taskLines, taskFlows, inbox: inboxNow, approvals: approvalsNow, council: councilNow, computerResource }
+      const ambientBlocks = new Map()
+      for (const sessionNow of sessions) { const text = formatAmbientPrompt(buildAmbientFromState(ambientState, sessionNow.id)); if (text) ambientBlocks.set(sessionNow.id, text) }
+      ambientPromptBySession = ambientBlocks
+    } catch { /* ambient 缓存失败不影响 state */ }
     const titleById = new Map(sessions.map((session) => [session.id, session.title]))
     const chatCountByAuthor = new Map()
     for (const entry of rules) {
@@ -3574,7 +3684,7 @@ const councilStore = createCouncilStore(boardDir)
     return {
       ok: true,
       version: VERSION,
-      schemaVersion: '4.0.0',
+      schemaVersion: '4.1.0',
       defaultWorkspace: defaultWorkspaceForRule(),
       rules,
       groups,
@@ -3978,6 +4088,7 @@ const councilStore = createCouncilStore(boardDir)
     return lines
   }
 
+  const ambientPromptFor = (sessionId) => ambientPromptBySession.get(sessionId) || ''
   const renderForAgent = (agent) => {
     try {
       if (!agent) return ''
@@ -3987,13 +4098,13 @@ const councilStore = createCouncilStore(boardDir)
       const broadcast = cfg.injectMode === 'broadcast'
       if (!broadcast) {
         // v0.7 默认：定向注入——没被问到的成员不注入任何群信息，只保留「未申报」小提示。
-        return renderTargeted(info).join('\n')
+        return [renderTargeted(info).join('\n'), ambientPromptFor(info.id)].filter(Boolean).join('\n\n')
       }
       const groups = groupStore.read()
       const myGroups = groups.filter((group) => Array.isArray(group.sessionIds) && group.sessionIds.includes(info.id))
       const entries = visibleEntries(info).slice(0, cfg.maxShown)
       const briefLines = buildGroupBriefLines(myGroups)
-      if (!entries.length && !briefLines.length) return ''
+      if (!entries.length && !briefLines.length) return ambientPromptFor(info.id)
       const groupNames = groupNameMap()
       // 自动送达追踪：只在该会话第一次看到某条规矩时落一次盘。
       try {
@@ -4021,6 +4132,8 @@ const councilStore = createCouncilStore(boardDir)
         })
       }
       if (briefLines.length) lines.push(...briefLines)
+      const ambientNow = ambientPromptFor(info.id)
+      if (ambientNow) lines.push(ambientNow)
       return lines.join('\n')
     } catch (error) {
       logger.warn(`渲染经验板失败：${error && error.message ? error.message : error}`)
@@ -10875,6 +10988,33 @@ const councilStore = createCouncilStore(boardDir)
       logger.info(`会话 ${shortSid(sessionId)} 补挂到工作区 ${workspace.path}${renamed ? `，改名 ${renamed}` : ''}`)
       return { ok: true, sessionId, workspacePath: workspace.path, workspaceTitle: workspace.title, renamed }
     }
+    if (action === 'inbox.ack') {
+      const ids = Array.isArray(payload && payload.ids) ? payload.ids.map((id) => String(id || '').trim()).filter(Boolean).slice(0, 100) : []
+      const viewer = String((payload && payload.viewer) || 'panel').trim() || 'panel'
+      const data = inboxAckStore.read()
+      if (!data.acks[viewer] || typeof data.acks[viewer] !== 'object') data.acks[viewer] = {}
+      const nowAck = Date.now()
+      for (const id of ids) data.acks[viewer][id] = nowAck
+      const cutoff = nowAck - 30 * 24 * 3600 * 1000
+      for (const key of Object.keys(data.acks[viewer])) if (data.acks[viewer][key] < cutoff) delete data.acks[viewer][key]
+      inboxAckStore.write(data)
+      return { ok: true, viewer, acked: ids.length }
+    }
+    if (action === 'approval.approve') {
+      const approvalRef = String((payload && payload.id) || '').trim()
+      if (!approvalRef) return { ok: false, error: '缺少待复核 id' }
+      const approvals = readApprovals()
+      const target = approvals.find((item) => item && (item.id === approvalRef || item.id.startsWith(approvalRef)))
+      if (!target) return { ok: false, error: '找不到待复核记录' }
+      if (target.status !== 'pending') return { ok: false, error: '该记录已处理：' + target.status }
+      target.status = 'approved'
+      target.approvedAt = Date.now()
+      target.approvedBy = 'panel'
+      writeApprovals(approvals)
+      const executed = await executeApprovedApproval(target)
+      logger.info('世界任务复核被批准：' + target.id)
+      return { ok: true, approval: target, executed }
+    }
     if (action === 'approval.list') {
       return { ok: true, approvals: readApprovals().filter((item) => item && item.status === 'pending') }
     }
@@ -12625,6 +12765,23 @@ const councilStore = createCouncilStore(boardDir)
     }
   }
 
+  let ambientStateCache = { at: 0, state: null }
+  const handleAmbientRoute = async (req, res) => {
+    try {
+      if (req.method !== 'GET') return jsonOut(res, 405, { ok: false, error: 'method-not-allowed' })
+      if (!isLoopbackCaller(req)) return jsonOut(res, 403, { ok: false, error: 'forbidden' })
+      const url = new URL(String(req.url || ''), 'http://127.0.0.1')
+      const sessionId = String(url.searchParams.get('sessionId') || '').trim()
+      if (!sessionId) return jsonOut(res, 400, { ok: false, error: 'missing-sessionId' })
+      if (!ambientStateCache.state || Date.now() - ambientStateCache.at > 2000) {
+        ambientStateCache = { at: Date.now(), state: await stateForUi() }
+      }
+      jsonOut(res, 200, buildAmbientFromState(ambientStateCache.state, sessionId))
+    } catch (error) {
+      jsonOut(res, 500, { ok: false, error: 'ambient-failed', detail: error && error.message ? error.message : String(error) })
+    }
+  }
+
   const handleComputerPriorityRoute = async (req, res) => {
     try {
       if (req.method !== 'GET') return jsonOut(res, 405, { ok: false, error: 'method-not-allowed' })
@@ -12661,6 +12818,7 @@ const councilStore = createCouncilStore(boardDir)
     }
   }
   const stateSessionsCache = []
+  let ambientPromptBySession = new Map()
   const handleCommandRoute = async (req, res) => {
     try {
       if (req.method !== 'POST') return jsonOut(res, 405, { ok: false, error: 'method-not-allowed' })
@@ -12733,6 +12891,10 @@ const councilStore = createCouncilStore(boardDir)
         ctx.effect(
           () => webServer.register({ kind: 'exact', path: '/api/session-bridge/computer/priority', handler: handleComputerPriorityRoute }),
           'session-bridge: GET /api/session-bridge/computer/priority'
+        )
+        ctx.effect(
+          () => webServer.register({ kind: 'exact', path: '/api/session-bridge/ambient', handler: handleAmbientRoute }),
+          'session-bridge: GET /api/session-bridge/ambient'
         )
         ctx.effect(
           () => webServer.register({ kind: 'exact', path: '/session-bridge/app', handler: handleAppRoute }),
