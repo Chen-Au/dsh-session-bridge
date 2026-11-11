@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '4.1.1'
+const VERSION = '4.1.2'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -6884,6 +6884,38 @@ const inboxAckStore = createInboxAckStore(boardDir)
     }
   }
 
+  /** 招募专用工作区：不把新成员直接放进用户现有 results 目录。 */
+  const ensureRecruitWorkspace = async (group) => {
+    const existing = String(group && group.recruitWorkspace || '').trim()
+    if (existing) return existing
+    const groupWorkspace = String(group && group.workspace || '').trim()
+    // 已经是世界任务专用工作区时，成员应加入同一项目，而不是再拆一层。
+    if (groupWorkspace && /world-workspaces?/i.test(groupWorkspace)) return groupWorkspace
+    let managerCwd = ''
+    try {
+      const sessionsNow = await buildSessionIndex()
+      const manager = sessionsNow.find((session) => session && session.id === group.managerSessionId)
+      managerCwd = String(manager && manager.cwd || '').trim()
+    } catch { /* ignore */ }
+    if (managerCwd && !/world-workspaces?/i.test(managerCwd) && !/default-workspace/i.test(managerCwd)) return managerCwd
+    const made = await createWorkspaceForTask(group && group.name ? group.name + ' · 招募' : '群招募', group && group.name ? group.name + ' · 成员' : '群成员')
+    if (!made || !made.ok) {
+      try {
+        const base = path.dirname(defaultWorkspaceForRule() || process.cwd())
+        const slug = String(group && group.name || 'group-recruit').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 24)
+        const dir = path.join(base, 'world-workspaces', slug + '-recruit-' + Date.now().toString(36))
+        fs.mkdirSync(dir, { recursive: true })
+        return dir
+      } catch { return groupWorkspace }
+    }
+    try {
+      const groups = groupStore.read()
+      const hit = groups.find((item) => item && item.id === group.id)
+      if (hit) { hit.recruitWorkspace = made.cwd; groupStore.write(groups) }
+    } catch { /* 记录失败不影响创建 */ }
+    return made.cwd
+  }
+
   const ensureWorkspaceForFolder = async (folderPath, nameHint) => {
     const registry = (ctx.get && ctx.get('workspaceRegistry')) || ctx.workspaceRegistry
     if (!registry || typeof registry.create !== 'function') {
@@ -7406,6 +7438,7 @@ const inboxAckStore = createInboxAckStore(boardDir)
     const createdSessions = []
     let approval = null
     if (newNeeded > 0) {
+      const recruitWorkspace = await ensureRecruitWorkspace(group).catch(() => '')
       const approvalsNow = readApprovals()
       const approvalRef = String(opts.approvalId || '').trim()
       let approvalHit = null
@@ -7445,7 +7478,7 @@ const inboxAckStore = createInboxAckStore(boardDir)
           engine: 'group.recruit',
           reason: `群「${group.name}」请求招募 ${newNeeded} 位新成员（现有空闲成员不足）`,
           memberCount: newNeeded,
-          workspacePath: group.workspace || '',
+          workspacePath: recruitWorkspace || group.workspace || '',
           workspaceName: group.name,
           permissionNote: '工作区：' + (group.workspace || '由宿主决定') + '；继承 DSH 当前文件/工具权限',
           source: 'group.recruit',
@@ -7481,7 +7514,7 @@ const inboxAckStore = createInboxAckStore(boardDir)
       let createError = ''
       for (let index = 0; index < newNeeded; index += 1) {
         const titleHint = '招募：' + (truncate(requestText, 16) || group.name)
-        const created = await createSessionForTask(group.workspace || undefined, titleHint)
+        const created = await createSessionForTask(recruitWorkspace || group.workspace || undefined, titleHint)
         if (!created.ok) {
           createError = created.error || '创建会话失败'
           break
@@ -10543,7 +10576,8 @@ const inboxAckStore = createInboxAckStore(boardDir)
         }
       }
       const createdSessions = []
-      // v2.9.1：维护者只能通过「用户显式 @」进入 assigned（自动路由已排除），这里标记并给提示。
+      let createdSessionCwd = ''
+      // 维护者只能通过「用户显式 @」进入 assigned（自动路由已排除），这里标记并给提示。
       const assignedProtectedIds = assigned.filter((item) => isMaintainerSession(item.id)).map((item) => item.id)
       const protectedOnlyAssigned = assigned.length > 0 && assigned.every((item) => isMaintainerSession(item.id))
       const protectedNotice = assignedProtectedIds.length
@@ -10574,10 +10608,15 @@ const inboxAckStore = createInboxAckStore(boardDir)
             /* ignore */
           }
         }
+        if (!cwdOverride) {
+          const made = await createWorkspaceForTask(text, '世界任务')
+          if (made && made.ok) { cwdOverride = made.cwd; createdWorkspace = made.cwd }
+        }
         for (let index = 0; index < requestedMemberCount; index += 1) {
           const prettyName = prettyMemberName(cwdOverride, index, text)
           const created = await createSessionForTask(cwdOverride || undefined, prettyName.title)
           if (created.ok) {
+            createdSessionCwd = created.cwd || cwdOverride || createdSessionCwd
             try {
               let hash = 0
               for (let cursor = 0; cursor < created.sessionId.length; cursor += 1) hash = (hash * 31 + created.sessionId.charCodeAt(cursor)) >>> 0
@@ -10626,6 +10665,7 @@ const inboxAckStore = createInboxAckStore(boardDir)
         }
         const created = await createSessionForTask(cwdOverride || undefined, `世界任务：${truncate(text, 24)}`)
         if (created.ok) {
+          createdSessionCwd = created.cwd || cwdOverride || createdSessionCwd
           createdSession = created.sessionId
           createdTitle = created.title || ''
           assigned = [{ id: createdSession, title: '新会话', score: 0 }]
@@ -10652,7 +10692,7 @@ const inboxAckStore = createInboxAckStore(boardDir)
           const group = {
             id: 'g-' + Date.now().toString(36) + '-' + randomBytes(3).toString('hex'),
             name: groupName,
-            workspace: (firstSession && firstSession.cwd) || '',
+            workspace: createdWorkspace || createdSessionCwd || (firstSession && firstSession.cwd) || '',
             goal: text.slice(0, 300),
             managerSessionId: memberIds[0],
             sessionIds: memberIds,
