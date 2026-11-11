@@ -1399,21 +1399,18 @@ window.__ModuleLoader__.load({
         maxWidth: 360,
         minWidth: 0,
         padding: '2px 8px',
-        borderRadius: 999,
-        border: '0.5px solid color-mix(in srgb, var(--dsw-alias-brand-primary) 35%, transparent)',
-        background: 'color-mix(in srgb, var(--dsw-alias-brand-primary) 8%, transparent)',
+        borderRadius: 7,
+        border: '0.5px solid var(--dsw-alias-border-l3)',
+        background: 'transparent',
         color: 'var(--dsw-alias-label-primary)',
         fontFamily: FONT_STACK,
         fontSize: 11,
         lineHeight: 1.5,
         cursor: 'pointer',
-        transition: 'box-shadow 0.25s ease, transform 0.25s ease'
+        transition: 'none'
       },
-      ambientChipOpen: { boxShadow: '0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 28%, transparent)' },
-      ambientChipPulse: {
-        transform: 'scale(1.04)',
-        boxShadow: '0 0 0 4px color-mix(in srgb, var(--dsw-alias-brand-primary) 22%, transparent)'
-      },
+      ambientChipOpen: { background: 'var(--dsw-alias-bg-layer-2)' },
+      ambientChipPulse: {},
       ambientChipText: {
         minWidth: 0,
         overflow: 'hidden',
@@ -5837,33 +5834,7 @@ window.__ModuleLoader__.load({
       var ambient = entry && isPlainObject(entry.ambient) ? entry.ambient : null
       var usable = ambientIsUsable(entry, sessionId)
 
-      // 新 attention（签名变化）自动展开一次 + 轻 pulse；处理后不再自动。
-      React.useEffect(
-        function () {
-          if (!usable) return
-          var count = ambientAttentionCount(ambient)
-          if (count <= 0) return
-          var signature = ambientAttentionSignature(ambient)
-          if (signature === '' || signature === autoSigRef.current) return
-          autoSigRef.current = signature
-          if (!ambientStore.shouldAutoOpen(sessionId, signature)) return
-          ambientStore.markAutoOpened(sessionId, signature)
-          setOpen(true)
-          setPulse(true)
-          if (pulseTimer.current) {
-            try {
-              clearTimeout(pulseTimer.current)
-            } catch (error) {
-              /* ignore */
-            }
-          }
-          pulseTimer.current = setTimeout(function () {
-            setPulse(false)
-          }, 1400)
-        },
-        [usable, ambient, sessionId, setOpen, setPulse]
-      )
-
+      // v4.2：不自动展开、不 pulse；只有用户点击 header chip 才打开。
       // 关闭时清理 pulse 定时器。
       React.useEffect(function () {
         return function () {
@@ -7218,89 +7189,8 @@ window.__ModuleLoader__.load({
      * 任何注册失败都只降级（例如宿主版本没有 sidebarRightTabs），不能影响侧栏其它功能。
      */
     function apply(ctx) {
-      // ① 右侧栏 tab 类型
-      try {
-        if (ctx && ctx.sidebarRightTabs && typeof ctx.sidebarRightTabs.register === 'function') {
-          ctx.effect(
-            function () {
-              return ctx.sidebarRightTabs.register({
-                id: PLUGIN_ID,
-                kind: TAB_KIND,
-                multiple: false,
-                keepMounted: true,
-                title: function () {
-                  return '星桥'
-                },
-                guide: [
-                  {
-                    id: 'open',
-                    order: 5,
-                    title: function () {
-                      return '星桥指挥中心'
-                    },
-                    description: function () {
-                      return '待处理 / 卡住任务 / 议会待批 / computer-use 摘要'
-                    }
-                  }
-                ]
-              })
-            },
-            'session-bridge: tab type'
-          )
-        }
-      } catch (error) {
-        try {
-          console.warn('[session-bridge] 注册右侧栏 tab 失败（降级为底部入口）：', error)
-        } catch (e) {
-          /* ignore */
-        }
-      }
-
-      // ② 右侧栏 pane 主体（带 ErrorBoundary 的面板）
-      try {
-        if (ctx && ctx.slots && typeof ctx.slots.inject === 'function') {
-          ctx.effect(
-            function () {
-              return ctx.slots.inject('sidebar.right.pane.tab', function () {
-                return ctx.slots.register(
-                  {
-                    name: 'sidebar.right.pane.tab',
-                    key: PLUGIN_ID
-                  },
-                  SessionBridgePanel
-                )
-              })
-            },
-            'session-bridge: pane body'
-          )
-        }
-      } catch (error) {
-        try {
-          console.warn('[session-bridge] 注册右侧栏面板失败：', error)
-        } catch (e) {
-          /* ignore */
-        }
-      }
-
-      // ③ 左侧栏底部入口（保留原功能：打开独立指挥中心窗口）
-      ctx.effect(
-        function () {
-          return ctx.slots.inject('sidebar.footer.action', function () {
-            return ctx.slots.register(
-              {
-                name: 'sidebar.footer.action',
-                id: 'session-bridge',
-                order: 20
-              },
-              OpenBoardButton(ctx)
-            )
-          })
-        },
-        'session-bridge: footer action'
-      )
-
-      // ④ 4.1 无感入口：会话 header 任务 chip / composer 任务条 / 注意力气泡。
-      //    session 作用域 slot 的 inject(sessionId) 会拿到当前会话 id；组件内用共享 ambientStore。
+      // v4.2 简约耦合：DSH 主界面只保留会话 header 的一个星桥 chip。
+      // 右侧栏 tab/pane/footer、composer dock、自动弹泡全部移除；完整控制台在独立 app。
       try {
         if (ctx && ctx.slots && typeof ctx.slots.inject === 'function') {
           ctx.effect(
@@ -7324,44 +7214,15 @@ window.__ModuleLoader__.load({
         }
       } catch (error) {
         try {
-          console.warn('[session-bridge] 注册 header 无感入口失败（降级隐藏）：', error)
-        } catch (e) {
-          /* ignore */
-        }
-      }
-      try {
-        if (ctx && ctx.slots && typeof ctx.slots.inject === 'function') {
-          ctx.effect(
-            function () {
-              return ctx.slots.inject('conversation.composer.dock', function () {
-                return ctx.slots.register(
-                  {
-                    name: 'conversation.composer.dock',
-                    id: 'session-bridge-ambient-dock',
-                    order: 15,
-                    inject: function (sessionId) {
-                      return { ambientSessionId: asString(sessionId) }
-                    }
-                  },
-                  ambientSafeComponent(AmbientDock)
-                )
-              })
-            },
-            'session-bridge: ambient composer dock'
-          )
-        }
-      } catch (error) {
-        try {
-          console.warn('[session-bridge] 注册 composer 无感入口失败（降级隐藏）：', error)
-        } catch (e) {
-          /* ignore */
-        }
+          console.warn('[session-bridge] 注册 header 星桥 chip 失败（降级隐藏）：', error)
+        } catch (e) { /* ignore */ }
       }
     }
-    //#endregion
+
+
 
     exports.apply = apply
-    exports.inject = ['slots', 'sidebarRightTabs', 'sidebarRight']
+    exports.inject = ['slots']
     exports.SessionBridgePanel = SessionBridgePanel
     exports.SessionBridgePanelInner = SessionBridgePanelInner
     exports.PanelErrorBoundary = PanelErrorBoundary

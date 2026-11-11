@@ -869,6 +869,72 @@ header { flex-wrap: nowrap; }
   .cmd-head-actions { row-gap: 6px; }
   .inbox-head { width: 100%; }
 }
+/* v4.2 Apple-simple：克制、单一强调色、平面层级 */
+:root {
+  --bg: #1c1c1e;
+  --panel: #2c2c2e;
+  --panel-solid: #2c2c2e;
+  --line: rgba(255,255,255,.10);
+  --line-strong: rgba(255,255,255,.20);
+  --text: #f5f5f7;
+  --muted: #a1a1a6;
+  --dim: #6e6e73;
+  --accent: #0a84ff;
+  --accent-2: #0a84ff;
+  --mint: #30d158;
+  --gold: #ffd60a;
+  --pink: #ff375f;
+  --danger: #ff453a;
+  --radius: 12px;
+}
+body {
+  background: var(--bg) !important;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", sans-serif !important;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+body::before, body::after { display: none !important; }
+header { background: rgba(28,28,30,.92) !important; border-bottom: 1px solid var(--line) !important; backdrop-filter: none !important; }
+.brand small { display: none !important; }
+.brand h1 { font-size: 16px !important; letter-spacing: 0 !important; font-weight: 600 !important; }
+.logo { background: var(--accent) !important; box-shadow: none !important; border-radius: 9px !important; font-size: 18px !important; }
+.tabs { border: 1px solid var(--line) !important; background: transparent !important; border-radius: 8px !important; padding: 2px !important; gap: 2px !important; }
+.tab { border-radius: 6px !important; padding: 6px 13px !important; font-size: 12px !important; }
+.tab.active { background: var(--accent) !important; color: #fff !important; box-shadow: none !important; }
+.icon-btn { background: transparent !important; border-color: var(--line) !important; border-radius: 8px !important; }
+.section-title { font-size: 11px !important; letter-spacing: .4px !important; text-transform: none !important; }
+.section-title::before { display: none !important; }
+.card, .home-card, .taskline, .cmd-card, .composer, .bubble .body, .mention-pop, .member, .lb-row {
+  background: var(--panel) !important;
+  border-color: var(--line) !important;
+  border-radius: var(--radius) !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  transform: none !important;
+}
+.card::before, .card::after, .home-card::before, .home-card::after { display: none !important; }
+.card:hover, .home-card:hover, .taskline:hover { transform: none !important; border-color: var(--line-strong) !important; }
+.btn { border-radius: 8px !important; background: transparent !important; border-color: var(--line) !important; box-shadow: none !important; }
+.btn:hover { background: rgba(255,255,255,.06) !important; border-color: var(--line-strong) !important; }
+.btn.primary { background: var(--accent) !important; color: #fff !important; border-color: var(--accent) !important; }
+.btn.mint, .btn.danger { border-color: var(--line) !important; color: var(--text) !important; }
+.chip, .badge, .skill, .mention-chip, .group-chip, .tab-dot, .filter-chip { border-radius: 6px !important; background: transparent !important; box-shadow: none !important; }
+.chip.kind, .badge, .badge.gold { color: var(--muted) !important; border-color: var(--line) !important; }
+.jump, .home-link { color: var(--accent) !important; }
+.avatar { border-radius: 8px !important; background: rgba(255,255,255,.06) !important; box-shadow: none !important; }
+.msg-retract { box-shadow: none !important; }
+.mention-pop { box-shadow: 0 10px 30px rgba(0,0,0,.35) !important; }
+.act-bars { display: none !important; }
+.home-head, .home-hero, .cmd-head { background: transparent !important; border: 0 !important; box-shadow: none !important; }
+input, textarea { background: #3a3a3c !important; border-color: var(--line) !important; border-radius: 8px !important; }
+input:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(10,132,255,.25) !important; border-color: var(--accent) !important; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18) !important; border-radius: 6px !important; }
+::-webkit-scrollbar-track { background: transparent !important; }
+
+.dot.idle, .dot.busy, .lb-row.top1, .card.urgent, .toast, .notif-toast { box-shadow: none !important; }
+.card.urgent { border-color: var(--line-strong) !important; }
+.toast, .notif-toast { background: #2c2c2e !important; border: 1px solid var(--line) !important; border-radius: 10px !important; }
 </style>
 </head>
 <body>
