@@ -1880,9 +1880,51 @@ body::before {
 }
 .home-card { background-color: var(--glass-bg-strong) !important; }
 header, .tabs, .brand { background-color: var(--glass-bg) !important; }
+/* v4.3 specular edge + reduced transparency */
+.home-card, .card, .cmd-panel, .modal, .notif-drawer, .completion-toast, .mention-pop, .taskline, .lb-row {
+  border: 1px solid rgba(255,255,255,.22) !important;
+  box-shadow:
+    inset 0 1.5px 0 rgba(255,255,255,.78),
+    inset 0 -1px 0 rgba(255,255,255,.12),
+    0 12px 32px rgba(0,0,0,.20) !important;
+}
+@media (prefers-color-scheme: light) {
+  .home-card, .card, .cmd-panel, .modal, .notif-drawer, .completion-toast, .mention-pop, .taskline, .lb-row {
+    border-color: rgba(0,0,0,.10) !important;
+    box-shadow: inset 0 1.5px 0 rgba(255,255,255,.96), inset 0 -1px 0 rgba(0,0,0,.04), 0 12px 30px rgba(0,0,0,.08) !important;
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  body::before { display: none !important; }
+  .home-card, .card, .cmd-panel, .modal, .notif-drawer, .completion-toast, .mention-pop, .taskline, .lb-row, header, .tabs, .brand {
+    background: var(--bg) !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    box-shadow: 0 8px 22px rgba(0,0,0,.12) !important;
+  }
+}
+/* v4.3 true-refraction approximation: warp a fixed backdrop, glass samples it */
+.liquid-bg { position: fixed; inset: -3%; z-index: -2; pointer-events: none; background:
+  radial-gradient(38% 44% at 14% 12%, rgba(10,132,255,.34), transparent 70%),
+  radial-gradient(34% 42% at 88% 8%, rgba(130,90,230,.24), transparent 72%),
+  radial-gradient(42% 45% at 62% 105%, rgba(64,140,180,.24), transparent 70%),
+  linear-gradient(120deg, rgba(255,255,255,.05), transparent 45%);
+  filter: url(#liquid-refract);
+}
+body::before { display: none !important; }
+@media (prefers-reduced-transparency: reduce) { .liquid-bg { filter: none !important; opacity: .35 !important; } }
 </style>
 </head>
 <body>
+<svg class="liquid-filter-defs" width="0" height="0" aria-hidden="true" focusable="false">
+  <filter id="liquid-refract" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.008 0.012" numOctaves="2" seed="7" result="noise"/>
+    <feGaussianBlur in="noise" stdDeviation="1.2" result="smooth"/>
+    <feDisplacementMap in="SourceGraphic" in2="smooth" scale="14" xChannelSelector="R" yChannelSelector="G"/>
+  </filter>
+</svg>
+<div class="liquid-bg" aria-hidden="true"></div>
+
 <div class="app">
   <header>
     <div class="brand">
