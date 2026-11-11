@@ -831,7 +831,7 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 4px; }
 .task-detail-flow { margin-top: var(--sp-3); }
 .task-detail-flow > .hint { margin-bottom: 6px; }
 
-/* 资源队列 */
+/* 桌面 */
 .resource-row {
   display: flex;
   align-items: center;
@@ -1218,7 +1218,7 @@ body.group-folded .group-foldable { display: none; }
 .send-menu .btn { height: 26px; border: 0; background: transparent; text-align: left; justify-content: flex-start; font-size: var(--fs-xs); }
 .send-menu .btn:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
 
-/* ------------------------------------------------------------ 任务看板 */
+/* ------------------------------------------------------------ 全部 */
 .tasks-toolbar { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; flex: none; }
 .tasks-toolbar .section-title { color: var(--text); font-size: var(--fs-xl); font-weight: 600; }
 .tasks-toolbar .hint { color: var(--muted); }
@@ -1610,7 +1610,7 @@ body.group-folded .group-foldable { display: none; }
   :root { --sidebar-w: 220px; --aside-w: 288px; }
   .pane { padding: var(--sp-5) var(--sp-5); }
 }
-/* 任务看板需要横向空间：统计侧栏在窄窗口让位给四列看板（统计仍在标题行摘要里） */
+/* 全部需要横向空间：统计侧栏在窄窗口让位给四列看板（统计仍在标题行摘要里） */
 @media (max-width: 1599px) {
   #view-tasks .aside { display: none; }
   #view-tasks .pane { max-width: 1320px; }
@@ -1804,6 +1804,82 @@ main, .view, .pane, .aside, .chat-wrap, .chat, .group-foldable, .group-topline, 
  .cmd-grid > .home-card { flex: 1 1 calc(50% - 8px); min-height: auto !important; }
  #cmdPriorityCard, #cmdResourceCard { flex-basis: 100% !important; }
 }
+/* v4.3 liquid glass — thin translucent materials, no glow */
+:root {
+  --glass-bg: rgba(40,40,43,.56);
+  --glass-bg-strong: rgba(46,46,49,.72);
+  --glass-border: rgba(255,255,255,.13);
+  --glass-highlight: inset 0 1px 0 rgba(255,255,255,.15);
+  --glass-shadow: 0 14px 40px rgba(0,0,0,.28);
+}
+@media (prefers-color-scheme: light) {
+  :root { --glass-bg: rgba(255,255,255,.58); --glass-bg-strong: rgba(255,255,255,.76); --glass-border: rgba(0,0,0,.09); --glass-highlight: inset 0 1px 0 rgba(255,255,255,.92); --glass-shadow: 0 14px 36px rgba(0,0,0,.10); }
+}
+html[data-appearance="light"] { --glass-bg: rgba(255,255,255,.58); --glass-bg-strong: rgba(255,255,255,.76); --glass-border: rgba(0,0,0,.09); --glass-highlight: inset 0 1px 0 rgba(255,255,255,.92); --glass-shadow: 0 14px 36px rgba(0,0,0,.10); }
+html[data-appearance="dark"] { --glass-bg: rgba(40,40,43,.56); --glass-bg-strong: rgba(46,46,49,.72); --glass-border: rgba(255,255,255,.13); --glass-highlight: inset 0 1px 0 rgba(255,255,255,.15); --glass-shadow: 0 14px 40px rgba(0,0,0,.28); }
+body { background: var(--bg) !important; }
+body::before {
+  content: ""; position: fixed; inset: -10%; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(45% 42% at 18% 8%, rgba(10,132,255,.24), transparent 70%),
+    radial-gradient(38% 42% at 88% 16%, rgba(120,90,220,.16), transparent 72%),
+    radial-gradient(50% 45% at 55% 110%, rgba(70,120,170,.16), transparent 72%);
+  filter: blur(42px) saturate(120%);
+}
+.app { background: transparent !important; }
+header, .tabs, .brand {
+  background: var(--glass-bg) !important;
+  -webkit-backdrop-filter: saturate(180%) blur(28px) !important;
+  backdrop-filter: saturate(180%) blur(28px) !important;
+  border-color: var(--glass-border) !important;
+}
+.home-card, .card, .cmd-panel, .modal, .notif-drawer, .completion-toast, .mention-pop, .taskline, .lb-row {
+  background: var(--glass-bg) !important;
+  border: 1px solid var(--glass-border) !important;
+  -webkit-backdrop-filter: saturate(170%) blur(24px) !important;
+  backdrop-filter: saturate(170%) blur(24px) !important;
+  box-shadow: var(--glass-highlight), var(--glass-shadow) !important;
+  background-clip: padding-box !important;
+}
+.home-card { background: var(--glass-bg-strong) !important; }
+.btn, .icon-btn, .cmd-trigger, .input, input, textarea, select {
+  background: color-mix(in srgb, var(--glass-bg) 82%, transparent) !important;
+  border-color: var(--glass-border) !important;
+  box-shadow: var(--glass-highlight) !important;
+  -webkit-backdrop-filter: blur(14px) !important;
+  backdrop-filter: blur(14px) !important;
+}
+.btn.primary { background: var(--accent) !important; border-color: var(--accent) !important; box-shadow: 0 6px 18px rgba(10,132,255,.22) !important; }
+.cmd-quick, .stat, .cmd-sub, .office-badge { display: none !important; }
+/* v4.3 glass tuning — thinner material, visible refraction */
+:root, html[data-appearance="dark"] {
+  --glass-bg: rgba(38,38,41,.34);
+  --glass-bg-strong: rgba(44,44,48,.46);
+  --glass-border: rgba(255,255,255,.16);
+  --glass-highlight: inset 0 1px 0 rgba(255,255,255,.20), inset 0 -1px 0 rgba(0,0,0,.10);
+  --glass-shadow: 0 18px 50px rgba(0,0,0,.30);
+}
+@media (prefers-color-scheme: light) {
+  :root { --glass-bg: rgba(255,255,255,.34); --glass-bg-strong: rgba(255,255,255,.48); --glass-border: rgba(0,0,0,.10); --glass-highlight: inset 0 1px 0 rgba(255,255,255,.95), inset 0 -1px 0 rgba(0,0,0,.04); --glass-shadow: 0 18px 44px rgba(0,0,0,.10); }
+}
+html[data-appearance="light"] { --glass-bg: rgba(255,255,255,.34); --glass-bg-strong: rgba(255,255,255,.48); --glass-border: rgba(0,0,0,.10); --glass-highlight: inset 0 1px 0 rgba(255,255,255,.95), inset 0 -1px 0 rgba(0,0,0,.04); --glass-shadow: 0 18px 44px rgba(0,0,0,.10); }
+body::before {
+  opacity: .95;
+  background:
+    radial-gradient(38% 44% at 14% 12%, rgba(10,132,255,.34), transparent 70%),
+    radial-gradient(34% 42% at 88% 8%, rgba(130,90,230,.24), transparent 72%),
+    radial-gradient(42% 45% at 62% 105%, rgba(64,140,180,.24), transparent 70%),
+    linear-gradient(120deg, rgba(255,255,255,.05), transparent 45%);
+  filter: blur(32px) saturate(125%);
+}
+.home-card, .card, .cmd-panel, .modal, .notif-drawer, .completion-toast, .mention-pop, .taskline, .lb-row {
+  background-image: linear-gradient(145deg, rgba(255,255,255,.16), rgba(255,255,255,.02) 38%, transparent 70%) !important;
+  background-color: var(--glass-bg) !important;
+  border-color: var(--glass-border) !important;
+  box-shadow: var(--glass-highlight), var(--glass-shadow) !important;
+}
+.home-card { background-color: var(--glass-bg-strong) !important; }
+header, .tabs, .brand { background-color: var(--glass-bg) !important; }
 </style>
 </head>
 <body>
@@ -1813,7 +1889,7 @@ main, .view, .pane, .aside, .chat-wrap, .chat, .group-foldable, .group-topline, 
       <div class="logo" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 11.5v-2.8a5.5 5.5 0 0 1 11 0v2.8"/><path d="M2.5 11.5h11"/><path d="M5.2 9v2.5M8 7.6v3.9M10.8 9v2.5"/></svg></div>
       <div>
         <h1>星桥 <span class="office-badge" id="userOfficeBadge" title="星桥官职"></span></h1>
-        <small>NEBULA · AGENT HUB</small>
+        <small>星桥</small>
       </div>
     </div>
     <div class="spacer"></div>
@@ -1855,19 +1931,19 @@ main, .view, .pane, .aside, .chat-wrap, .chat, .group-foldable, .group-topline, 
         </div>
         <div class="cmd-grid">
           <div class="home-card" id="cmdPriorityCard">
-            <div class="home-card-head">异常与待决策 <b id="homeActionCount">0</b><span class="cmd-sub" id="homeActionHint"></span></div>
+            <div class="home-card-head">需要你 <b id="homeActionCount">0</b><span class="cmd-sub" id="homeActionHint"></span></div>
             <div class="home-list" id="homeActionList"></div>
           </div>
           <div class="home-card" id="cmdInboxCard">
-            <div class="home-card-head">跨会话收件箱 <span class="home-link" id="homeInboxMore">全部</span></div>
+            <div class="home-card-head">收件箱 <span class="home-link" id="homeInboxMore">全部</span></div>
             <div class="home-list" id="homeInboxList"></div>
           </div>
           <div class="home-card" id="cmdFlowCard">
-            <div class="home-card-head">今日任务流 <span class="home-link" id="homeTasksMore">任务看板</span></div>
+            <div class="home-card-head">任务 <span class="home-link" id="homeTasksMore">全部</span></div>
             <div class="home-list" id="cmdFlowList"></div>
           </div>
           <div class="home-card" id="cmdResourceCard">
-            <div class="home-card-head">资源队列 <span class="tag-soon">computer-use</span><span class="spacer"></span><button class="home-link" id="resourceRefresh" type="button">刷新</button></div>
+            <div class="home-card-head">桌面 <span class="tag-soon">computer-use</span><span class="spacer"></span><button class="home-link" id="resourceRefresh" type="button">刷新</button></div>
             <div class="home-list" id="resourceQueueList"></div>
           </div>
         </div>
@@ -1900,7 +1976,7 @@ main, .view, .pane, .aside, .chat-wrap, .chat, .group-foldable, .group-topline, 
         <div class="section-title">收件箱分类</div>
         <div class="home-list" id="inboxAsideStats"></div>
         <div class="section-title" style="margin-top:14px">处理原则</div>
-        <div class="card text" style="font-size:12px">异常与待决策优先：任务卡住、待审批、串行排队未满足依赖、完成通知。点条目可跳群或查看任务详情；审批可一键通过/驳回。</div>
+        <div class="card text" style="font-size:12px">需要你优先：任务卡住、待审批、串行排队未满足依赖、完成通知。点条目可跳群或查看任务详情；审批可一键通过/驳回。</div>
       </aside>
     </section>
     <section class="view" id="view-world">
@@ -1981,7 +2057,7 @@ main, .view, .pane, .aside, .chat-wrap, .chat, .group-foldable, .group-topline, 
     <section class="view" id="view-tasks">
       <div class="pane">
         <div class="tasks-toolbar">
-          <div class="section-title">任务看板 · TASK LINES</div>
+          <div class="section-title">全部 · TASK LINES</div>
           <span class="hint" id="tasksSummary">加载中…</span>
           <span class="spacer"></span>
           <select id="taskGroupFilter" aria-label="按群组筛选"></select>
@@ -2472,6 +2548,9 @@ main, .view, .pane, .aside, .chat-wrap, .chat, .group-foldable, .group-topline, 
       .then(function (data) {
         if (!data || data.ok === false) throw new Error(data && data.error || '状态读取失败')
         state = data
+        function cleanNoticeTitle(value) { return String(value || '').replace(/^(?:(?:任务完成|完成)[：:]\s*)+/, '') }
+        ;(data.inbox && data.inbox.items || []).forEach(function (item) { if (item) item.title = cleanNoticeTitle(item.title) })
+        ;(data.completionNotices || []).forEach(function (item) { if (item) item.title = cleanNoticeTitle(item.title) })
         sessionById = {}
         ;(data.sessions || []).forEach(function (s) { sessionById[s.id] = s })
         if (!currentGroupId && (data.groups || []).length) currentGroupId = data.groups[0].id
@@ -3875,7 +3954,7 @@ main, .view, .pane, .aside, .chat-wrap, .chat, .group-foldable, .group-topline, 
     })
   }
   // ================================================================
-  // v3.0 首轮：首页 / 通知中心 / 任务看板 / 全局搜索 / 响应式
+  // v3.0 首轮：首页 / 通知中心 / 全部 / 全局搜索 / 响应式
   // 全部复用 /api/session-bridge/state 与 command，不改后端。
   // ================================================================
   function persistNotifRead() { try { localStorage.setItem(NOTIF_READ_KEY, JSON.stringify(notifReadIds)) } catch (e) {} }
@@ -4079,9 +4158,9 @@ main, .view, .pane, .aside, .chat-wrap, .chat, .group-foldable, .group-topline, 
   }
 
   // ================================================================
-  // v4.0 指挥中心：任务信息流 / 异常优先 / 统一收件箱 / 资源队列
+  // v4.0 指挥中心：任务信息流 / 异常优先 / 统一收件箱 / 桌面
   // 数据全部来自 state（taskFlows / taskLines / pendingAsks / approvals /
-  // completionNotices），不改后端；资源队列先留接口占位。
+  // completionNotices），不改后端；桌面先留接口占位。
   // ================================================================
   function taskFlowOf(taskId) {
     var flows = state.taskFlows || {}
@@ -4381,7 +4460,7 @@ main, .view, .pane, .aside, .chat-wrap, .chat, .group-foldable, .group-topline, 
     if (row) openInboxItem(row.getAttribute('data-inbox-id'))
   }
 
-  // ---------------- 资源队列（computer-use 接口占位） ----------------
+  // ---------------- 桌面（computer-use 接口占位） ----------------
   function normalizeResourceQueue() {
     // 实际后端（4.0 index.js）把 computer-use 租约放在 state.computerResource / state.commandCenter.computer；
     // 同时兼容 state.resources / computerUse / resourceQueue 预留结构。
@@ -4452,7 +4531,7 @@ main, .view, .pane, .aside, .chat-wrap, .chat, .group-foldable, .group-topline, 
         '<div class="rr-sub">' + esc(item.groupName || '') + (item.priority ? ' · 优先级 ' + esc(item.priority) : '') + '</div></div></div>')
     })
     if (res.source === 'commandCenter.computer') {
-      rows.push('<div class="flow-empty">来源：state.commandCenter.computer · 排队队列暂未由后端提供（先显示 0）。</div>')
+      rows.push('<div class="flow-empty">暂无排队</div>')
     }
     box.innerHTML = rows.join('')
   }
@@ -4573,7 +4652,7 @@ main, .view, .pane, .aside, .chat-wrap, .chat, .group-foldable, .group-topline, 
       } else if (alerts.length) {
         status.innerHTML = '<b class="danger">' + alerts.length + '</b> 件需要你决策或处理 · 今日流转 <b>' + flowCount + '</b> 条' + (lastError ? '' : '')
       } else {
-        status.innerHTML = '✅ 没有异常与待决策 · 今日流转 <b>' + flowCount + '</b> 条 · 资源队列' + (resource.available ? ' <b>' + (resource.inUse.length + resource.queue.length) + '</b> 项' : '待接入')
+        status.innerHTML = '安静 · 今日 <b>' + flowCount + '</b> · 桌面 ' + (resource.available ? '<b>' + (resource.inUse.length + resource.queue.length) + '</b>' : '待接入')
       }
     }
     var countEl = $('homeActionCount')
@@ -4586,7 +4665,7 @@ main, .view, .pane, .aside, .chat-wrap, .chat, .group-foldable, .group-topline, 
     if (actionList) {
       var parts = []
       if (!state.version && !lastError) parts.push('<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>')
-      else if (!alerts.length) parts.push('<div class="ok-line">✅ 一切正常，没有需要你介入的异常</div>')
+      else if (!alerts.length) parts.push('<div class="ok-line">✅ 一切正常</div>')
       else alerts.slice(0, 7).forEach(function (alert) { parts.push(alertItemHtml(alert)) })
       actionList.innerHTML = parts.join('')
     }
@@ -4632,7 +4711,7 @@ main, .view, .pane, .aside, .chat-wrap, .chat, .group-foldable, .group-topline, 
     }
   }
 
-  // ---------------- 任务看板 ----------------
+  // ---------------- 全部 ----------------
   function lineStatusOf(line) {
     var status = String((line && line.lineStatus) || '')
     if (status === 'done' || status === 'canceled' || status === 'waiting') return status
@@ -4835,7 +4914,7 @@ main, .view, .pane, .aside, .chat-wrap, .chat, .group-foldable, .group-topline, 
       { kind: '动作', icon: '💬', label: '新建群聊', sub: '创建群并拉成员', run: function () { openGroupModal() } },
       { kind: '动作', icon: '🛡️', label: '报 BUG', sub: '投递到「星桥 · 修bug」群', run: function () { ensureBugfixGroup() } },
       { kind: '动作', icon: '⚡', label: '开启加急模式', sub: '群聊输入区 ⚡ 加急（先 @ 目标成员）', run: function () { if (!currentGroup()) { toast('先选择一个群聊', true); return } switchView('groups'); setUrgentMode(true) } },
-      { kind: '动作', icon: '🧭', label: '任务看板', sub: '所有任务线 · 5 阶段', run: function () { switchView('tasks') } },
+      { kind: '动作', icon: '🧭', label: '全部', sub: '所有任务线 · 5 阶段', run: function () { switchView('tasks') } },
       { kind: '动作', icon: '🏆', label: '积分榜', sub: '全员信誉排行', run: function () { switchView('board') } },
       { kind: '动作', icon: '🎨', label: '主题工坊', sub: '切换预设 / 自定义主题', run: function () { openThemeModal() } },
       { kind: '动作', icon: '↻', label: '刷新状态', sub: '立即拉取最新 state', run: function () { refresh(true) } }
@@ -5089,7 +5168,7 @@ main, .view, .pane, .aside, .chat-wrap, .chat, .group-foldable, .group-topline, 
     if ($('resourceRefresh')) $('resourceRefresh').addEventListener('click', function () {
       renderResourceQueue()
       refresh(false)
-      toast('资源队列已刷新（state.resources 未接入时显示占位）')
+      toast('桌面已刷新（state.resources 未接入时显示占位）')
     })
     // 统一收件箱
     if ($('inboxList')) $('inboxList').addEventListener('click', handleInboxClick)
@@ -5106,7 +5185,7 @@ main, .view, .pane, .aside, .chat-wrap, .chat, .group-foldable, .group-topline, 
       button.addEventListener('click', function () { runQuickAction(button.getAttribute('data-qa')) })
     })
     $('fabBtn').addEventListener('click', function (event) { event.stopPropagation(); toggleFabMenu() })
-    // 任务看板
+    // 全部
     $('taskBoard').addEventListener('click', onTaskBoardClick)
     $('taskGroupFilter').addEventListener('change', function (event) {
       taskFilter.group = event.target.value

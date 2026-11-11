@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '4.2.3'
+const VERSION = '4.3.0'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -244,6 +244,8 @@ const INSTRUCTIONS = `## 跨会话经验桥（session-bridge，插件自动生�
 - 你踩到或总结出别的会话很可能重复踩的坑（kind=lesson）。
 
 **发布规则**：标题 ≤ 20 字；正文 ≤ 400 字，写成可独立理解的规则或事实，不要复制整段对话；只发通用信息，不发隐私、密钥、一次性细节；发布前可先 \`session_board\` 查重，重复就不要发。若用户已经建了群组（右侧栏「经验桥」看板里管理），可以用 \`group\` 参数把内容只发给该群成员（\`session_board action=groups\` 可列出群组）。
+
+**表达（v4.3）**：先给结论，默认不超过 120 字；只列必要动作，不复述标题、不写长清单、不贴大段日志；细节放 handoff / 文件 / 任务信息流；群聊只发一两句。
 
 **星桥优先（v4.0）**：遇到跨会话问题——找人、要进度、交接、转交、审批、资源冲突、共享经验——先走星桥：session_board 查经验 → session_ask / session_nudge；缺人用 group_recruit；转交用 task_transfer；审批用 council_vote。不要直接开子代理硬扛，也不要先问用户。子代理只用于一次性、独立、无需回话的子任务。
 
