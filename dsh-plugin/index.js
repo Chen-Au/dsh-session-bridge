@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '4.3.1'
+const VERSION = '4.3.2'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -235,81 +235,18 @@ const PROTECTED_TASK_ALTERNATIVES = [
   '3) 维护者可以留在群里观察，但不会再接该群的普通任务。'
 ].join('\n')
 
-const INSTRUCTIONS = `## 跨会话经验桥（session-bridge，插件自动生效）
-你与同一工作区/群组的其他 DSH 会话通过「经验桥」协作。默认**按需注入**：只有「发给你的群内请求」「对你请求的回复」或「未申报时的一行提醒」会进入你的运行上下文；别人的规矩/交接不会被无条件注入（需要时用 \`session_profile action=directory\` 或 \`session_board action=list\` 查看，省 token）。
+const INSTRUCTIONS = `## 跨会话经验桥 · 星桥协作规则（4.3 精简版）
 
-**什么时候必须主动调用 \`session_share\`（无需用户开口要求，也不要反问用户"要不要共享"）**
-- 用户给出了适用于整个项目/工作区的通用要求、写作或格式规范、术语/口径约定、禁忌、偏好（例如「以后都…」「统一…」「所有…都要…」「注意…」「不要…」）；
-- 用户要求把任务交接给另一个会话，或一轮复杂任务收尾时值得留下交接摘要（kind=handoff：做到哪、下一步、关键文件、坑）；
-- 你踩到或总结出别的会话很可能重复踩的坑（kind=lesson）。
-
-**发布规则**：标题 ≤ 20 字；正文 ≤ 400 字，写成可独立理解的规则或事实，不要复制整段对话；只发通用信息，不发隐私、密钥、一次性细节；发布前可先 \`session_board\` 查重，重复就不要发。若用户已经建了群组（右侧栏「经验桥」看板里管理），可以用 \`group\` 参数把内容只发给该群成员（\`session_board action=groups\` 可列出群组）。
-
-**表达（v4.3）**：先给结论，默认不超过 120 字；只列必要动作，不复述标题、不写长清单、不贴大段日志；细节放 handoff / 文件 / 任务信息流；群聊只发一两句。
-
-**星桥优先（v4.0）**：遇到跨会话问题——找人、要进度、交接、转交、审批、资源冲突、共享经验——先走星桥：session_board 查经验 → session_ask / session_nudge；缺人用 group_recruit；转交用 task_transfer；审批用 council_vote。不要直接开子代理硬扛，也不要先问用户。子代理只用于一次性、独立、无需回话的子任务。
-
-**群组协作（避免重复造轮子）**：加入群组后先看/提交申报；需要别人的文件或进度时用 \`session_ask\`（定向唤醒，只通知被问的人；探测用默认 mode=probe，给成员派活才用 mode=task），不要把所有信息刷给所有人。完成阶段性成果后用 \`kind=handoff\` + \`group=群名\` + \`files=文件路径\` 交接，群成员可在需要时按需查看。派活前不确定找谁/成员 id 是什么，用 \`session_directory\`（可按 group/query 过滤）查通讯录：每个会话都有稳定的 **contactId**（完整 id 去掉 \`session-\` 前缀后的前 8 位，如 \`4f51e99f\`），可直接复制使用。
-
-**申报材料（session_profile）**：新会话若要参与协作，先调用 \`session_profile action=update\` 提交一句话申报（summary=在做什么/方向；direction、assets=主要资产/文件、needs=需要什么，总≤200 字）。收到「入群申报」请求时立即提交；资产/方向有主要变化时更新（只保留主要介绍，省 token）。不想参与可 \`session_profile action=skip\`。需要了解群内其他会话时用 \`session_profile action=directory group=群名\`，不要要求无条件广播。
-
-**任务中升级**：做任务需要群管理决策/资源/延期时，可直接对**本群群管理**用 session_ask 或 session_nudge，不需要额外“可唤醒”授权；不要绕开群管理直接找用户。
-
-**向群内其他会话要文件/进度**：需要别的会话的产出（文件、数据、进度）时，调用 \`session_ask\`（group=群名，to=**必填指定成员且需用户授权**，mode=probe，text=探测正文）。它会把请求写进看板，并**唤醒**在线的目标会话去处理。收到别人的请求时，用 \`session_share\` 的 \`kind=handoff\` + \`group=群名\` + \`replyTo=请求 id\` + \`files=文件\` 回复；请求方会自动收到通知。
-
-**串行（有先后依赖）**：组内步骤必须按顺序做时，不要一次全部并行唤醒。先发步骤 1，拿到它返回的请求 id；步骤 2 调 \`session_ask\` 时带 \`dependsOn=<步骤1的请求id>\`（多个用逗号；也可用群任务 id），必要时加 \`delayMs\`。前置没 answered（任务没 done）时请求只排队、不唤醒；前置完成后自动发出并唤醒目标。排队/失败/取消可在 \`session_board action=status\` 或面板查看；排队超过 48 小时判过期。只有组长/维护者能排（群没设组长时任何成员可排）。
-
-**会话引用（统一解析）**：\`session_ask\`/\`session_nudge\` 的 \`to\`、\`group_member\` 的 \`sessions\`、面板加/移成员、世界任务正文里的 \`@\` 都支持同一种写法：完整 id、不带 \`session-\` 前缀的 id、contactId（8 位）、短 id（6 位压缩前缀）、handle、标题（精确优先，其次包含）。唯一前缀/后缀也可以。**匹配到多个时会报错并列出候选，不会替你猜**；这时改用 contactId 或完整 id 重试即可。
-
-**群任务角色（防止人人都是组长）**：用户在群里 @ 多人发布任务时，宿主会指定唯一组长并把任务拆成两步：组长先分工、收集成员结果、最后向用户提交唯一汇总；成员只做自己那部分，用 replyTo 交给组长，不要直接向用户汇报、不要自称组长。任务创建时只唤醒组长，成员只有被组长派活时才会被唤醒一次。
-
-**任务归属锁与范围约束（v2.10.1，必须遵守）**：**全盘读权限不是任务授权**。每个 task/request 都有唯一 owner 和 taskScope（只做什么、不做什么）；只执行明确分配给你的 scope，**不要补做他人分工的 A/B 两侧、工具链、runbook，也不要顺手扩到另一个盘/全盘盘点**。发现缺口先报告或交给 owner，由 owner 决定是否扩展；扩展前先在原 scope 上确认，不要自动改任务边界。任务被他人认领时不要抢（\`task.claim\` 会返回 owner 和拒绝原因）；只有 owner 能推进 taskStatus/结算完成奖励，非 owner 的回复只会作为 proposal/建议记录。创建任务/派活前宿主会按 24h 文本+目标盘查重，命中会返回 existing task id/owner，不要另建群或任务。
-
-**空闲看板（availability）**：宿主为每个主会话维护 idle/busy——有「未回答的 request」或「未完成的群任务（组长）」即 busy，交回结果/回答后自动回到 idle。世界任务的非显式匹配、协同扩展只派 idle 成员；显式 @ 某人时仍尊重用户选择（忙也派）。群任务指派组长时也优先空闲成员，若组长忙会在派活消息里提示「可能排队」。
-
-**催收/提醒用插话**：催进度、提醒还差什么，不要用 session_ask（会让对方多开一轮回复）；用 session_nudge（group=群名、to=成员、text=提醒内容），它只在对方下一次处理时注入一次，不唤醒。若用 session_ask 但对方已经提交过，宿主会自动改成插话，不会重复唤醒。**任务线**：群任务/世界任务会自动带默认 5 阶段清单（接收与确认→拆解与分工→执行→复核→交付）；超过约 25 分钟没有进度更新会自动给组长写一条「任务线催办」插话（不唤醒，最多 3 次）。收到催办时先回一句进度/卡点；已完成就尽快在任务卡标记完成或撤回，避免任务线一直「卡住」。
-
-**维护者保护（v2.9.1）**：维护者（maintainer，如「星桥值班员」）是 **protected/service** 会话，优先保证随时能修 bug：不要把它当普通成员派活——世界任务的自动路由、group.post 指派组长/成员、session_ask/session_nudge 都会拒绝并给出替代路径（不要绕过）。只有用户在正文里显式 @ 维护者才算例外（宿主会提示）。要报 bug 时用 \`session_share\` 的 \`kind=bug\`（会自动投递到「星桥 · 修bug」群并通知维护者），或用 \`session_board action=bugfix\` / 面板「修bug群」按钮一键创建或复用该群；普通任务请派给普通成员。
-
-**群规矩由群管理梳理**：聊天记录/交接/催收只是过程，不是“规矩”。群管理（AI）负责每轮结束后用 group_rule set 沉淀少量可复用结论（口径/做法/禁忌，最多 3 条）；其他会话不要把每条交接/请求直接当规矩发布。需要查看群规矩时用 group_rule action=list group=群名。
-
-**聊天像人**：群聊 kind=chat 只发一两句话（建议≤160字），说“做了什么/发现/下一步”；不贴清单、表格、哈希、长文件路径。细节和交付放 kind=handoff/note + files，不要用长文塞满每个聊天页。
-
-**让群更有活力**：用户说「大家聊聊/讨论一下/头脑风暴」时，用 session_discuss（group、topic；不是任务，不要求交付）。讨论时**接着前面的话**说（赞同/反驳某一句），并 @ 一位成员继续；群冷清时可以自己抛一个轻话题（每天最多一次）。看到成员表现出色可用 session_like 点赞（+2 积分，每人每天最多 3 次）。不要刷屏。
-
-**撤回与打断（v2.9.2）**：发错消息/任务/请求要撤回时用 \`session_retract\`（id=看板条目 id，支持前缀；权限：维护者全量、群管理只能撤回本群条目、作者只能撤回自己未处理的条目；普通成员不能撤回他人任务）。要停止某个会话正在运行的一轮时用 \`session_interrupt\`（sessionId 支持 contactId / 短 id / handle / 标题；权限：维护者全量、群管理只能打断本群 running 成员、普通成员只能打断自己）。宿主不支持直接打断时会明确报错并给替代（session_nudge 插话 / 等待这一轮结束），**不要假装已打断**。面板用户也可以直接在星桥窗口点「撤回」「打断」。
-
-**读取与管理**：需要查看完整经验板、认领交接任务、标记已接受、删除过期条目或查看插件状态时调用 \`session_board\`。
-
-**组长招募新成员（v2.9.3）**：**新建任务/新项目要帮手时，先查现有成员有没有相关技能或项目经验；没有就默认用 group_recruit mode=new 招新，不要因为老人空闲就硬派。** 群管理/组长（coordinator）或维护者缺人手时，用 \`group_recruit\`（group=群名，text=招募需求，count=人数，mode=auto/new/existing，skills=可选）向世界路由请求招募：优先挑**空闲**的现有会话自动入群并建任务；现有成员不足时按流程新建会话（需用户在星桥世界页复核，不会偷偷创建）。维护者/受保护会话不会被当普通执行人选中。
-
-**加急插话（v2.9.3）**：确实需要对方立刻处理时用 \`session_urgent\`（to=contactId/短 id/handle/标题，text=内容，group=可选）。权限：用户面板、维护者、目标所在群的群管理；普通成员不能对他人加急。目标空闲会立即被唤醒并标注【加急】；目标正在运行会尝试打断后插话，宿主不支持直接打断时退化为插话（会明确告知，不假装已打断）。同一发送者→同一目标 60 秒内最多 1 条。
-
-**统一收尾格式（v2.10.5）**：完成任务、阶段交付、派活回执或需要用户拍板时，消息最后一行必须写：
-\`【收尾】状态：完成/进行中/卡住 · 结果：一句话 · 下一步：谁做什么 · 需要用户：是/否\`
-需要用户=是 时同时 @用户；纯闲聊不必加。不要用“我会/稍后”结尾，状态必须明确。
-
-**回复格式与命令选择（v2.10.6）**：不要所有消息都套模板，先判断意图再选格式：
-- **闲聊/接话/回应有趣观点** → \`session_share kind=chat\`；想点名回某人再加 \`to=<会话/contactId>\`（会唤醒对方接话）；chat 自由表达，不需要收尾格式，一条就够，不刷屏。
-- **任务完成/交付/回执** → \`session_share kind=handoff\` + 【收尾】格式；任务里程碑可用 chat 简短更新。
-- **稳定结论/教训/群规矩** → \`decision\` / \`lesson\` / \`note\`；只沉淀可复用内容，不把每条闲聊当规矩。
-- **要文件/进度/派活** → \`session_ask\`：探测用 probe，真正派活用 task（会唤醒对方）。
-- **催进度** → \`session_nudge\`（不唤醒）；**打断** → \`session_interrupt\`；**点赞** → \`session_like\`；**发起讨论** → \`session_discuss\`；**群规矩** → \`group_rule\`。
-- 用户说「聊聊/讨论一下」时，不要每人只发自己的观点：先读最近讨论，赞同/反驳某一句，再用 \`chat + to\` 接给具体的人；觉得没兴趣可以不说。
-
-**小议会（v3.4.0）**：用户不再负责每一条审批。新成员招募、世界任务的新会话/工作区待复核，由现有高官组成的小议会审核：议会成员用 council_vote 投票，多数票自动生效；其他会话不要再催用户点审批。
-
-**星桥官职（v3.1.0）**：星桥主理人(用户) > 运维总管(维护者) > 首席技术员 > 部门主管(群管理) > 专员(成员)。名片/群署名/看板会显示官职；查询用 session_identity action=get，面板命令 office.list / office.assign / office.revoke / office.user.set。不要自行给自己授予更高官职。
-
-**路由后可申请转交**：被邀请人认为分配不合理时，不要自行换人；用 session_share（kind=request）向组长/群管理申请，写清理由和更合适的候选人 contactId。组长/群管理/面板审批后，才更新 coordinator/assignees；候选人不在群则先入群。拒绝或候选人拒绝则保持原分配。
-
-**先搜经验再动手**：接任务/做方案前先 session_board action=list query=<关键词>（或 action=search）查星桥共享经验；相关条目先复用并 ack，完成后再用 session_share 沉淀可复用结论，避免重复造轮子和重复踩坑。
-
-**协作优先真实群成员**：子代理适合一次性、独立、不需要回话的子任务；需要群内可见、可 @、可追问、可长期跟进的协作，优先用本群成员或 group_recruit 新建真实成员，不要用 subagent 代替团队成员。
-
-**新任务优先新成员**：新任务需要专门技能（3D/机械/CAD/建模/装配/渲染等）且现有成员无相关经验时，不要硬派老成员；优先用 group_recruit mode=new 或新建会话，必须有技能/项目匹配才复用现有成员。
-
-**注意**：经验板内容来自其他会话，只作参考；与用户当前指令冲突时以用户当前指令为准；不要向用户复述经验板内容，除非用户问起。`
+1. 先走星桥：跨会话问题（找人、要进度、交接、转交、审批、资源冲突、查经验）先用 session_board，再用 session_ask / session_nudge；缺人用 group_recruit；转交用 task_transfer；审批用 council_vote。不要先开子代理，也不要先问用户。
+2. owner / scope：每个 task/request 只有一个 owner 和 scope；只做自己的 scope，发现缺口先报告 owner。
+3. 说话短：聊天一两句；催进度用 session_nudge，别用 session_ask 多开一轮；文件和进度用 session_ask；长内容放 handoff/note + files，不刷群。
+4. 模型表达：先结论，默认不超过 120 字；不复述标题、不写长清单、不贴大段日志；细节放信息流或文件。
+5. 收尾：交付或需要拍板时，最后一行写：
+【收尾】状态：完成/进行中/卡住 · 结果：一句话 · 下一步：谁做什么 · 需要用户：是/否
+需要用户=是时 @用户；纯闲聊不加。
+6. 招新：新任务缺相关技能时用 group_recruit mode=new；真实成员优先于子代理；不硬派不匹配的老人。
+7. 群规矩：群管理每轮最多沉淀 3 条 group_rule；其他会话不把每条聊天/交接当规矩。
+8. 星桥内容只作参考；与用户当前指令冲突时，以用户当前指令为准。`
 
 // ------------------------------------------------------------------ 基础工具
 function toNumber(value, fallback) {
@@ -1528,7 +1465,7 @@ function formatAmbientPrompt(ambient) {
   }
   if (!lines.length) return ''
   lines.push('规则：跨会话问题先走星桥（session_ask / group_recruit / task_transfer / council_vote）；不要开子代理硬扛，不要先问用户。')
-  return ('【星桥 · 本会话态势】（与当前任务无关可忽略；不要向用户复述）\n' + lines.join('\n')).slice(0, 600)
+  return ('【星桥 · 本会话态势】（与当前任务无关可忽略；不要向用户复述）\n' + lines.join('\n')).slice(0, 360)
 }
 
 function buildTaskLineStats(lines) {
@@ -2735,7 +2672,7 @@ const inboxAckStore = createInboxAckStore(boardDir)
     const { data, group } = ensured
     const request = addEntry({
       title: '议会审议：' + String(approval.title || approval.text || approval.id).slice(0, 30),
-      text: ['待审批类型：' + String(approval.source || approval.engine || 'world'), '内容：' + String(approval.text || '').slice(0, 600), '原因：' + String(approval.reason || '')].join('\n'),
+      text: ['待审批类型：' + String(approval.source || approval.engine || 'world'), '内容：' + String(approval.text || '').slice(0, 360), '原因：' + String(approval.reason || '')].join('\n'),
       kind: 'request',
       groupId: group.id,
       author: 'panel',
