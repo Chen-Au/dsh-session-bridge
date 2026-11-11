@@ -1913,6 +1913,19 @@ header, .tabs, .brand { background-color: var(--glass-bg) !important; }
 }
 body::before { display: none !important; }
 @media (prefers-reduced-transparency: reduce) { .liquid-bg { filter: none !important; opacity: .35 !important; } }
+/* v4.3.4 compact chat bubbles */
+.bubble { max-width: min(82%, 660px); gap: 7px; }
+.bubble .body { padding: 8px 10px; }
+.bubble .head { gap: 5px; }
+.bubble .head small { font-size: 10px; }
+.bubble .msg { font-size: 13px; line-height: 1.45; }
+.bubble .chips { gap: 4px; margin-top: 4px; }
+.bubble .chips .chip { font-size: 10px; padding: 1px 5px; min-height: 18px; }
+.msg.collapsible { -webkit-line-clamp: 2; }
+.chip.file-more { color: var(--muted); }
+/* v4.3.4 chat clamp forced */
+.bubble .msg.collapsible { display: -webkit-box !important; -webkit-line-clamp: 2 !important; -webkit-box-orient: vertical !important; overflow: hidden !important; }
+.bubble .msg.collapsible.expanded { display: block !important; -webkit-line-clamp: unset !important; }
 </style>
 </head>
 <body>
@@ -3070,18 +3083,20 @@ window.addEventListener('message', function (event) { if (event.data && event.da
           var who = identityOf(entry.author)
           var mine = entry.author === 'panel'
           var kind = KIND[entry.kind] || entry.kind
-          var chatTitle = String(entry.title || '')
-          var chatText = String(entry.text || '')
+          var cleanNotice = function (v) { return String(v || '').replace(/^(?:(?:\u4E16\u754C\u4EFB\u52A1\u5B8C\u6210|\u4EFB\u52A1\u5B8C\u6210|\u5B8C\u6210)[\uFF1A:]\s*)+/, '') }
+          var chatTitle = cleanNotice(entry.title)
+          var chatText = cleanNotice(entry.text)
           var chatBody = chatTitle === chatText || chatText === '' ? chatTitle : (chatText.indexOf(chatTitle) === 0 ? chatText : chatTitle + '\n' + chatText)
+          chatBody = chatBody.replace(/\*\*/g, '').replace(/`/g, '').replace(/^#{1,6}\s*/gm, '').replace(/^\s*[-*]\s+/gm, '· ')
           // v4.0：聊天长文默认折叠（所有类型 > 160 字），点击展开；减少长文噪音。
-          var collapsible = chatBody.length > 160
-          var fileChips = (entry.files || []).map(function (file) {
-            return '<button class="chip file file-chip" data-file="' + esc(file) + '">📎 ' + esc(short(String(file).split(/[\\/]/).pop() || file, 30)) + '</button>'
+          var collapsible = chatBody.length > 90
+          var allFiles = Array.isArray(entry.files) ? entry.files : []
+          var visibleFiles = allFiles.slice(0, 2)
+          var fileChips = visibleFiles.map(function (file) {
+            return '<button class="chip file file-chip" data-file="' + esc(file) + '">' + esc(short(String(file).split(/[\\/]/).pop() || file, 18)) + '</button>'
           }).join('')
-          var mentionMarks = (entry.mentions || []).filter(function (id) { return id !== 'panel' }).map(function (id) {
-            var marked = identityOf(id)
-            return '<button class="chip jump" data-jump="' + esc(id) + '" data-title="' + esc((sessionById[id] && sessionById[id].title) || marked.handle) + '">@' + esc(marked.handle) + '</button>'
-          }).join('')
+          if (allFiles.length > visibleFiles.length) fileChips += '<span class="chip file-more" title="' + esc(allFiles.slice(2).join('\n')) + '">+' + (allFiles.length - visibleFiles.length) + '</span>'
+          var mentionMarks = ''
           // panel（用户）不是会话：单独标 @你 标记，普通 @ 只渲染会话。
           var panelMentionChip = entry.panelMention === true ? '<span class="chip panel-mention" title="这条消息 @ 了你（用户）">@你</span>' : ''
           var taskMeta = ''
@@ -3095,7 +3110,7 @@ window.addEventListener('message', function (event) { if (event.data && event.da
             taskMeta = '<div class="task-meta">🧑‍✈️ 组长：' + esc(coordinatorName) + ' · 成员：' + esc(assigneeNames) + ' · 状态：' + esc(TASK_STATUS[entry.taskStatus] || entry.taskStatus || '已分配') + '</div>'
           }
           return dividerHtml + '<div class="bubble' + (mine ? ' mine' : '') + (entry.urgent ? ' urgent' : '') + (entry.completionNotice ? ' completion' : '') + '"><div class="avatar clickable" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + avatarHtml(who.avatar) + '</div>' +
-            '<div class="body"><div class="head"><b class="jump" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + esc(who.handle) + '</b><small>' + esc(kind) + (entry.completionNotice ? ' · <span class="badge-completion">✅ 完成通知</span>' : '') + (entry.urgent ? ' · <span class="badge-urgent">⚡ 加急</span>' : '') + ' · ' + when(entry.ts) + '</small><button class="msg-retract" data-retract="' + esc(entry.id) + '" title="撤回这条消息/任务">撤回</button></div>' +
+            '<div class="body"><div class="head"><b class="jump" data-jump="' + esc(entry.author) + '" data-title="' + esc((sessionById[entry.author] && sessionById[entry.author].title) || who.handle) + '">' + esc(who.handle) + '</b><small>' + (entry.completionNotice ? ' · <span class="badge-completion">✅ 完成通知</span>' : '') + (entry.urgent ? ' · <span class="badge-urgent">⚡ 加急</span>' : '') + ' · ' + when(entry.ts) + '</small><button class="msg-retract" data-retract="' + esc(entry.id) + '" title="撤回这条消息/任务">撤回</button></div>' +
             taskMeta +
             '<div class="msg' + (collapsible ? ' collapsible' : '') + '" data-expandable="' + (collapsible ? '1' : '0') + '" title="' + (collapsible ? '点击展开/收起' : '') + '">' + esc(chatBody) + '</div>' +
             ((fileChips || mentionMarks || panelMentionChip) ? '<div class="chips">' + panelMentionChip + mentionMarks + fileChips + '</div>' : '') + '</div></div>'
