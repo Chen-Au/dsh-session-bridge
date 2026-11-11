@@ -1395,16 +1395,16 @@ window.__ModuleLoader__.load({
       ambientChip: {
         display: 'inline-flex',
         alignItems: 'center',
-        gap: 5,
-        maxWidth: 360,
+        gap: 4,
+        maxWidth: 178,
         minWidth: 0,
-        padding: '2px 8px',
-        borderRadius: 7,
+        padding: '1px 6px',
+        borderRadius: 6,
         border: '0.5px solid var(--dsw-alias-border-l3)',
         background: 'transparent',
         color: 'var(--dsw-alias-label-primary)',
         fontFamily: FONT_STACK,
-        fontSize: 11,
+        fontSize: 10.5,
         lineHeight: 1.5,
         cursor: 'pointer',
         transition: 'none'
@@ -1433,12 +1433,12 @@ window.__ModuleLoader__.load({
       ambientPopover: {
         position: 'fixed',
         zIndex: 9999,
-        width: 360,
+        width: 300,
         maxWidth: 'calc(100vw - 24px)',
         maxHeight: '70vh',
         overflowY: 'auto',
-        padding: '10px 11px 9px',
-        borderRadius: 12,
+        padding: '8px 9px 7px',
+        borderRadius: 10,
         border: '0.5px solid var(--dsw-alias-border-l3)',
         background: 'var(--dsw-alias-bg-layer-1)',
         color: 'var(--dsw-alias-label-primary)',
@@ -4596,6 +4596,14 @@ window.__ModuleLoader__.load({
     var APP_URL = '/session-bridge/app'
     var APP_WINDOW_NAME = 'nebula-bridge'
     var APP_WINDOW_FEATURES = 'width=1280,height=860'
+    var bridgeWindowRef = null
+    function focusBridgeWindow(win) {
+      if (!win) return
+      try { win.focus() } catch (error) { /* ignore */ }
+      try { win.postMessage({ type: 'session-bridge:focus' }, window.location.origin) } catch (error) { /* ignore */ }
+      try { window.setTimeout(function () { try { win.focus() } catch (e) {} }, 80) } catch (error) { /* ignore */ }
+      try { window.setTimeout(function () { try { win.focus() } catch (e) {} }, 260) } catch (error) { /* ignore */ }
+    }
 
     function clipText(value, max) {
       var s = asString(value)
@@ -4760,9 +4768,21 @@ window.__ModuleLoader__.load({
       var url = APP_URL + hash
       var win = null
       try {
+        if (bridgeWindowRef && !bridgeWindowRef.closed) {
+          win = bridgeWindowRef
+          focusBridgeWindow(win)
+          driveAppNavigation(win, target)
+          return win
+        }
+      } catch (error) { /* ignore */ }
+      try {
         win = window.open(url, APP_WINDOW_NAME, APP_WINDOW_FEATURES)
       } catch (error) {
         win = null
+      }
+      if (win) {
+        bridgeWindowRef = win
+        focusBridgeWindow(win)
       }
       if (!win) {
         try {
@@ -4771,11 +4791,6 @@ window.__ModuleLoader__.load({
           /* ignore */
         }
         return null
-      }
-      try {
-        win.focus()
-      } catch (error) {
-        /* ignore */
       }
       driveAppNavigation(win, target)
       return win
@@ -5901,7 +5916,9 @@ window.__ModuleLoader__.load({
       }
       if (attentionCount > 0) parts.push('待处理 ' + attentionCount)
       if (task && resource) parts.push('桌面被 ' + ambientOwnerText(resource) + ' 占用')
-      var label = '🌉 星桥 · ' + (parts.length ? parts.join(' · ') : '本会话态势')
+      var label = '🌉 星桥'
+      if (attentionCount > 0) label += ' · ' + attentionCount
+      else if (task) label += ' · ' + ambientClip(task.title, 10) + ' · ' + ambientProgressPercent(task) + '%'
       var tooltipParts = []
       if (task) {
         tooltipParts.push('任务：' + task.title + ' · ' + ambientTaskStageText(task) + ' · ' + ambientProgressPercent(task) + '%')
@@ -7126,9 +7143,16 @@ window.__ModuleLoader__.load({
     function openBridgeWindow() {
       var url = '/session-bridge/app'
       try {
-        var win = window.open(url, 'nebula-bridge', 'width=1280,height=860')
+        if (bridgeWindowRef && !bridgeWindowRef.closed) {
+          focusBridgeWindow(bridgeWindowRef)
+          return true
+        }
+      } catch (e) { /* ignore */ }
+      try {
+        var win = window.open(url, APP_WINDOW_NAME, APP_WINDOW_FEATURES)
         if (win) {
-          win.focus()
+          bridgeWindowRef = win
+          focusBridgeWindow(win)
           return true
         }
       } catch (e) {

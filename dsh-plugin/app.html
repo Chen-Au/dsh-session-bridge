@@ -2264,6 +2264,7 @@ body::before { display: none !important; }
   </div>
 </div>
 <script>
+window.addEventListener('message', function (event) { if (event.data && event.data.type === 'session-bridge:focus') { try { window.focus() } catch (e) { /* ignore */ } } });
 (function () {
   'use strict'
   var API = '/api/session-bridge'
