@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '4.3.5'
+const VERSION = '4.3.6'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -2701,7 +2701,7 @@ const inboxAckStore = createInboxAckStore(boardDir)
     }
   }
   /** 小议会超时兜底：超过 5 分钟仍无结果，主席自动裁决并执行。 */
-  const COUNCIL_TIMEOUT_MS = 5 * 60 * 1000
+  const COUNCIL_TIMEOUT_MS = 2 * 60 * 1000
   let councilTimer = null
   const autoResolveStaleApprovals = async () => {
     try {
@@ -2713,7 +2713,7 @@ const inboxAckStore = createInboxAckStore(boardDir)
         approval.approvedAt = now
         approval.approvedBy = 'council:auto-timeout'
         writeApprovals(approvals)
-        addEntry({ title: '议会超时：自动通过', text: String(approval.title || approval.id) + '\n超过 5 分钟无投票，按主席授权自动通过。', kind: 'chat', groupId: approval.councilGroupId || '', author: 'panel', origin: 'panel', skipDedupe: true }, 'panel')
+        addEntry({ title: '议会超时：自动通过', text: String(approval.title || approval.id) + '\n超过 2 分钟无投票，按主席授权自动通过。', kind: 'chat', groupId: approval.councilGroupId || '', author: 'panel', origin: 'panel', skipDedupe: true }, 'panel')
         await executeApprovedApproval(approval)
       }
     } catch (error) {

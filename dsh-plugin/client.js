@@ -5694,7 +5694,8 @@ window.__ModuleLoader__.load({
 
     /** chip 只在「有任务」或「有 attention」时出现（无任务无 attention 完全零占位）。 */
     function ambientChipVisible(ambient) {
-      return ambientHasTask(ambient) || ambientAttentionCount(ambient) > 0
+      // 常驻最小入口：没有任务/attention 时也保留一个星桥 chip，避免无入口。
+      return true
     }
 
     /** dock 条在有任何态势时出现（含待协作/待审批）。 */
