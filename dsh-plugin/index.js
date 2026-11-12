@@ -59,7 +59,7 @@ try {
 export const name = 'session-bridge'
 export const inject = ['tools', 'systemPrompt', 'agents']
 
-const VERSION = '4.3.4'
+const VERSION = '4.3.5'
 const BOARD_FILE = 'board.jsonl'
 const GROUPS_FILE = 'groups.json'
 const DELIVERIES_FILE = 'deliveries.jsonl'
@@ -2697,10 +2697,35 @@ const inboxAckStore = createInboxAckStore(boardDir)
     const councilById = new Map(sessionsNowForCouncil.map((session) => [session.id, session]))
     for (const memberId of data.members) {
       const memberNow = councilById.get(memberId)
-      if (memberNow && memberNow.availability === 'busy') continue
       try { await ensureSessionLive(memberId); wakeSession(memberId, message, { requestId: approval.id }) } catch { /* ignore */ }
     }
   }
+  /** 小议会超时兜底：超过 5 分钟仍无结果，主席自动裁决并执行。 */
+  const COUNCIL_TIMEOUT_MS = 5 * 60 * 1000
+  let councilTimer = null
+  const autoResolveStaleApprovals = async () => {
+    try {
+      const now = Date.now()
+      const approvals = readApprovals()
+      const pending = approvals.filter((item) => item && item.status === 'pending' && now - (item.createdAt || 0) >= COUNCIL_TIMEOUT_MS)
+      for (const approval of pending) {
+        approval.status = 'approved'
+        approval.approvedAt = now
+        approval.approvedBy = 'council:auto-timeout'
+        writeApprovals(approvals)
+        addEntry({ title: '议会超时：自动通过', text: String(approval.title || approval.id) + '\n超过 5 分钟无投票，按主席授权自动通过。', kind: 'chat', groupId: approval.councilGroupId || '', author: 'panel', origin: 'panel', skipDedupe: true }, 'panel')
+        await executeApprovedApproval(approval)
+      }
+    } catch (error) {
+      logger.warn('小议会超时裁决失败：' + (error && error.message ? error.message : error))
+    }
+  }
+  const startCouncilTimer = () => {
+    if (councilTimer) return
+    councilTimer = setInterval(() => { void autoResolveStaleApprovals() }, 60 * 1000)
+    if (councilTimer && typeof councilTimer.unref === 'function') councilTimer.unref()
+  }
+
   const executeApprovedApproval = async (approval) => {
     try {
       if (approval.source === 'group.recruit' || approval.engine === 'group.recruit') {
@@ -10530,7 +10555,7 @@ const inboxAckStore = createInboxAckStore(boardDir)
         const baseSession = parsedWorldMentions.ids
           .map((sessionId) => sessionsNow.find((session) => session.id === sessionId))
           .find((session) => session && session.cwd)
-        let cwdOverride = decision.folderPath || (baseSession && baseSession.cwd ? baseSession.cwd : '')
+        let cwdOverride = decision.folderPath || ''
         // 没 @ 人时，从正文里找已知工作区名（例如「入驻 shoot_game」），把新成员放进对应工作区。
         if (!cwdOverride) {
           try {
@@ -12926,6 +12951,7 @@ const inboxAckStore = createInboxAckStore(boardDir)
     }
   }
   registerWebServer()
+  startCouncilTimer()
   try {
     ctx.effect(
       () => () => {
@@ -13236,6 +13262,7 @@ const inboxAckStore = createInboxAckStore(boardDir)
       // HTTP API 掉线时尝试重注册（冷启动晚就绪兜底）
       if (!registration.api && typeof registerWebServer === 'function') {
         registerWebServer()
+  startCouncilTimer()
         if (registration.api) fixes.push('重新注册 HTTP API')
       }
       // 群管理在线状态
